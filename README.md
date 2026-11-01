@@ -151,6 +151,8 @@ The clock offset comes from the lowest-RTT ping samples. Positions are derived f
 | Look back / left / right | B / Z / X | View |
 | Reset to track | R | D-pad down |
 | Driving line | L | |
+| Brake balance rear / forward | [ / ] | |
+| Traction control level | T | |
 | HUD | H | D-pad up |
 | Pause | Esc / P | Start |
 

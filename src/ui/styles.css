@@ -177,6 +177,7 @@ select {
 
 /* ------------------------------------------------------------------ shell */
 .topbar {
+  pointer-events: none !important;
   position: absolute;
   left: 0;
   right: 0;
@@ -232,6 +233,7 @@ select {
   font-size: 12px;
 }
 .bottombar {
+  pointer-events: none !important;
   position: absolute;
   left: 0;
   right: 0;
@@ -427,6 +429,12 @@ select {
 .panel-body {
   padding: 18px 24px 22px;
   overflow: auto;
+  min-height: 0;
+}
+.screen > .panel {
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 .panel-body::-webkit-scrollbar {
   width: 6px;

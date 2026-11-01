@@ -195,6 +195,21 @@ export function UIRoot() {
         if (g.screen !== 'driving' || g.paused) return
         if (a === 'camera') g.cycleCamera()
         if (a === 'reset') game.resetPlayerToTrack()
+        if (a === 'biasFwd' || a === 'biasRear') {
+          const p = game.player
+          if (p) {
+            const v = p.sim.vehicle
+            const bias = Math.min(0.75, Math.max(0.45, v.setup.brakeBias + (a === 'biasFwd' ? 0.005 : -0.005)))
+            v.applySetup({ ...v.setup, brakeBias: bias })
+            game.emit({ type: 'notice', text: `Brake balance ${(bias * 100).toFixed(1)}% F` })
+          }
+        }
+        if (a === 'tcCycle') {
+          const s = useSettings.getState()
+          const tc = (s.assists.tc + 1) % 6
+          s.setAssists({ tc })
+          game.emit({ type: 'notice', text: tc === 0 ? 'Traction control off' : `Traction control ${tc}` })
+        }
         if (a === 'racingLine') {
           const s = useSettings.getState()
           s.set({ racingLine: s.racingLine === 'off' ? 'braking' : s.racingLine === 'braking' ? 'full' : 'off' })

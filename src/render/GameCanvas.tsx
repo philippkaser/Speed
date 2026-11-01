@@ -14,6 +14,7 @@ import { PostFX } from './PostFX'
 import { TrackScene } from './TrackScene'
 import { RacingLine } from './RacingLine'
 import { Ghost } from './Ghost'
+import { ReflectionProbe } from './ReflectionProbe'
 import { debugFlag } from '../util/debug'
 
 extend(THREE as any)
@@ -142,6 +143,7 @@ export function GameCanvas() {
       <GameLoop />
       <World />
       <CameraRig />
+      {!debugFlag('noprobe') && <ReflectionProbe />}
       {!debugFlag('nopost') ? <PostFX /> : <PlainRender />}
       <SceneReady />
       <CaptureHook />

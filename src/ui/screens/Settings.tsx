@@ -179,7 +179,7 @@ function Controls() {
       <Toggle label="Invert pedals" value={c.invertPedals} onChange={(v) => s.setControls({ invertPedals: v })} />
       <div className="section-title">Keys</div>
       <div style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.9 }}>
-        W/S or ↑/↓ throttle & brake · A/D or ←/→ steer · Space handbrake · E/Shift shift up · Q/Ctrl shift down · C camera · B look back · Z/X look left/right · R reset to track · H toggle HUD · Esc pause
+        W/S or ↑/↓ throttle & brake · A/D or ←/→ steer · Space handbrake · E/Shift shift up · Q/Ctrl shift down · C camera · B look back · Z/X look left/right · R reset to track · [ ] brake balance · T traction control · L driving line · H toggle HUD · Esc pause
       </div>
     </>
   )

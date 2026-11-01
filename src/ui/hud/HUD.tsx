@@ -73,7 +73,8 @@ export function HUD() {
         setTimeout(() => setCenter(null), 1300)
       } else if (e.type === 'finish' && e.car === 'player') {
         push(`Finished P${e.position}`, 'best', 4000)
-      } else if (e.type === 'session') force((v) => v + 1)
+      } else if (e.type === 'notice') push(e.text, 'info', 1600)
+      else if (e.type === 'session') force((v) => v + 1)
     })
   }, [])
 
