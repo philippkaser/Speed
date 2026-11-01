@@ -1,0 +1,14 @@
+<!doctype html><html><body style="margin:0"><script type="module">
+import * as THREE from 'three/webgpu'
+const r = new THREE.WebGPURenderer({ antialias: false })
+r.setSize(640, 360); document.body.appendChild(r.domElement)
+await r.init()
+console.log('backend', r.backend.isWebGPUBackend ? 'webgpu' : 'webgl')
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x336699)
+const cam = new THREE.PerspectiveCamera(50, 16/9, 0.1, 100); cam.position.set(0, 1, 4); cam.lookAt(0,0,0)
+const m = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardNodeMaterial({ color: 0xff3300 }))
+scene.add(m, new THREE.DirectionalLight(0xffffff, 3), new THREE.AmbientLight(0x404040))
+let n = 0
+r.setAnimationLoop(() => { m.rotation.y += 0.02; r.render(scene, cam); if (++n % 60 === 0) console.log('frame', n) })
+r.backend.device?.lost.then((i) => console.log('LOST', i.reason, i.message))
+</script></body></html>
