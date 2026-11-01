@@ -1229,3 +1229,12 @@ input[type='range']::-moz-range-thumb {
   color: #0b0d10;
   font-size: 10.5px;
 }
+
+@media (max-width: 1280px) {
+  .hud-tl,
+  .hud-tr,
+  .hud-br,
+  .hud-bl {
+    zoom: 0.85;
+  }
+}

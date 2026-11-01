@@ -138,7 +138,7 @@ export function paintMaterial(base: string, body: BodyDef, num: number) {
   m.metalnessNode = mix(float(metallic), float(0.1), max(accentMask, numMask))
   m.roughnessNode = float(0.34)
   // metallic flakes: high frequency normal perturbation under the clear coat
-  const flake = mx_noise_vec3(p.mul(700)).mul(0.11)
+  const flake = mx_noise_vec3(p.mul(700)).mul(0.055)
   m.normalNode = normalize(normalView.add(flake.mul(metallic)))
   return m
 }
