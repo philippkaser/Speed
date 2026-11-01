@@ -1195,3 +1195,29 @@ input[type='range']::-moz-range-thumb {
     padding: 0 16px;
   }
 }
+
+/* opponent name tags (drei <Html>) */
+.name-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 3px;
+  border-radius: 999px;
+  background: rgba(8, 10, 14, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font: 600 11.5px/1 var(--font);
+  white-space: nowrap;
+  transition: opacity 0.25s;
+  font-variant-numeric: tabular-nums;
+}
+.name-tag b {
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  color: #0b0d10;
+  font-size: 10.5px;
+}

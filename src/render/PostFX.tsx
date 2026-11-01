@@ -42,11 +42,14 @@ import {
 } from 'three/tsl'
 import { useSettings } from '../state/settings'
 
+/** Set frames > 0 when the camera jumps so motion blur ignores the discontinuity. */
+export const cameraCut = { frames: 0 }
+
 export const postUniforms = {
   motionBlur: uniform(0.6),
   vignette: uniform(0.32),
   exposure: uniform(1),
-  grain: uniform(0.025),
+  grain: uniform(0.012),
   saturation: uniform(1.06),
 }
 
@@ -136,8 +139,10 @@ export function PostFX() {
   useEffect(() => () => pipeline.dispose(), [pipeline])
 
   useFrame((_, dt) => {
-    // constant shutter: blur length corresponds to 1/60 s regardless of frame rate
-    postUniforms.motionBlur.value = gfx.motionBlur * Math.min(1, 1 / 60 / Math.max(dt, 1e-3))
+    // constant shutter: blur length corresponds to 1/60 s regardless of frame rate; none across camera cuts
+    const cut = cameraCut.frames > 0
+    if (cut) cameraCut.frames--
+    postUniforms.motionBlur.value = cut ? 0 : gfx.motionBlur * Math.min(1, 1 / 60 / Math.max(dt, 1e-3))
     pipeline.render()
   }, 1)
   return null

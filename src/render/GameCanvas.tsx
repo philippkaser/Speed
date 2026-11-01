@@ -1,4 +1,5 @@
 import { Canvas, extend, useFrame, useThree } from '@react-three/fiber'
+import { PerformanceMonitor } from '@react-three/drei'
 import { useEffect, useState } from 'react'
 import * as THREE from 'three/webgpu'
 import { audio } from '../audio/audio'
@@ -119,7 +120,9 @@ function CaptureHook() {
 
 export function GameCanvas() {
   const scale = useSettings((s) => s.graphics.resolutionScale)
-  const dpr = Math.min(window.devicePixelRatio || 1, 1.5) * scale
+  // adaptive resolution: drei's PerformanceMonitor trims the render scale when the frame rate drops
+  const [dyn, setDyn] = useState(1)
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5) * scale * dyn
   return (
     <Canvas
       className="game-canvas"
@@ -130,6 +133,12 @@ export function GameCanvas() {
       frameloop="always"
       onCreated={(state) => configureRenderer(state.gl as unknown as THREE.WebGPURenderer)}
     >
+      <PerformanceMonitor
+        bounds={() => [50, 58]}
+        flipflops={6}
+        onDecline={() => setDyn((d) => Math.max(0.6, +(d - 0.1).toFixed(2)))}
+        onIncline={() => setDyn((d) => Math.min(1, +(d + 0.1).toFixed(2)))}
+      />
       <GameLoop />
       <World />
       <CameraRig />

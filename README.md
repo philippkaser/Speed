@@ -80,7 +80,9 @@ Measured in `bun test` (flat ground, warm tyres):
   - bloom
   - grading, vignette and grain
   
-  Everything else is ACES filmic tone mapping. Quality presets are Low, Medium, High and Ultra.
+  - lens flare ghosts on High and Ultra
+  
+  Everything else is ACES filmic tone mapping. Quality presets are Low, Medium, High and Ultra. drei's `PerformanceMonitor` adapts the render resolution when the frame rate drops.
 - **Cars** (`src/car`): bodies are sculpted as **signed distance fields**, meshed with Surface Nets and snapped back onto the exact surface:
   - lofted tub and greenhouse, smooth-blended fenders, cut wheel arches, intakes, vents and a Kamm tail
   - triangles are classified into paint, glass, carbon, lights, grille and wheel wells
@@ -96,6 +98,7 @@ Measured in `bun test` (flat ground, warm tyres):
   - grandstands with crowds, pit building, start gantry with working lights, bridge, billboards, 300/200/100 m boards, marshal posts
   - card-based foliage trees in chunked LODs with wind sway
 - **Effects**: tyre smoke driven by contact-patch slip power, dust on grass and gravel, skid marks, sparks.
+- **Gameplay aids**: a GT-style driving line (red braking zones, yellow at the limit, green under acceleration) from your car's own speed profile, a time-trial ghost of your best lap, and opponent name tags with positions (drei `<Html>`).
 - **Cameras**:
   - chase and near chase, with a slip-aware yaw lag, speed-dependent FOV and road/kerb shake
   - cockpit with g-force head motion, plus hood and bumper

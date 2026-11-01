@@ -397,6 +397,14 @@ export function buildCarModel(carId: string, paint: string, lod = 0): CarModel {
   bodyMesh.castShadow = true
   bodyMesh.receiveShadow = true
   bodyGroup.add(bodyMesh)
+  // interior shell: the body seen from inside (roof lining, pillars, door cards), windows left open
+  const lining = new THREE.MeshStandardNodeMaterial({ color: 0x0d0e10, roughness: 0.9, side: THREE.BackSide })
+  const hidden = new THREE.MeshBasicNodeMaterial({ visible: false })
+  const shellMats = Array.from({ length: MAT_COUNT }, (_, i) => (i === Mat.Glass ? hidden : lining))
+  const shell = new THREE.Mesh(bodyGeo, shellMats)
+  shell.castShadow = false
+  shell.visible = lod === 0
+  if (lod === 0) bodyGroup.add(shell)
 
   // ---- aero parts
   const details: THREE.BufferGeometry[] = []
@@ -475,15 +483,21 @@ export function buildCarModel(carId: string, paint: string, lod = 0): CarModel {
 
   // ---- interior + driver
   const interior = new THREE.Group()
-  const darkMat = new THREE.MeshStandardNodeMaterial({ color: 0x0c0d0e, roughness: 0.85 })
+  const darkMat = new THREE.MeshStandardNodeMaterial({ color: 0x060607, roughness: 0.9 })
   const cageMat = new THREE.MeshStandardNodeMaterial({ color: 0x1b1c1e, roughness: 0.5, metalness: 0.5 })
   const ix: THREE.BufferGeometry[] = []
   const tub = new THREE.BoxGeometry(1.5, 0.05, 2.0)
   tub.translate(0, 0.2, -0.3)
   ix.push(tub)
-  const dash = new THREE.BoxGeometry(1.45, 0.16, 0.35)
-  dash.translate(0, body.beltY(0.4) - 0.06, 0.45)
+  // dashboard: slanted top that stays below the driver's sight line
+  const dashTop = body.eyeY - 0.24
+  const dash = new THREE.BoxGeometry(1.4, 0.12, 0.42)
+  dash.rotateX(0.18)
+  dash.translate(0, dashTop - 0.06, body.eyeZ + 0.78)
   ix.push(dash)
+  const binnacle = new THREE.BoxGeometry(0.34, 0.08, 0.16)
+  binnacle.translate(body.driverX, dashTop + 0.0, body.eyeZ + 0.62)
+  ix.push(binnacle)
   const seat = new THREE.BoxGeometry(0.5, 0.7, 0.1)
   seat.rotateX(-0.25)
   seat.translate(body.driverX, 0.52, body.eyeZ - 0.38)
@@ -495,6 +509,26 @@ export function buildCarModel(carId: string, paint: string, lod = 0): CarModel {
   interior.add(interiorMesh)
   // roll cage
   const cage: THREE.BufferGeometry[] = []
+  // smooth A-pillars and windscreen header (frame the cockpit view, hide classification steps)
+  {
+    const zBase = Math.min(body.zFront - 1.6, 0.66)
+    const zTop = 0.02
+    for (const sx of [-1, 1]) {
+      const pts: THREE.Vector3[] = []
+      for (let k = 0; k <= 8; k++) {
+        const t = k / 8
+        const z = zBase + (zTop - zBase) * t
+        // the pillar follows the windscreen's side edge, just below the cabin roof line
+        pts.push(new THREE.Vector3(sx * (body.cabinHalfWidth(z) - 0.035), Math.max(body.beltY(z), body.roofY(z) - 0.045), z))
+      }
+      const tube = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 16, 0.035, 8, false)
+      cage.push(tube)
+    }
+    const header = new THREE.CylinderGeometry(0.03, 0.03, (body.cabinHalfWidth(zTop) - 0.03) * 2, 8)
+    header.rotateZ(Math.PI / 2)
+    header.translate(0, body.roofY(zTop) - 0.035, zTop)
+    cage.push(header)
+  }
   // main hoop behind the seats, kept inside the greenhouse
   const hoopZ = body.eyeZ - 0.5
   const hoopTop = body.roofY(hoopZ) - 0.08
@@ -511,8 +545,8 @@ export function buildCarModel(carId: string, paint: string, lod = 0): CarModel {
   interior.add(new THREE.Mesh(strip(cage), cageMat))
   // steering wheel
   const wheelPivot = new THREE.Group()
-  wheelPivot.position.set(body.driverX, body.eyeY - 0.28, body.eyeZ + 0.45)
-  wheelPivot.rotation.x = -0.35
+  wheelPivot.position.set(body.driverX, body.eyeY - 0.36, body.eyeZ + 0.46)
+  wheelPivot.rotation.x = -0.3
   const rimG = new THREE.TorusGeometry(0.15, 0.018, 10, 32)
   const sw = new THREE.Mesh(rimG, new THREE.MeshStandardNodeMaterial({ color: 0x111111, roughness: 0.7 }))
   wheelPivot.add(sw)
@@ -535,6 +569,10 @@ export function buildCarModel(carId: string, paint: string, lod = 0): CarModel {
   const visor = new THREE.Mesh(new THREE.SphereGeometry(0.137, 24, 12, -0.9, 1.8, 1.1, 0.7), new THREE.MeshPhysicalNodeMaterial({ color: 0x050505, roughness: 0.05, metalness: 0.9 }))
   visor.position.copy(helmet.position)
   interior.add(visor)
+  const dashDisplay = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.07), new THREE.MeshBasicNodeMaterial({ color: new THREE.Color(0.25, 0.7, 1.4) }))
+  dashDisplay.position.set(body.driverX, dashTop + 0.042, body.eyeZ + 0.555)
+  dashDisplay.rotation.set(-0.5, Math.PI, 0)
+  interior.add(dashDisplay)
   bodyGroup.add(interior)
 
   // ---- wheels
@@ -605,6 +643,7 @@ export function buildCarModel(carId: string, paint: string, lod = 0): CarModel {
     if (opts.body !== undefined) {
       bodyMesh.visible = opts.body
       detailMesh.visible = opts.body
+      shell.visible = opts.body && lod === 0
     }
     if (opts.interior !== undefined) interior.visible = opts.interior
   }

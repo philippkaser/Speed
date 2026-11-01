@@ -10,6 +10,7 @@ import { useSettings } from '../state/settings'
 import { useGameStore } from '../state/gameStore'
 import { carPoses } from './CarVisual'
 import { cameraPose } from '../audio/cameraPose'
+import { cameraCut } from './PostFX'
 
 export const CAMERA_MODES = ['chase', 'chaseNear', 'cockpit', 'hood', 'bumper'] as const
 export type DriveCam = (typeof CAMERA_MODES)[number]
@@ -71,6 +72,7 @@ export function CameraRig() {
     headY: 0,
     lastMode: '' as string,
     fovKick: 0,
+    wasLookBack: false,
   })
 
   // orbit drag in showroom
@@ -161,12 +163,17 @@ export function CameraRig() {
       s.yaw = heading
       s.pitch = 0
       s.initialized = true
+      cameraCut.frames = 3
     }
     s.lastMode = camMode
     // camera yaw blends between heading and velocity (shows the slide angle)
     let targetYaw = heading + angleDiff(velHeading, heading) * clamp(speed / 30, 0, 1) * 0.45
     if (lookBack) targetYaw += Math.PI
     targetYaw += side * Math.PI * 0.5
+    if (lookBack !== s.wasLookBack) {
+      cameraCut.frames = 3
+      s.wasLookBack = lookBack
+    }
     s.yaw += angleDiff(targetYaw, s.yaw) * clamp(dt * (lookBack || side ? 30 : 7.5), 0, 1)
     const fwdPitch = Math.asin(clamp(_fwd.y, -0.5, 0.5))
     s.pitch += (fwdPitch * 0.7 - s.pitch) * clamp(dt * 4, 0, 1)
@@ -239,7 +246,7 @@ export function CameraRig() {
     cam.rotateY(Math.PI + side * Math.PI * 0.5)
     cam.rotateZ(-s.headX * 0.8 * k)
     cam.rotateX(-0.03 + shx * 0.5)
-    setFov(cam, (camMode === 'cockpit' ? gfx.fov + 4 : gfx.fov + 2) + speedFov * 0.6, dt)
+    setFov(cam, (camMode === 'cockpit' ? gfx.fov + 12 : gfx.fov + 4) + speedFov * 0.6, dt)
     cam.near = 0.04
     cam.updateProjectionMatrix()
   }, -2)
@@ -268,6 +275,7 @@ function attractCamera(cam: THREE.PerspectiveCamera, s: any, dt: number) {
   if (s.attractTimer <= 0) {
     s.attractTimer = 7 + Math.random() * 4
     s.attractShot = (s.attractShot + 1) % 4
+    cameraCut.frames = 3
     // follow the car that leads a small pack if possible
     s.attractCar = Math.floor(Math.random() * cars.length)
     const e = cars[s.attractCar]

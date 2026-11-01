@@ -1,5 +1,6 @@
+import { Html } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three/webgpu'
 import type { CarEntry } from '../game/game'
 import { game } from '../game/game'
@@ -39,5 +40,31 @@ export function CarVisual({ entry, lod = 0 }: { entry: CarEntry; lod?: number })
     model.update(v, entry)
   }, -5)
 
-  return <primitive object={model.root} />
+  const tag = useRef<HTMLDivElement>(null)
+  const showTags = !entry.isPlayer && (game.mode === 'race' || game.mode === 'online')
+  useFrame(({ camera }) => {
+    const el = tag.current
+    if (!el) return
+    const d = camera.position.distanceTo(model.root.position)
+    const vis = d > 6 && d < 140
+    el.style.opacity = vis ? String(Math.min(1, (140 - d) / 40)) : '0'
+    const pos = entry.timing.position
+    if (el.dataset.p !== String(pos)) {
+      el.dataset.p = String(pos)
+      el.firstChild!.textContent = String(pos)
+    }
+  })
+
+  return (
+    <primitive object={model.root}>
+      {showTags && (
+        <Html position={[0, 1.15, 0]} center zIndexRange={[5, 0]} style={{ pointerEvents: 'none' }}>
+          <div ref={tag} className="name-tag">
+            <b>{entry.timing.position}</b>
+            <span>{entry.name}</span>
+          </div>
+        </Html>
+      )}
+    </primitive>
+  )
 }

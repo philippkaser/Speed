@@ -235,6 +235,8 @@ export function makeBody(spec: CarSpec): BodyDef {
     const tl = P.taillight
     if (z < tl.zMax && y > tl.yMin && y < tl.yMax && ax < 0.88 && nz < -0.3) return Mat.Taillight
     if (z > zFront - 0.25 && y < 0.36) return Mat.Grille
+    // rear vent panel between the light bar and the diffuser
+    if (z < zRear + 0.12 && nz < -0.45 && y > 0.4 && y < tl.yMin - 0.03 && ax < 0.78) return Mat.Grille
     if (y < 0.165 || (z < zRear + 0.3 && y < 0.38)) return Mat.Carbon
     if (P.sideIntake) {
       const si = P.sideIntake
