@@ -52,7 +52,7 @@ export const useGameStore = create<GameUIState>()(
       raceLaps: 5,
       opponents: 7,
       aiSkill: 0.95,
-      timeOfDay: 18.7,
+      timeOfDay: 18.3,
       sessionKind: 'practice',
       sceneReady: false,
       rendererInfo: '',

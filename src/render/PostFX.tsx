@@ -113,7 +113,7 @@ export function PostFX() {
     else out = fxaa(out)
     if (useMB && vel) out = motionBlur(convertToTexture(out), vel.mul(postUniforms.motionBlur), int(12))
     if (useBloom) {
-      const b = bloom(out, 0.22, 0.45, 0.88)
+      const b = bloom(out, 0.14, 0.4, 1.15)
       out = vec4(out.rgb.add(b.rgb), 1)
     }
     // grading: saturation, vignette, fine grain (before tone mapping, applied in linear HDR)

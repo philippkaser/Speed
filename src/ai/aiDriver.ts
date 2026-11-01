@@ -13,6 +13,24 @@ export interface TrafficCar {
   id: string
 }
 
+/** Quasi-steady-state target speed along the racing line for a given car. */
+export function speedProfileFor(v: Vehicle, track: Track, skill = 1, out?: Float32Array) {
+  const sp = v.spec
+  const cp = COMPOUNDS[v.setup.compound] ?? COMPOUNDS.RM
+  const m = sp.mass + v.setup.ballast
+  const peakPower = Math.max(...sp.engine.torque.map(([rpm, t]) => (t * rpm * Math.PI) / 30)) * 0.9
+  return track.computeSpeedProfile(
+    {
+      mu: cp.mu * 0.85 * skill,
+      clA_m: (v.clAF + v.clAR) / m,
+      power_m: peakPower / m,
+      cdA_m: v.cdA / m,
+      brakeMu: cp.mu * 0.82 * skill,
+    },
+    out ?? new Float32Array(track.n),
+  )
+}
+
 export class AIDriver {
   profile: Float32Array
   sample = makeSample()
@@ -37,21 +55,7 @@ export class AIDriver {
   }
 
   rebuildProfile() {
-    const v = this.vehicle
-    const sp = v.spec
-    const cp = COMPOUNDS[v.setup.compound] ?? COMPOUNDS.RM
-    const m = sp.mass + v.setup.ballast
-    const peakPower = Math.max(...sp.engine.torque.map(([rpm, t]) => (t * rpm * Math.PI) / 30)) * 0.9
-    this.track.computeSpeedProfile(
-      {
-        mu: cp.mu * 0.85 * this.skill,
-        clA_m: (v.clAF + v.clAR) / m,
-        power_m: peakPower / m,
-        cdA_m: v.cdA / m,
-        brakeMu: cp.mu * 0.82 * this.skill,
-      },
-      this.profile,
-    )
+    speedProfileFor(this.vehicle, this.track, this.skill, this.profile)
   }
 
   /** Compute controls for this frame. */

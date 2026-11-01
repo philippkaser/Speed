@@ -5,6 +5,7 @@ import { quitToMenu, restartSession, startAttract } from '../game/session'
 import { input } from '../input/input'
 import { net, useNet } from '../net/client'
 import { useGameStore } from '../state/gameStore'
+import { useSettings } from '../state/settings'
 import { Btn, fmtTime } from './components'
 import { HUD } from './hud/HUD'
 import { Garage } from './screens/Garage'
@@ -194,6 +195,10 @@ export function UIRoot() {
         if (g.screen !== 'driving' || g.paused) return
         if (a === 'camera') g.cycleCamera()
         if (a === 'reset') game.resetPlayerToTrack()
+        if (a === 'racingLine') {
+          const s = useSettings.getState()
+          s.set({ racingLine: s.racingLine === 'off' ? 'braking' : s.racingLine === 'braking' ? 'full' : 'off' })
+        }
       }),
     [],
   )

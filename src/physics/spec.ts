@@ -246,10 +246,10 @@ export const CARS: CarSpec[] = [
   },
   {
     id: 'aurel-gt',
-    name: 'Aurel 640 GT',
+    name: 'Aurel 660 GT',
     manufacturer: 'Aurel',
     category: 'Gr.N · Road',
-    description: 'Front-mid engine grand tourer. 640 PS twin-turbo V8 on sports tyres — playful, heavy and fast.',
+    description: 'Front-mid engine grand tourer. 660 PS twin-turbo V8 on sports tyres — playful, heavy and fast.',
     mass: 1620,
     weightFront: 0.5,
     cgHeight: 0.5,

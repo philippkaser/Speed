@@ -118,7 +118,8 @@ export class PhysicsWorld {
       }
       c.vehicle.step(h, c.input, this.ground, c)
     }
-    for (let i = 0; i < this.cars.length; i++) this.resolveEnvironment(i)
+    // barrier / body-ground contacts at half rate (300 Hz is plenty, saves ~40% of the query cost)
+    if ((this.steps & 1) === 0) for (let i = 0; i < this.cars.length; i++) this.resolveEnvironment(i)
     for (let i = 0; i < this.cars.length; i++) {
       for (let j = i + 1; j < this.cars.length; j++) this.collideCars(this.cars[i], this.cars[j], i)
       for (const k of this.kinematics) if (k.active) this.collideKinematic(this.cars[i], k, i)

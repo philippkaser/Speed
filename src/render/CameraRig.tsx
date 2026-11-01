@@ -141,7 +141,9 @@ export function CameraRig() {
       const a = heading + s.orbitYaw
       _v.set(carPos.x + Math.sin(a) * Math.cos(s.orbitPitch) * d, carPos.y + Math.sin(s.orbitPitch) * d + 0.2, carPos.z + Math.cos(a) * Math.cos(s.orbitPitch) * d)
       cam.position.lerp(_v, s.initialized ? clamp(dt * 6, 0, 1) : 1)
-      _look.copy(carPos).add(_v2.set(0, 0.15, 0))
+      // aim slightly right of the car so it sits in the gap between the garage panels
+      _v2.set(Math.cos(a), 0, -Math.sin(a))
+      _look.copy(carPos).add(_v2.multiplyScalar(1.1)).add(_up.set(0, 0.15, 0))
       cam.lookAt(_look)
       setFov(cam, 34, dt)
       cam.near = 0.1

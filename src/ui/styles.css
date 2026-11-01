@@ -900,7 +900,18 @@ input[type='range']::-moz-range-thumb {
   transform: translateX(-50%);
   width: 470px;
 }
+.hud-bottom::before {
+  content: '';
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  top: 10px;
+  bottom: -26px;
+  background: radial-gradient(ellipse at 50% 85%, rgba(4, 6, 9, 0.62), rgba(4, 6, 9, 0.35) 45%, transparent 72%);
+  pointer-events: none;
+}
 .tach {
+  position: relative;
   width: 100%;
   height: 168px;
   display: block;
@@ -908,6 +919,7 @@ input[type='range']::-moz-range-thumb {
 }
 .tach-readout {
   position: absolute;
+  z-index: 1;
   left: 0;
   right: 0;
   top: 54px;

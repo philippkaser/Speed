@@ -88,7 +88,7 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
       color: uniform(new THREE.Color(0.55, 0.65, 0.8)),
       sunColor: uniform(new THREE.Color(1, 0.8, 0.6)),
       sunDir: uniform(new THREE.Vector3(0, 1, 0)),
-      density: uniform(0.00026),
+      density: uniform(0.00019),
       heightFalloff: uniform(0.012),
     }),
     [],
@@ -121,7 +121,8 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
     light.intensity = sun.intensity
     fogU.sunDir.value.copy(sun.dir)
     const e = sun.elevation
-    const horizon = new THREE.Color().setRGB(THREE.MathUtils.lerp(0.62, 0.55, e), THREE.MathUtils.lerp(0.58, 0.66, e), THREE.MathUtils.lerp(0.55, 0.8, e))
+    // aerial perspective tint: cool blue haze, warmer when the sun is low
+    const horizon = new THREE.Color().setRGB(THREE.MathUtils.lerp(0.62, 0.42, Math.min(1, e * 2)), THREE.MathUtils.lerp(0.6, 0.54, Math.min(1, e * 2)), THREE.MathUtils.lerp(0.62, 0.72, Math.min(1, e * 2)))
     fogU.color.value.copy(horizon)
     fogU.sunColor.value.copy(sun.color).multiplyScalar(1.1)
     light.position.copy(sunPos)

@@ -330,6 +330,7 @@ export class Track implements Ground {
   }
 
   /** local nearest search from a hint (follows a moving query point) */
+  private _ln = { i: 0, d: 0 }
   private localNearest(x: number, z: number, hint: number) {
     const n = this.n
     let i = hint
@@ -347,7 +348,9 @@ export class Track implements Ground {
         d = db
       } else break
     }
-    return { i, d }
+    this._ln.i = i
+    this._ln.d = d
+    return this._ln
   }
 
   // ----------------------------------------------------------------------------- queries
@@ -374,8 +377,13 @@ export class Track implements Ground {
     }
     const segLen = Math.hypot(this.px[i1] - this.px[i0], this.pz[i1] - this.pz[i0]) || DS
     const f = clamp(t / segLen, 0, 1)
-    return { i0, i1, f }
+    const r = this._proj
+    r.i0 = i0
+    r.i1 = i1
+    r.f = f
+    return r
   }
+  private _proj = { i0: 0, i1: 0, f: 0 }
 
   sample(x: number, z: number, out: GroundSample) {
     const { i0, i1, f } = this.project(x, z, out)
@@ -416,7 +424,9 @@ export class Track implements Ground {
     out.nz = nz
   }
 
-  /** Cross-section height profile relative to the centreline at lateral offset d. */
+  private _prof = { h: 0, dhdd: 0, surface: Surface.Asphalt as Surface }
+
+  /** Cross-section height profile relative to the centreline at lateral offset d (reused result object). */
   profile(i: number, d: number, slope: number, s: number) {
     const side = d >= 0 ? 1 : -1
     const S = side > 0 ? this.L : this.R
@@ -456,7 +466,11 @@ export class Track implements Ground {
         h += nz * smoothstep(paved + 1, paved + 4, x)
       }
     }
-    return { h, dhdd, surface }
+    const out = this._prof
+    out.h = h
+    out.dhdd = dhdd
+    out.surface = surface
+    return out
   }
 
   /** world position on the track at distance s and offset d (+left) */

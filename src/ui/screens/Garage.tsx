@@ -29,7 +29,7 @@ export function Garage() {
     <>
       <TopBar crumb="Garage" />
       <div className="screen" style={{ justifyContent: 'space-between' }}>
-        <div className="panel" style={{ width: 340, display: 'flex', flexDirection: 'column', alignSelf: 'flex-start', maxHeight: '100%' }}>
+        <div className="panel" style={{ width: 300, display: 'flex', flexDirection: 'column', alignSelf: 'flex-start', maxHeight: '100%' }}>
           <div className="panel-head">
             <h2>Cars</h2>
           </div>
@@ -61,7 +61,7 @@ export function Garage() {
           </div>
         </div>
 
-        <div className="panel" style={{ width: 'min(620px, 52vw)', display: 'flex', flexDirection: 'column', maxHeight: '100%' }}>
+        <div className="panel" style={{ width: 'min(560px, 46vw)', display: 'flex', flexDirection: 'column', maxHeight: '100%' }}>
           <div className="tabs">
             <button className={tab === 'car' ? 'on' : ''} onClick={() => setTab('car')}>
               Specifications
@@ -119,9 +119,10 @@ export function Garage() {
         hints={[
           ['Drag', 'Rotate camera'],
           ['Wheel', 'Zoom'],
+          ['Esc', 'Back'],
         ]}
       />
-      <div style={{ position: 'absolute', right: 36, bottom: 70, display: 'flex', gap: 10 }}>
+      <div style={{ position: 'absolute', right: 36, bottom: 8, display: 'flex', gap: 10 }}>
         <Btn
           sound="back"
           onClick={() => {
