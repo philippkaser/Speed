@@ -148,3 +148,41 @@ test('physics step performance', () => {
   console.log(`12 cars x ${steps} steps (1 s of sim): ${ms.toFixed(1)} ms  (${((ms / steps / 12) * 1000).toFixed(2)} us per car-step)`)
   expect(ms).toBeLessThan(400)
 })
+
+test('steering assist keeps a keyboard driver near the peak slip angle at speed', () => {
+  const run = (assist: number) => {
+    const { world, v, car } = makeWorld(0, { steering: assist, tc: 2 })
+    for (const w of v.wheels) {
+      w.tyre.surfTemp = w.tyre.coreTemp = w.model.compound.optTemp
+      w.tyre.updatePressure()
+    }
+    v.setVelocityForward(200 / 3.6)
+    v.gear = 5
+    car.input.throttle = 0.35
+    let maxBeta = 0,
+      maxFrontSlip = 0
+    run_(world, 2.0, (t) => {
+      // keyboard style: ramp to full lock in ~0.4 s
+      car.input.steer = Math.min(1, t / 0.4)
+      const vl = v.vel.x * v.left.x + v.vel.z * v.left.z
+      const vf = v.vel.x * v.fwd.x + v.vel.z * v.fwd.z
+      maxBeta = Math.max(maxBeta, Math.abs(Math.atan2(vl, Math.max(vf, 1))))
+      maxFrontSlip = Math.max(maxFrontSlip, Math.abs(v.wheels[0].tyre.slipAngle), Math.abs(v.wheels[1].tyre.slipAngle))
+    })
+    return { beta: (maxBeta * 180) / Math.PI, front: (maxFrontSlip * 180) / Math.PI, lat: Math.abs(v.accelLat) }
+  }
+  const on = run(0.75)
+  const off = run(0)
+  console.log(`full lock @200 km/h: assist on -> body slip ${on.beta.toFixed(1)} deg, front slip ${on.front.toFixed(1)} deg | assist off -> body slip ${off.beta.toFixed(1)} deg, front slip ${off.front.toFixed(1)} deg`)
+  expect(on.beta).toBeLessThan(12)
+  expect(on.front).toBeLessThan(11)
+  expect(off.front).toBeGreaterThan(on.front)
+})
+
+function run_(world: PhysicsWorld, seconds: number, each: (t: number) => void) {
+  const steps = Math.round(seconds / PHYSICS_DT)
+  for (let i = 0; i < steps; i++) {
+    each(i * PHYSICS_DT)
+    world.stepOnce(PHYSICS_DT)
+  }
+}

@@ -503,9 +503,12 @@ export class Vehicle {
       // velocity direction at the front axle relative to heading
       const vxF = vbx + this.wBodyY() * fa
       const beta = Math.atan2(vxF, Math.max(Math.abs(vf), 0.5))
-      const blend = smoothstep(4, 26, Math.abs(vf)) * this.assists.steering
-      const peakA = this.wheels[0].model.compound.peakSlipAngle * 1.2
-      const limit = lerp(sp.steerLock, Math.min(sp.steerLock, peakA), blend)
+      const speedBlend = smoothstep(4, 26, Math.abs(vf))
+      const blend = speedBlend * this.assists.steering
+      // the slip-angle limit engages fully from ~60% assist; counter-steer scales with strength
+      const limitBlend = speedBlend * Math.min(1, this.assists.steering * 1.65)
+      const peakA = this.wheels[0].model.compound.peakSlipAngle * 1.15
+      const limit = lerp(sp.steerLock, Math.min(sp.steerLock, peakA), limitBlend)
       delta = -clamp(input.steer, -1, 1) * limit + beta * 0.9 * blend * (vf > 0 ? 1 : 0)
       delta = clamp(delta, -sp.steerLock, sp.steerLock)
     }

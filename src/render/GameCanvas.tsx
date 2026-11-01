@@ -12,6 +12,7 @@ import { Environment } from './Environment'
 import { PostFX } from './PostFX'
 import { TrackScene } from './TrackScene'
 import { RacingLine } from './RacingLine'
+import { Ghost } from './Ghost'
 import { debugFlag } from '../util/debug'
 
 extend(THREE as any)
@@ -74,6 +75,7 @@ function World() {
       ))}
       <Effects key={'fx' + version} />
       <RacingLine key={'rl' + version} track={track} />
+      {game.mode === 'practice' && <Ghost key={'gh' + version} />}
     </>
   )
 }

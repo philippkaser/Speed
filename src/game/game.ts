@@ -123,6 +123,7 @@ export class Game {
 
   /** Start a new session. */
   start(cfg: SessionConfig) {
+    const prevCar = this.config?.carId
     this.config = cfg
     this.mode = cfg.mode
     this.track = this.getTrack(cfg.trackId)
@@ -130,6 +131,8 @@ export class Game {
     this.cars = []
     this.player = null
     this.finishOrder = []
+    this.ghostRec = []
+    if (cfg.mode !== 'practice' || prevCar !== cfg.carId) this.ghostBest = null
     this.totalLaps = cfg.laps
     this.raceTime = 0
     this.sessionTime = 0
@@ -157,7 +160,8 @@ export class Game {
       for (let i = 0; i < cfg.opponents; i++) {
         if (cfg.mode === 'race' && slot === playerSlot) slot++
         const g = gridSlots[slot++] ?? gridSlots[gridSlots.length - 1]
-        const carId = i % 3 === 2 ? 'aurel-gt' : cfg.mode === 'race' ? cfg.carId : 'vanta-gt3'
+        // races are single-class (the player's car); the menu attract mode shows a mixed field
+        const carId = cfg.mode === 'race' ? cfg.carId : i % 3 === 2 ? 'aurel-gt' : 'vanta-gt3'
         const spec = getCar(carId)
         const v = new Vehicle(spec)
         v.reset(g.x, g.z, g.yaw, this.track)
@@ -283,6 +287,10 @@ export class Game {
   }
 
   onlineStartAt = 0
+  /** time trial ghost: samples [t, x, y, z, qx, qy, qz, qw] at 30 Hz */
+  ghostRec: number[] = []
+  ghostBest: Float32Array | null = null
+  private ghostAcc = 0
 
   stop() {
     this.cars = []
@@ -379,6 +387,15 @@ export class Game {
 
     // timing
     for (const c of this.cars) this.updateTiming(c, dt)
+    // ghost recording (time trial)
+    if (this.mode === 'practice' && this.player?.timing.started) {
+      this.ghostAcc += dt
+      if (this.ghostAcc >= 1 / 30) {
+        this.ghostAcc = 0
+        const v = this.player.sim.vehicle
+        this.ghostRec.push(this.player.timing.current, v.pos.x, v.pos.y, v.pos.z, v.q.x, v.q.y, v.q.z, v.q.w)
+      }
+    }
     this.updatePositions()
     this.world.events.length = Math.min(this.world.events.length, 64)
   }
@@ -466,6 +483,10 @@ export class Game {
     t.last = lapTime
     t.lap++
     let isBest = false
+    if (c.isPlayer && this.mode === 'practice') {
+      if (t.valid && (t.best === 0 || lapTime < t.best) && this.ghostRec.length > 80) this.ghostBest = Float32Array.from(this.ghostRec)
+      this.ghostRec = []
+    }
     if (t.valid && (t.best === 0 || lapTime < t.best)) {
       t.best = lapTime
       isBest = true

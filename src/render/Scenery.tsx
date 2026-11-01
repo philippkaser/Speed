@@ -259,7 +259,7 @@ function grandstand(length: number, rows: number, seed: number) {
   const roof = new THREE.BoxGeometry(length + 2, 0.3, rows * 0.85 + 3)
   roof.rotateX(-0.08)
   roof.translate(0, roofH, -rows * 0.85 * 0.5 + 0.8)
-  parts.push(paint(roof, new THREE.Color(0.75, 0.76, 0.78), 0, r))
+  parts.push(paint(roof, new THREE.Color(0.55, 0.56, 0.58), 0, r))
   for (let x = -length / 2; x <= length / 2; x += 12) {
     const p = new THREE.BoxGeometry(0.3, roofH, 0.3)
     p.translate(x, roofH / 2, -rows * 0.85 - 0.1)
@@ -272,9 +272,9 @@ function pitBuilding(length: number) {
   const solid: THREE.BufferGeometry[] = []
   const glass: THREE.BufferGeometry[] = []
   const r = rng(99)
-  const concrete = new THREE.Color(0.55, 0.56, 0.57)
+  const concrete = new THREE.Color(0.42, 0.43, 0.44)
   const dark = new THREE.Color(0.08, 0.085, 0.09)
-  const white = new THREE.Color(0.78, 0.79, 0.8)
+  const white = new THREE.Color(0.6, 0.61, 0.62)
   const box = (w: number, h: number, d: number, x: number, y: number, z: number, c: THREE.Color, isGlass = false) => {
     const b = new THREE.BoxGeometry(w, h, d)
     b.translate(x, y, z)
@@ -494,7 +494,8 @@ export function Scenery({ track, heights }: { track: Track; heights: TerrainHeig
       const beam = new THREE.Mesh(new THREE.BoxGeometry(span, 0.9, 0.7), frameMat)
       const mid = at(s, (wl - wr) / 2)
       beam.position.set(mid.x, mid.y + 8.1, mid.z)
-      beam.rotation.y = yawAt(s) - Math.PI / 2
+      // local x spans across the track (along the track's left vector)
+      beam.rotation.y = yawAt(s)
       beam.castShadow = true
       g.add(beam)
       const panel = new THREE.Mesh(new THREE.BoxGeometry(5.2, 1.4, 0.4), frameMat)
@@ -529,7 +530,7 @@ export function Scenery({ track, heights }: { track: Track; heights: TerrainHeig
         wr = track.R.wall[i] + 3
       const mid = at(s, (wl - wr) / 2)
       const span = wl + wr
-      const yaw = yawAt(s) - Math.PI / 2
+      const yaw = yawAt(s) // local x across the track
       const bridgeMat = new THREE.MeshStandardNodeMaterial({ color: 0xe8e8e8, roughness: 0.6 })
       const deck = new THREE.Mesh(new THREE.BoxGeometry(span, 1.4, 4), bridgeMat)
       deck.position.set(mid.x, mid.y + 7.4, mid.z)

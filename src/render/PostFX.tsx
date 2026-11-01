@@ -13,6 +13,7 @@ import { ssgi } from 'three/addons/tsl/display/SSGINode.js'
 import { ssr } from 'three/addons/tsl/display/SSRNode.js'
 import { traa } from 'three/addons/tsl/display/TRAANode.js'
 import { fxaa } from 'three/addons/tsl/display/FXAANode.js'
+import { lensflare } from 'three/addons/tsl/display/LensflareNode.js'
 import {
   diffuseColor,
   float,
@@ -115,6 +116,11 @@ export function PostFX() {
     if (useBloom) {
       const b = bloom(out, 0.14, 0.4, 1.15)
       out = vec4(out.rgb.add(b.rgb), 1)
+      // anamorphic-free lens ghosts from the brightest highlights (low sun, headlights)
+      if (gfx.preset === 'high' || gfx.preset === 'ultra') {
+        const flare = lensflare(b, { ghostTint: vec3(1.0, 0.93, 0.82), threshold: float(0.85), ghostSamples: float(4), ghostSpacing: float(0.28), ghostAttenuationFactor: float(22) })
+        out = vec4(out.rgb.add((flare as any).rgb.mul(0.35)), 1)
+      }
     }
     // grading: saturation, vignette, fine grain (before tone mapping, applied in linear HDR)
     const lum = out.rgb.dot(vec3(0.2126, 0.7152, 0.0722))

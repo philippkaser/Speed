@@ -8,6 +8,8 @@ import { UIRoot } from './ui/UIRoot'
 export function App() {
   useEffect(() => {
     input.attach()
+    // small handle for automated tests / debugging from the console
+    ;(window as unknown as { speed: object }).speed = { store: useGameStore, setCamera: (c: string) => useGameStore.getState().set({ camera: c as never }) }
     // URL shortcuts (handy for testing): ?drive, ?race, ?showroom, ?car=<id>
     const p = new URLSearchParams(location.search)
     const car = p.get('car')
