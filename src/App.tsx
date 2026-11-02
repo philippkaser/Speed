@@ -1,4 +1,5 @@
-import { useEffect } from 'react'
+import { Component, type ReactNode, useEffect } from 'react'
+import { reportGpuError } from './render/gpuHealth'
 import { startAttract, startDriving, startShowroom } from './game/session'
 import { input } from './input/input'
 import { GameCanvas } from './render/GameCanvas'
@@ -27,8 +28,26 @@ export function App() {
   }, [])
   return (
     <div className="app">
-      <GameCanvas />
+      <CanvasBoundary>
+        <GameCanvas />
+      </CanvasBoundary>
       <UIRoot />
     </div>
   )
+}
+
+/** A renderer crash must not take the menus down with it (React unmounts everything on an uncaught error). */
+class CanvasBoundary extends Component<{ children: ReactNode }, { error: string }> {
+  state = { error: '' }
+  static getDerivedStateFromError(e: unknown) {
+    return { error: (e as Error)?.message || String(e) }
+  }
+  componentDidCatch(e: unknown) {
+    console.error(e)
+    useGameStore.getState().set({ sceneReady: true }) // let the menus through
+    reportGpuError('Renderer crashed: ' + ((e as Error)?.message || String(e)))
+  }
+  render() {
+    return this.state.error ? <div className="game-canvas canvas-failed" /> : this.props.children
+  }
 }

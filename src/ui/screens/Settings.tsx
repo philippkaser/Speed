@@ -43,6 +43,7 @@ export function SettingsPanel({ onClose, inGame = false }: { onClose: () => void
                 onChange={(v) => s.applyPreset(v)}
               />
             </FieldRow>
+            <RendererRow />
             <Slider label="Resolution scale" value={gfx.resolutionScale} min={0.5} max={1} step={0.05} unit="%" format={(v) => Math.round(v * 100) + ''} onChange={(v) => s.setGraphics({ resolutionScale: v })} />
             <div className="section-title">Lighting</div>
             <Toggle label="Global illumination (SSGI)" sub="Screen-space indirect light bounce and occlusion · WebGPU" value={gfx.ssgi} onChange={(v) => s.setGraphics({ ssgi: v })} />
@@ -232,5 +233,29 @@ export function Settings() {
       </div>
       <BottomBar hints={[['Esc', 'Back']]} />
     </>
+  )
+}
+
+function RendererRow() {
+  const s = useSettings()
+  const active = useGameStore((g) => g.rendererInfo)
+  const pref = s.graphics.backend ?? 'auto'
+  const note = s.graphics.backendNote
+  const sub = (active ? `Running on ${active}. ` : '') + (note && pref === 'webgl' ? `Switched after: ${note}` : 'WebGPU unlocks SSGI. Changing this reloads the game.')
+  return (
+    <FieldRow label="Renderer" sub={sub}>
+      <Segmented<'auto' | 'webgl'>
+        options={[
+          { value: 'auto', label: 'WebGPU' },
+          { value: 'webgl', label: 'WebGL2' },
+        ]}
+        value={pref}
+        onChange={(v) => {
+          if (v === pref) return
+          s.setGraphics({ backend: v, backendNote: '' })
+          setTimeout(() => location.reload(), 60)
+        }}
+      />
+    </FieldRow>
   )
 }

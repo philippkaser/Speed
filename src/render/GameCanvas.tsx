@@ -17,25 +17,95 @@ import { RacingLine } from './RacingLine'
 import { Ghost } from './Ghost'
 import { ReflectionProbe } from './ReflectionProbe'
 import { debugFlag } from '../util/debug'
+import { installGpuErrorHook, rendererStarted, switchToWebGL } from './gpuHealth'
 
 extend(THREE as any)
 
 async function createRenderer(props: { canvas: HTMLCanvasElement | OffscreenCanvas }) {
+  installGpuErrorHook()
   const params = new URLSearchParams(location.search)
-  const forceWebGL = params.has('webgl') || !('gpu' in navigator)
+  const pref = useSettings.getState().graphics.backend ?? 'auto'
+  const hasGpu = 'gpu' in navigator
+  let forceWebGL = !hasGpu || params.has('webgl') || (pref === 'webgl' && !params.has('webgpu'))
+  // Ask for the adapter's full colour-attachment budget (the WebGPU default is only 32 bytes per
+  // sample); the G-buffer is laid out to fit the default anyway.
+  let requiredLimits: Record<string, number> | undefined
+  if (!forceWebGL) {
+    try {
+      const gpu = (navigator as unknown as { gpu: { requestAdapter(o: object): Promise<any> } }).gpu
+      const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' })
+      if (!adapter) forceWebGL = true
+      else requiredLimits = { maxColorAttachmentBytesPerSample: adapter.limits.maxColorAttachmentBytesPerSample }
+    } catch {
+      forceWebGL = true
+    }
+  }
   const renderer = new THREE.WebGPURenderer({
     canvas: props.canvas as HTMLCanvasElement,
     antialias: false,
     powerPreference: 'high-performance',
     forceWebGL,
     alpha: false,
-  })
-  await renderer.init()
+    ...(requiredLimits ? { requiredLimits } : {}),
+  } as ConstructorParameters<typeof THREE.WebGPURenderer>[0])
+  try {
+    await renderer.init()
+  } catch (e) {
+    const msg = 'Renderer crashed during start-up: ' + (e as Error)?.message
+    if (!forceWebGL) switchToWebGL(msg)
+    throw e
+  }
+  if (OFFSCREEN) installOffscreen(renderer)
   configureRenderer(renderer)
   const backend = (renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'WebGPU' : 'WebGL2'
+  rendererStarted(backend)
   useGameStore.getState().set({ rendererInfo: backend })
   console.info(`[render] backend: ${backend}`)
   return renderer
+}
+
+/**
+ * Test mode (`?offscreen`): everything that would go to the canvas is rendered into a render target
+ * instead. Headless WebGPU (SwiftShader) loses its device when a canvas texture is presented, but works
+ * offscreen, so this lets automated tests exercise the real WebGPU backend. Frames are read back by
+ * CaptureHook.
+ */
+const offscreen: { rt: THREE.RenderTarget | null } = { rt: null }
+const OFFSCREEN = new URLSearchParams(location.search).has('offscreen')
+
+/** Offscreen mode has no presentation back-pressure: pace frames on GPU completion instead. */
+function OffscreenDriver() {
+  const { gl, advance } = useThree()
+  useEffect(() => {
+    let alive = true
+    const device = (gl as any).backend?.device as { queue: { onSubmittedWorkDone(): Promise<void> } } | undefined
+    const loop = async () => {
+      while (alive) {
+        advance(performance.now())
+        if (device) {
+          await device.queue.onSubmittedWorkDone()
+          await new Promise((r) => setTimeout(r, 0))
+        } else await new Promise((r) => requestAnimationFrame(r))
+      }
+    }
+    loop()
+    return () => {
+      alive = false
+    }
+  }, [gl, advance])
+  return null
+}
+function installOffscreen(r: THREE.WebGPURenderer) {
+  const rt = new THREE.RenderTarget(1, 1, { depthBuffer: true })
+  offscreen.rt = rt
+  const set = r.setRenderTarget.bind(r)
+  const get = r.getRenderTarget.bind(r)
+  ;(r as any).setRenderTarget = (t: THREE.RenderTarget | null, ...a: unknown[]) => (set as any)(t ?? rt, ...a)
+  ;(r as any).getRenderTarget = () => {
+    const t = get()
+    return t === rt ? null : t
+  }
+  r.setRenderTarget(null)
 }
 
 function configureRenderer(r: THREE.WebGPURenderer) {
@@ -49,7 +119,13 @@ function configureRenderer(r: THREE.WebGPURenderer) {
 
 function GameLoop() {
   const paused = useGameStore((s) => s.paused)
-  useFrame((_, dt) => {
+  useFrame((state, dt) => {
+    const rt = offscreen.rt
+    if (rt) {
+      // keep the offscreen target sized to the drawing buffer (outside of any render call)
+      const s = state.gl.getDrawingBufferSize(new THREE.Vector2())
+      if (rt.width !== s.x || rt.height !== s.y) rt.setSize(s.x, s.y)
+    }
     if (!paused) game.update(dt)
     else {
       game.world.alpha = 1
@@ -115,10 +191,33 @@ function CaptureHook() {
   useFrame(() => {
     const w = window as unknown as { __wantShot?: boolean; __shot?: string; __frames?: number }
     w.__frames = (w.__frames ?? 0) + 1
-    if (w.__wantShot) {
-      w.__wantShot = false
+    if (!w.__wantShot) return
+    w.__wantShot = false
+    const rt = offscreen.rt
+    if (!rt) {
       w.__shot = (gl.domElement as HTMLCanvasElement).toDataURL('image/png')
+      return
     }
+    const r = gl as unknown as THREE.WebGPURenderer
+    const W = rt.width,
+      H = rt.height
+    r.readRenderTargetPixelsAsync(rt, 0, 0, W, H).then((px) => {
+      const c = document.createElement('canvas')
+      c.width = W
+      c.height = H
+      const ctx = c.getContext('2d')!
+      const img = ctx.createImageData(W, H)
+      const flip = !(r.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend
+      for (let y = 0; y < H; y++) {
+        const src = (flip ? H - 1 - y : y) * W * 4
+        img.data.set((px as Uint8Array).subarray(src, src + W * 4), y * W * 4)
+      }
+      ctx.putImageData(img, 0, 0)
+      let sum = 0
+      for (let i = 0; i < img.data.length; i += 4) sum += img.data[i] * 0.2126 + img.data[i + 1] * 0.7152 + img.data[i + 2] * 0.0722
+      ;(w as { __shotMean?: number }).__shotMean = sum / (W * H)
+      w.__shot = c.toDataURL('image/png')
+    }, (e) => console.error('[capture]', e))
   }, 2)
   return null
 }
@@ -135,7 +234,7 @@ export function GameCanvas() {
       dpr={dpr}
       flat
       camera={{ fov: 58, near: 0.1, far: 12000, position: [0, 6, 12] }}
-      frameloop="always"
+      frameloop={OFFSCREEN ? 'never' : 'always'}
       onCreated={(state) => configureRenderer(state.gl as unknown as THREE.WebGPURenderer)}
     >
       <PerformanceMonitor
@@ -151,6 +250,7 @@ export function GameCanvas() {
       {!debugFlag('nopost') ? <PostFX /> : <PlainRender />}
       <SceneReady />
       <CaptureHook />
+      {OFFSCREEN && <OffscreenDriver />}
     </Canvas>
   )
 }

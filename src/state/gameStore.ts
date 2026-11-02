@@ -26,6 +26,8 @@ interface GameUIState {
   sessionKind: 'practice' | 'race' | 'online'
   sceneReady: boolean
   rendererInfo: string
+  /** first fatal GPU/renderer error of this page load */
+  gpuError: string
   setScreen: (s: Screen) => void
   back: () => void
   setPaused: (p: boolean) => void
@@ -56,6 +58,7 @@ export const useGameStore = create<GameUIState>()(
       sessionKind: 'practice',
       sceneReady: false,
       rendererInfo: '',
+      gpuError: '',
       setScreen: (s) => set({ previous: get().screen, screen: s }),
       back: () => set({ screen: get().previous === get().screen ? 'home' : get().previous }),
       setPaused: (p) => set({ paused: p }),

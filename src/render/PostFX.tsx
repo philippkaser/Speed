@@ -45,6 +45,8 @@ import {
   max,
 } from 'three/tsl'
 import { useSettings } from '../state/settings'
+import { reportGpuError } from './gpuHealth'
+import { debugFlag } from '../util/debug'
 
 /** Set frames > 0 when the camera jumps so motion blur ignores the discontinuity. */
 export const cameraCut = { frames: 0 }
@@ -85,19 +87,23 @@ export function PostFX() {
     const rp = new THREE.RenderPipeline(renderer)
     const scenePass = pass(scene, camera)
     if (upscale < 0.999) scenePass.setResolutionScale(upscale)
+    // G-buffer layout. WebGPU's default limit is 32 bytes of colour attachments per sample and every
+    // RGBA8 / RGBA16F target counts as 8, so at most four targets: roughness rides in the normal
+    // target's alpha and metalness in the albedo target's alpha (or a target of its own without SSGI).
     const outputs: Record<string, any> = { output }
     if (useTAA || useMB) outputs.velocity = velocity
-    if (useSSGI || useSSR || useAO) outputs.normal = packNormalToRGB(normalView)
-    if (useSSGI) outputs.diffuseColor = diffuseColor
-    if (useSSR) outputs.metalrough = vec2(metalness, roughness)
+    if (useSSGI || useSSR || useAO) outputs.normal = vec4(packNormalToRGB(normalView), useSSR ? roughness : float(1))
+    if (useSSGI) outputs.diffuseColor = vec4(diffuseColor.rgb, useSSR ? metalness : float(0))
+    else if (useSSR) outputs.metal = vec4(metalness, 0, 0, 1)
+    // test switch: an over-budget G-buffer that WebGPU refuses, to exercise the WebGL2 fallback
+    if (debugFlag('gpufail') && !isWebGL) for (let i = 0; i < 8; i++) outputs['fail' + i] = vec4(1)
     scenePass.setMRT(mrt(outputs))
+    if (outputs.fail0) for (let i = 0; i < 8; i++) scenePass.getTexture('fail' + i)
     const color = scenePass.getTextureNode('output')
     const depth = scenePass.getTextureNode('depth')
-    if (outputs.normal) scenePass.getTexture('normal').type = THREE.UnsignedByteType
-    if (outputs.diffuseColor) scenePass.getTexture('diffuseColor').type = THREE.UnsignedByteType
-    if (outputs.metalrough) scenePass.getTexture('metalrough').type = THREE.UnsignedByteType
+    for (const k of ['normal', 'diffuseColor', 'metal']) if (outputs[k]) scenePass.getTexture(k).type = THREE.UnsignedByteType
     const normalTex = outputs.normal ? scenePass.getTextureNode('normal') : null
-    const sceneNormal = normalTex ? sample((uv) => unpackRGBToNormal(normalTex.sample(uv))) : null
+    const sceneNormal = normalTex ? sample((uv) => unpackRGBToNormal(normalTex.sample(uv).xyz)) : null
     const vel = outputs.velocity ? scenePass.getTextureNode('velocity') : null
 
     let composite: any = color
@@ -120,8 +126,8 @@ export function PostFX() {
       composite = vec4(color.rgb.mul(a.getTextureNode().r), color.a)
     }
     if (useSSR && sceneNormal) {
-      const mr = scenePass.getTextureNode('metalrough')
-      const r = ssr(convertToTexture(composite), depth, sceneNormal, { metalnessNode: mr.r, roughnessNode: mr.g, camera, reflectNonMetals: true })
+      const metalNode = useSSGI ? scenePass.getTextureNode('diffuseColor').a : scenePass.getTextureNode('metal').r
+      const r = ssr(convertToTexture(composite), depth, sceneNormal, { metalnessNode: metalNode, roughnessNode: normalTex!.a, camera, reflectNonMetals: true })
       r.maxDistance.value = 60
       r.thickness.value = 0.35
       r.quality.value = gfx.preset === 'ultra' ? 0.6 : 0.4
@@ -167,7 +173,20 @@ export function PostFX() {
     const cut = cameraCut.frames > 0
     if (cut) cameraCut.frames--
     postUniforms.motionBlur.value = cut ? 0 : gfx.motionBlur * Math.min(1, 1 / 60 / Math.max(dt, 1e-3))
-    pipeline.render()
+    if ((pipeline as any).__broken) {
+      renderer.render(scene, camera)
+      return
+    }
+    try {
+      pipeline.render()
+    } catch (e) {
+      // never leave the screen black: drop to a plain render and report it
+      ;(pipeline as any).__broken = true
+      console.error(e)
+      reportGpuError('Post-processing failed: ' + (e as Error)?.message)
+      renderer.render(scene, camera)
+      return
+    }
     const meter = (pipeline as any).__meter
     if (meter && !eye.pending && eye.frame++ % 6 === 0) {
       eye.pending = true

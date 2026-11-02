@@ -21,6 +21,10 @@ export interface GraphicsSettings {
   fov: number // base FOV for chase camera
   cameraShake: number // 0..1
   showFps: boolean
+  /** renderer backend: 'auto' = WebGPU where available, else WebGL2 */
+  backend?: 'auto' | 'webgl'
+  /** why the game switched itself to WebGL2 (shown in Settings) */
+  backendNote?: string
 }
 
 export interface ControlSettings {
@@ -62,7 +66,7 @@ export interface SettingsState {
   set: (s: Partial<Pick<SettingsState, 'units' | 'playerName' | 'hudVisible' | 'racingLine'>>) => void
 }
 
-export const PRESETS: Record<QualityPreset, Omit<GraphicsSettings, 'fov' | 'cameraShake' | 'showFps' | 'preset'>> = {
+export const PRESETS: Record<QualityPreset, Omit<GraphicsSettings, 'fov' | 'cameraShake' | 'showFps' | 'preset' | 'backend' | 'backendNote'>> = {
   low: { resolutionScale: 0.7, upscale: 1, autoExposure: false, ssgi: false, ssr: false, ao: false, taa: false, motionBlur: 0, bloom: true, shadows: 1, trees: 0.35, envProbe: false },
   medium: { resolutionScale: 1, upscale: 0.7, autoExposure: true, ssgi: false, ssr: false, ao: true, taa: true, motionBlur: 0.5, bloom: true, shadows: 2, trees: 0.7, envProbe: true },
   high: { resolutionScale: 1, upscale: 0.8, autoExposure: true, ssgi: true, ssr: true, ao: true, taa: true, motionBlur: 0.7, bloom: true, shadows: 2, trees: 1, envProbe: true },
@@ -109,6 +113,21 @@ export const useSettings = create<SettingsState>()(
       setAssists: (a) => set((s) => ({ assists: { ...s.assists, ...a } })),
       set: (v) => set(v),
     }),
-    { name: 'speed-settings-v1', version: 1 },
+    {
+      name: 'speed-settings-v1',
+      version: 1,
+      // nested merge so settings added in later versions get their defaults
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<SettingsState>
+        return {
+          ...current,
+          ...p,
+          graphics: { ...current.graphics, ...p.graphics },
+          controls: { ...current.controls, ...p.controls },
+          audio: { ...current.audio, ...p.audio },
+          assists: { ...current.assists, ...p.assists },
+        }
+      },
+    },
   ),
 )

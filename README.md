@@ -9,9 +9,12 @@ bun run dev      # Vite (http://localhost:5173) + multiplayer server (:3001), Vi
 bun run build    # type-check + production bundle in dist/
 bun run start    # production: one Bun process serves dist/ and the WebSocket server on :3001
 bun test         # physics, AI and multiplayer integration tests
+bun run test:gpu # headless smoke test of the real WebGPU backend (needs Playwright + Chromium, dev server running)
 ```
 
-Useful URL switches: `?drive` (straight into a practice session), `?race`, `?showroom`, `?car=aurel-gt`, `?q=low|medium|high|ultra`, `?webgl` (force the WebGL2 backend), `?autopilot` (AI drives your car).
+Useful URL switches: `?drive` (straight into a practice session), `?race`, `?showroom`, `?car=aurel-gt`, `?q=low|medium|high|ultra`, `?webgl` (force the WebGL2 backend), `?webgpu` (force WebGPU and never fall back), `?autopilot` (AI drives your car).
+
+If the 3D view ever stays black, open Settings → Graphics → Renderer and pick WebGL2, or add `?webgl` to the URL. The game also switches itself: on a fatal WebGPU error (a pipeline or shader that fails to build, a validation error, device loss) it moves to WebGL2, either automatically or from a notice.
 
 ---
 
@@ -69,7 +72,13 @@ Measured in `bun test` (flat ground, warm tyres):
 `track.ts` implements the physics ground query (height, normal, surface type, track coordinates and barriers) in O(1) using spatial hints. `bun scripts/plot-track.ts out.svg` renders the layout.
 
 ### Rendering (`src/render`)
-`WebGPURenderer` inside R3F. It falls back automatically to the WebGL2 backend when WebGPU is unavailable, and all materials are written in TSL so the same code runs on both.
+`WebGPURenderer` inside R3F, with all materials written in TSL so the same code runs on both backends. The game uses the WebGL2 backend in two cases:
+- WebGPU is unavailable.
+- WebGPU reports a fatal error. The switch is automatic while loading or in the menus; while driving, a notice offers it.
+
+The G-buffer fits WebGPU's default 32-byte colour-attachment budget, and the renderer still requests the adapter's full limit.
+
+`scripts/gpu-smoke.cjs` drives the real WebGPU backend in headless Chromium. It renders offscreen through the `?offscreen` test mode and reads the frames back. It fails on any renderer error or a black frame.
 
 - **Lighting**:
   - physical sky with clouds (`SkyMesh`)

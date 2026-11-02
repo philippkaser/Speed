@@ -6,6 +6,7 @@ import { input } from '../input/input'
 import { net, useNet } from '../net/client'
 import { useGameStore } from '../state/gameStore'
 import { useSettings } from '../state/settings'
+import { switchToWebGL } from '../render/gpuHealth'
 import { Btn, fmtTime } from './components'
 import { HUD } from './hud/HUD'
 import { Telemetry } from './hud/Telemetry'
@@ -42,6 +43,32 @@ function Boot() {
         <div className="boot-bar">
           <i />
         </div>
+      </div>
+    </div>
+  )
+}
+
+/** Shown when the renderer reported a fatal GPU error, so a black screen always comes with a way out. */
+function GpuNotice() {
+  const err = useGameStore((s) => s.gpuError)
+  const backend = useGameStore((s) => s.rendererInfo)
+  const [hidden, setHidden] = useState(false)
+  if (!err || hidden) return null
+  return (
+    <div className="gpu-notice panel" role="alert">
+      <div>
+        <b>Graphics error{backend ? ` (${backend})` : ''}</b>
+        <span>{err}</span>
+      </div>
+      <div className="gpu-notice-actions">
+        {backend !== 'WebGL2' && (
+          <Btn primary onClick={() => switchToWebGL(err)}>
+            Switch to WebGL2
+          </Btn>
+        )}
+        <Btn ghost onClick={() => setHidden(true)}>
+          Dismiss
+        </Btn>
       </div>
     </div>
   )
@@ -246,6 +273,7 @@ export function UIRoot() {
       {screen === 'lobby' && <Lobby />}
       {screen === 'driving' && <Driving />}
       <Boot />
+      <GpuNotice />
     </div>
   )
 }

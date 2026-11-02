@@ -10,6 +10,7 @@
     "build": "tsc -b && vite build",
     "start": "NODE_ENV=production bun server/index.ts",
     "test": "bun test",
+    "test:gpu": "node scripts/gpu-smoke.cjs",
     "typecheck": "tsc -b"
   },
   "dependencies": {
