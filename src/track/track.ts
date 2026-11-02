@@ -1,7 +1,7 @@
 // Track model: spline -> dense centreline samples with per-sample cross-section description.
 // Implements the physics Ground interface (height, normal, surface, track coords, barriers).
 import { type Ground, type GroundSample, Surface } from '../physics/ground'
-import { clamp, hash2, lerp, smoothstep } from '../physics/math'
+import { clamp, hash2, lerp, smoothstep, valueNoise2 } from '../physics/math'
 import type { TrackDef } from './trackDef'
 
 export const DS = 1 // metres between centreline samples
@@ -34,6 +34,12 @@ export class Track implements Ground {
   racingCurv!: Float32Array
   speed!: Float32Array // reference speed along racing line (m/s), for AI & markers
   sectors: number[] = []
+  /** braking-zone weight per sample (0..1): ripples ("braking bumps") worn into the surface */
+  brakeZone!: Float32Array
+  /** dynamic track: rubber on a 2 m x 1 m grid (16 lateral cells covering -8..8 m) */
+  rubber!: Float32Array
+  rubberCols = 16
+  rubberVersion = 0
   gridCell = 25
   grid = new Map<number, number[]>()
   minX = 0
@@ -147,6 +153,15 @@ export class Track implements Ground {
     this.computeSpeedProfile({ mu: 1.55, clA_m: 2.7 / 1340, power_m: 400000 / 1340, cdA_m: 1.0 / 1340, brakeMu: 1.6 })
     this.buildSides()
     this.sectors = [0, Math.round(n / 3) * DS, Math.round((2 * n) / 3) * DS]
+    // braking zones: where the reference speed drops, cars brake hard and ripple the asphalt
+    this.brakeZone = new Float32Array(n)
+    for (let i = 0; i < n; i++) {
+      const dv = this.speed[(i + 4) % n] - this.speed[i]
+      this.brakeZone[i] = clamp(-dv / 1.2, 0, 1)
+    }
+    smoothArray(this.brakeZone, 10)
+    this.rubber = new Float32Array(Math.ceil(n / 2) * this.rubberCols)
+    this.resetRubber(0.45)
   }
 
   private buildSides() {
@@ -407,8 +422,11 @@ export class Track implements Ground {
     const slope = lerp(this.slope[i0], this.slope[i1], f)
     const grade = lerp(this.grade[i0], this.grade[i1], f)
     const prof = this.profile(ni, d, slope, s)
-    out.height = cy + prof.h
+    out.height = cy + prof.h + this.bumps(ni, s, d)
     out.surface = prof.surface
+    out.qx = x
+    out.qz = z
+    out.grip = prof.surface === Surface.Asphalt || prof.surface === Surface.Kerb ? this.gripAt(ni, s, d) : 1
     // normal from surface gradient: n = up - fs*T - fd*L
     const txh = -lz,
       tzh = lx // tangent from left: T = (-lz, lx)?  left=(tz,-tx) -> tx=-lz, tz=lx
@@ -422,6 +440,87 @@ export class Track implements Ground {
     out.nx = nx
     out.ny = ny
     out.nz = nz
+  }
+
+  // ---------------------------------------------------------------------- road micro-geometry
+  /**
+   * Physical road surface detail on the asphalt & kerbs (like a laser scan): long undulations,
+   * mid-wavelength unevenness, asphalt laying joints and braking ripples on the racing line.
+   */
+  bumps(i: number, s: number, d: number) {
+    const ad = Math.abs(d)
+    if (ad > this.hw[i] + 2.5) return 0
+    let h = (valueNoise2(s * 0.031, d * 0.11 + 13.7) - 0.5) * 0.016
+    h += (valueNoise2(s * 0.29, d * 0.45 + 3.1) - 0.5) * 0.005
+    // laying joints roughly every 47 m: a 1.5 mm step smeared over 0.2 m
+    const j = (s % 47.3) / 47.3
+    h += smoothstep(0.996, 1, j) * 0.0015
+    const bz = this.brakeZone[i]
+    if (bz > 0.02) {
+      const dl = Math.abs(d - this.racing[i])
+      if (dl < 2.8) h += bz * (1 - dl / 2.8) * 0.0035 * Math.sin(s * 5.0265)
+    }
+    return h
+  }
+
+  // ---------------------------------------------------------------------- dynamic track
+  resetRubber(level: number) {
+    const cols = this.rubberCols
+    for (let k = 0; k < this.rubber.length / cols; k++) {
+      const i = Math.min(this.n - 1, k * 2)
+      for (let c = 0; c < cols; c++) {
+        const d = c - cols / 2 + 0.5
+        const dl = d - this.racing[i]
+        this.rubber[k * cols + c] = 0.12 + level * Math.exp(-(dl * dl) / (1.7 * 1.7))
+      }
+    }
+    this.rubberVersion++
+  }
+
+  private rubberIndex(s: number, d: number) {
+    const k = Math.floor((((s % this.length) + this.length) % this.length) / 2)
+    const c = Math.floor(d + this.rubberCols / 2)
+    if (c < 0 || c >= this.rubberCols) return -1
+    return k * this.rubberCols + c
+  }
+
+  /** grip multiplier: green track 0.96, rubbered line up to 1.03, marbles near the edges off-line */
+  gripAt(i: number, s: number, d: number) {
+    const ri = this.rubberIndex(s, d)
+    const r = ri >= 0 ? this.rubber[ri] : 0
+    const offLine = smoothstep(3.0, 4.6, Math.abs(d - this.racing[i]))
+    const nearEdge = smoothstep(this.hw[i] - 2.2, this.hw[i] - 0.4, Math.abs(d))
+    return 0.958 + 0.075 * r - 0.065 * offLine * nearEdge
+  }
+
+  layRubber(ref: GroundSample, amount: number) {
+    const ri = this.rubberIndex(ref.s, ref.d)
+    if (ri < 0) return
+    const v = this.rubber[ri]
+    this.rubber[ri] = Math.min(1, v + amount * (1 - v))
+    if (amount > 0) this.rubberDirty = true
+  }
+  rubberDirty = false
+
+  /** surface height at (x, z) near a previous sample, via the local track frame (no projection) */
+  heightNear(ref: GroundSample, x: number, z: number) {
+    const dx = x - ref.qx,
+      dz = z - ref.qz
+    // track tangent = (-lz, lx)
+    const ds = -dx * ref.lz + dz * ref.lx
+    const dd = dx * ref.lx + dz * ref.lz
+    const s = ref.s + ds,
+      d = ref.d + dd
+    const n = this.n
+    let fs = s / DS
+    fs = ((fs % n) + n) % n
+    const i0 = Math.floor(fs),
+      i1 = (i0 + 1) % n,
+      f = fs - i0
+    const cy = this.py[i0] + (this.py[i1] - this.py[i0]) * f
+    const slope = this.slope[i0] + (this.slope[i1] - this.slope[i0]) * f
+    const ni = f < 0.5 ? i0 : i1
+    return cy + this.profile(ni, d, slope, s).h + this.bumps(ni, s, d)
   }
 
   private _prof = { h: 0, dhdd: 0, surface: Surface.Asphalt as Surface }
@@ -487,10 +586,11 @@ export class Track implements Ground {
     const lx = lerp(this.lx[i0], this.lx[i1], f),
       lz = lerp(this.lz[i0], this.lz[i1], f)
     const slope = lerp(this.slope[i0], this.slope[i1], f)
-    const p = this.profile(f < 0.5 ? i0 : i1, d, slope, s)
+    const ni = f < 0.5 ? i0 : i1
+    const p = this.profile(ni, d, slope, s)
     out.x = cx + lx * d
     out.z = cz + lz * d
-    out.y = cy + p.h
+    out.y = cy + p.h + (this.brakeZone ? this.bumps(ni, s, d) : 0)
     return out
   }
 

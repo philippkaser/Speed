@@ -13,7 +13,8 @@
 import { EngineState, engineTorque } from './engine'
 import { type Ground, type GroundSample, makeSample, Surface, SURFACES } from './ground'
 import { clamp, lerp, M3, Quat, smoothstep, V3, valueNoise2, DEG, RADS_TO_RPM } from './math'
-import { COMPOUNDS, type CarSetup, type CarSpec, cornerSprungMass, GRAVITY } from './spec'
+import { COMPOUNDS, type CarSetup, type CarSpec, type CompoundSpec, cornerSprungMass, GRAVITY, type TyreSpec } from './spec'
+import { Kinematics, defaultGeometry } from './kinematics'
 import { TyreModel, TyreState, updateTyre } from './tyre'
 
 export interface VehicleInput {
@@ -81,6 +82,9 @@ export class Wheel {
   tyre = new TyreState()
   model!: TyreModel
   absFactor = 1
+  kin!: Kinematics
+  envelopeX = 0 // longitudinal position of the effective contact (enveloping), m
+  defl = 0
   brakeTemp = 120
   brakeTorque = 0
   driveTorque = 0
@@ -111,6 +115,7 @@ export interface VehicleEnv {
   slipstream: number // 0..1 drag reduction factor from car ahead
 }
 
+const _env = new Float64Array(8)
 const _t1 = new V3(),
   _t2 = new V3(),
   _t3 = new V3(),
@@ -123,6 +128,15 @@ const _t1 = new V3(),
   _hub = new V3(),
   _app = new V3(),
   _tq = new V3()
+
+const tyreCache = new Map<string, TyreModel>()
+/** Tyre models are stateless and calibrated once per (tyre, compound). */
+function tyreModel(spec: TyreSpec, compound: CompoundSpec) {
+  const key = `${spec.radius}:${spec.width}:${spec.vertStiffness}:${spec.relaxLat}:${compound.id}`
+  let m = tyreCache.get(key)
+  if (!m) tyreCache.set(key, (m = new TyreModel(spec, compound)))
+  return m
+}
 
 export class Vehicle {
   spec: CarSpec
@@ -179,6 +193,18 @@ export class Vehicle {
   odometer = 0
   hull: HullPoint[] = []
   scrape = 0 // 0..1 body/ground scraping intensity (sparks)
+  /** 2 = full 5x3 enveloping contact (player), 1 = reduced 3x1 (AI) */
+  contactQuality = 1
+  /** steering rack: sum of kingpin moments of the front wheels (N m, + = yaw left) */
+  rackTorque = 0
+  /** force feedback signal for the steering wheel, -1..1 (+ = pulls the wheel to the right) */
+  ffb = 0
+  /** high frequency road / kerb texture for FFB and rumble, 0..1 */
+  roadFeel = 0
+  private frontLoadPrev = 0
+  aeroBalance = 0.5
+  rideHeightF = 0
+  rideHeightR = 0
   impact = 0 // last impact impulse (N s)
   onTrackSurface = true
 
@@ -246,7 +272,9 @@ export class Vehicle {
       const rhNom = wh.front ? rhNomF : rhNomR
       // hub sits (cg_axle - (r - defl)) below the CoG, where cg_axle includes rake
       wh.yHubStatic = -((cg + (rh - rhNom) - ((rhF - rhNomF) + (rhR - rhNomR)) * 0.5) - (tyre.radius - defl))
-      wh.model = new TyreModel(tyre, compound)
+      wh.model = tyreModel(tyre, compound)
+      const kind = sp.bodyStyle === 'coupe' ? (wh.front ? 'gtF' : 'gtR') : wh.front ? 'gt3F' : 'gt3R'
+      wh.kin = new Kinematics(defaultGeometry(track * 0.5, tyre.radius, kind), cg, sp.wheelbase)
       wh.tyre.coldPressure = wh.front ? st.pressureF : st.pressureR
       wh.tyre.updatePressure()
       if (wh.c === 0) wh.c = wh.cStatic
@@ -529,20 +557,32 @@ export class Vehicle {
       rhF = this.setup.rideHeightF / 1000 - ((w0.c - w0.cStatic) + (w1.c - w1.cStatic)) * 0.5
       rhR = this.setup.rideHeightR / 1000 - ((w2.c - w2.cStatic) + (w3.c - w3.cStatic)) * 0.5
     }
+    // aero map: ground effect (grows towards the ground, stalls when too low), rake moves the
+    // centre of pressure forward, yaw and roll spoil the underbody, dirty air robs the front most
     const ae = sp.aero
     const ref = ae.refRideHeight
-    const sensF = clamp(1 + ae.rideSens * (ref - rhF), 0.55, 1.3)
-    const sensR = clamp(1 + ae.rideSens * 0.7 * (ref - rhR), 0.6, 1.25)
-    // yaw kills downforce
-    const yawFactor = this.speed > 1 ? clamp(vf2 / (this.speed * this.speed), 0, 1) : 1
-    const dfF = q * this.clAF * sensF * vf2 * yawFactor * (1 - slip * 0.12)
-    const dfR = q * this.clAR * sensR * vf2 * yawFactor * (1 - slip * 0.18)
+    const gScale = ae.rideSens / 2.6
+    const groundEffect = (hgt: number, refH: number, stall: number) => {
+      let g = Math.pow(refH / Math.max(hgt, 0.004), 0.42 * gScale)
+      g *= 1 - 0.32 * (1 - smoothstep(stall * 0.5, stall, hgt))
+      return clamp(g, 0.5, 1.45)
+    }
+    this.rideHeightF = rhF
+    this.rideHeightR = rhR
+    const rake = rhR - rhF
+    const beta = this.speed > 2 ? Math.atan2(Math.abs(vbx), Math.max(Math.abs(vf), 0.5)) : 0
+    const yawFactor = Math.max(0.25, Math.cos(beta) ** 2 * (1 - 0.9 * Math.min(beta, 0.5)))
+    const rollAng = (this.wheels[0].c - this.wheels[1].c + this.wheels[2].c - this.wheels[3].c) / (sp.trackFront + sp.trackRear)
+    const rollFactor = clamp(1 - 6 * rollAng * rollAng, 0.7, 1)
+    const dfF = q * this.clAF * groundEffect(rhF, ref, 0.03) * (1 + 1.4 * rake) * vf2 * yawFactor * rollFactor * (1 - slip * 0.25)
+    const dfR = q * this.clAR * groundEffect(rhR * 0.85 + rhF * 0.15, ref * 1.05, 0.035) * (1 - 0.7 * rake) * vf2 * yawFactor * rollFactor * (1 - slip * 0.1)
     this.downforce = dfF + dfR
+    this.aeroBalance = this.downforce > 1 ? dfF / this.downforce : this.clAF / (this.clAF + this.clAR)
     // downforce along -up at axle positions
     this.applyBodyForceAtLocal(0, 0, this.a, -dfF, up)
     this.applyBodyForceAtLocal(0, 0, -this.b, -dfR, up)
     // drag
-    const cd = this.cdA * (1 - slip * 0.38)
+    const cd = this.cdA * (1 - slip * 0.38) * (1 + 2.5 * beta * beta)
     const spd = this.speed
     _f.copy(this.vel).scale(-q * cd * spd)
     this.dragForce = q * cd * spd * spd
@@ -552,6 +592,7 @@ export class Vehicle {
 
     // ---------------------------------------------------------------- wheels
     this.absActive = false
+    this.rackTorque = 0
     const handbrakeT = input.handbrake * sp.handbrakeTorque
     let onTrack = 0
     for (let i = 0; i < 4; i++) {
@@ -560,6 +601,15 @@ export class Vehicle {
       if (wh.surface === Surface.Asphalt || wh.surface === Surface.Kerb || wh.surface === Surface.Pit) onTrack++
     }
     this.onTrackSurface = onTrack >= 2
+    // force feedback: kingpin moments through the (assisted) rack, plus road texture
+    {
+      const target = clamp(-this.rackTorque / 520, -1.2, 1.2)
+      this.ffb += (target - this.ffb) * clamp(h * 60, 0, 1)
+      const fl = this.wheels[0].tyre.Fz + this.wheels[1].tyre.Fz
+      const dF = Math.abs(fl - this.frontLoadPrev) / Math.max(h, 1e-4)
+      this.frontLoadPrev = fl
+      this.roadFeel += (clamp(dF / 4e5, 0, 1) - this.roadFeel) * clamp(h * 25, 0, 1)
+    }
 
     // ---------------------------------------------------------------- drivetrain
     this.solveDrivetrain(h, engThrottle, engage, rnd)
@@ -739,36 +789,92 @@ export class Vehicle {
 
   private wheelForces(wh: Wheel, h: number, ground: Ground, brake: number, handbrake: number) {
     const up = this.up
-    // hub position
-    this.R.apply(wh.x, wh.yHubStatic + (wh.c - wh.cStatic), wh.z, _r)
+    const side = wh.left ? 1 : -1
+    const kin = wh.kin
+    const travel = wh.c - wh.cStatic
+    // hub position incl. kinematic track change
+    const lat = wh.x + side * kin.trackAt(travel)
+    this.R.apply(lat, wh.yHubStatic + travel, wh.z, _r)
     _hub.copy(this.pos).add(_r)
     ground.sample(_hub.x, _hub.z, wh.sample)
     const s = wh.sample
     wh.surface = s.surface
     const surf = SURFACES[s.surface]
-    let gh = s.height
-    if (surf.roughness > 0) gh += (valueNoise2(_hub.x * surf.roughnessFreq, _hub.z * surf.roughnessFreq) - 0.5) * 2 * surf.roughness
     _n.set(s.nx, s.ny, s.nz)
-    // distance from hub to the local ground plane through (hub.x, gh, hub.z)
-    const dist = (_hub.y - gh) * _n.y
-    const defl = wh.radius - dist
 
-    // suspension force
-    const vAtt = this.pointVelocityAlong(_r, up)
-    const cdot = wh.vWheel - vAtt
-    let Fs = wh.k * wh.c
-    const knee = wh.knee
-    if (cdot > 0) Fs += cdot < knee ? wh.bump * cdot : wh.bump * knee + wh.bump * 0.4 * (cdot - knee)
-    else Fs += -cdot < knee ? wh.rebound * cdot : -wh.rebound * knee + wh.rebound * 0.4 * (cdot + knee)
-    if (wh.c > wh.bumpStopAt) {
-      const x = wh.c - wh.bumpStopAt
-      Fs += wh.bumpStopRate * x * x
+    // wheel heading incl. bump steer (toe-in +)
+    const steer = wh.steer - side * kin.bumpSteer * travel
+    const sinS = Math.sin(steer),
+      cosS = Math.cos(steer)
+    _tf.copy(this.fwd).scale(cosS).addScaled(this.left, sinS)
+    let hx = _tf.x,
+      hz = _tf.z
+    const hl = Math.hypot(hx, hz) || 1
+    hx /= hl
+    hz /= hl
+
+    // ------------------------------------------------------------ enveloping contact
+    const R = wh.radius
+    const hiQ = this.contactQuality >= 2 && ground.heightNear
+    const NL = hiQ ? 3 : 1
+    const NX = ground.heightNear ? (hiQ ? 5 : 3) : 1
+    const spanX = R * 0.44
+    const spanY = wh.model.spec.width * 0.32
+    const rough = surf.roughness
+    let deflSum = 0,
+      xSum = 0,
+      wSum = 0,
+      dLeft = 0,
+      dRight = 0
+    for (let l = 0; l < NL; l++) {
+      const yl = NL === 1 ? 0 : (l - 1) * spanY
+      // lateral offset along the wheel's left axis (horizontal)
+      const ox = hz * yl,
+        oz = -hx * yl
+      let mx = -1e9
+      for (let k = 0; k < NX; k++) {
+        const xk = NX === 1 ? 0 : (k / (NX - 1) - 0.5) * 2 * spanX
+        const px = _hub.x + hx * xk + ox,
+          pz = _hub.z + hz * xk + oz
+        let g = NX === 1 ? s.height : ground.heightNear!(s, px, pz)
+        if (rough > 0) g += (valueNoise2(px * surf.roughnessFreq, pz * surf.roughnessFreq) - 0.5) * 2 * rough
+        const dk = (g - (_hub.y - Math.sqrt(R * R - xk * xk))) * _n.y
+        _env[k] = dk
+        if (dk > mx) mx = dk
+      }
+      // smooth maximum (log-sum-exp) over the samples along the tyre: rigid-ring enveloping
+      let es = 0,
+        ex = 0
+      for (let k = 0; k < NX; k++) {
+        const w = Math.exp((_env[k] - mx) / 0.0015)
+        es += w
+        ex += w * (NX === 1 ? 0 : (k / (NX - 1) - 0.5) * 2 * spanX)
+      }
+      const dl = mx + 0.0015 * Math.log(es)
+      deflSum += dl
+      if (dl > 0) {
+        xSum += (ex / es) * dl
+        wSum += dl
+      }
+      if (l === 0) dRight = dl
+      if (l === NL - 1) dLeft = dl
     }
-    // anti-roll bar
-    const other = this.wheels[wh.index ^ 1]
-    Fs += wh.arb * (wh.c - other.c)
-    wh.springForce = Fs
+    const defl = deflSum / NL
+    const cx = wSum > 0 ? xSum / wSum : 0
+    wh.envelopeX = cx
+    wh.defl = defl
+    // contact normal: tilted backwards when the effective contact moves ahead (step / kerb strike)
+    // and sideways when one side of the tread is pushed up more than the other
+    if (NX > 1) {
+      const tb = cx / Math.max(R - Math.max(defl, 0), 0.1)
+      const latSlope = NL > 1 ? clamp((dLeft - dRight) / (2 * spanY), -0.25, 0.25) * 0.6 : 0
+      _n.x -= hx * tb + hz * latSlope
+      _n.z -= hz * tb - hx * latSlope
+      _n.normalize()
+    }
+    wh.tyre.contactBias = NL > 1 && defl > 0 ? clamp((dLeft - dRight) / (Math.abs(defl) + 0.003), -1, 1) * 0.5 : 0
 
+    // ------------------------------------------------------------ vertical tyre force
     let Fz = 0
     const nu = _n.dot(up)
     if (defl > 0 && nu > 0.2) {
@@ -778,34 +884,14 @@ export class Vehicle {
       ddot = clamp(ddot, -4, 4)
       Fz = Math.max(0, tyreSpec.vertStiffness * pScale * defl + tyreSpec.vertDamping * ddot)
       wh.contact = true
-    } else {
-      wh.contact = false
-    }
+    } else wh.contact = false
     wh.deflPrev = defl
 
-    // wheel vertical dynamics
-    const gu = -GRAVITY * up.y
-    const aW = (Fz * nu - Fs) / wh.unsprungMass + gu
-    wh.vWheel += aW * h
-
-    // body gets the suspension force along up at the hub line
-    _f.copy(up).scale(Fs)
-    this.F.add(_f)
-    this.T.add(_tq.crossVectors(_r, _f))
-
-    // contact frame
-    const sinS = Math.sin(wh.steer),
-      cosS = Math.cos(wh.steer)
-    // wheel heading in world: rotate body forward around body up by steer
-    _tf.copy(this.fwd).scale(cosS).addScaled(this.left, sinS)
+    // ------------------------------------------------------------ contact frame
     _tf.addScaled(_n, -_tf.dot(_n)).normalize()
     _tl.crossVectors(_n, _tf)
-
-    // camber/lean relative to ground: wheel top direction
-    const side = wh.left ? 1 : -1
-    const cam = wh.camberStatic + wh.camberGain * (wh.c - wh.cStatic)
-    // negative camber => top leans toward car centre: for left wheel that's -left
-    // wheel up vector = up*cos(cam) + lateralOut*sin(cam)... lateralOut = left*side
+    // lean: kinematic camber (incl. body roll) relative to the road
+    const cam = wh.camberStatic + kin.camberAt(travel)
     const lx = this.left.x * side,
       ly = this.left.y * side,
       lz = this.left.z * side
@@ -814,34 +900,37 @@ export class Vehicle {
     const topX = up.x * cc + lx * sc,
       topY = up.y * cc + ly * sc,
       topZ = up.z * cc + lz * sc
-    // lean (+ = top to the left of the contact frame)
     wh.lean = Math.asin(clamp(topX * _tl.x + topY * _tl.y + topZ * _tl.z, -1, 1))
-
-    // contact point
-    wh.contactPoint.copy(_hub).addScaled(_n, -dist)
+    wh.contactPoint.copy(_hub).addScaled(_n, -(R - Math.max(defl, 0))).addScaled(_tf, cx)
     wh.normal.copy(_n)
 
+    // suspension velocity (needed for scrub and the dampers)
+    const vAtt = this.pointVelocityAlong(_r, up)
+    const cdot = wh.vWheel - vAtt
+
     const tyre = wh.tyre
-    // contact patch velocity
     _app.subVectors(wh.contactPoint, this.pos)
     this.pointVelocity(_app, _vc)
+    // scrub: the wheel moves sideways relative to the body as the suspension travels
+    _vc.addScaled(this.left, side * kin.trackRate(travel) * cdot)
     const Vx = _vc.dot(_tf)
     const Vy = _vc.dot(_tl)
-    const Re = wh.radius - Math.max(0, defl) * 0.33
+    const Re = R - Math.max(0, defl) * 0.33
     const Vsx = wh.omega * Re - Vx
 
     updateTyre(wh.model, tyre, {
       Fz,
+      defl: Math.max(defl, 0),
       Vx,
       Vy,
       Vsx,
       lean: wh.lean,
-      surfaceGrip: surf.grip,
+      surfaceGrip: surf.grip * s.grip,
       speed: this.speed,
       dt: h,
     })
 
-    // ABS (per wheel slip control)
+    // ------------------------------------------------------------ brakes
     let bt = brake * wh.brakeMax + handbrake
     if (this.assists.abs && brake > 0.05 && Fz > 0) {
       const lim = -wh.model.compound.peakSlipRatio * 1.08
@@ -850,30 +939,56 @@ export class Vehicle {
       if (wh.absFactor < 0.97) this.absActive = true
       bt = brake * wh.brakeMax * wh.absFactor + handbrake
     } else wh.absFactor = 1
-    // brake fade with temperature
     const fade = wh.brakeTemp > 750 ? clamp(1 - (wh.brakeTemp - 750) / 900, 0.6, 1) : 1
     wh.brakeTorque = bt * fade
     wh.brakeTemp += (Math.abs(wh.brakeTorque * wh.omega) * 0.00006 - (wh.brakeTemp - 35) * (0.012 + this.speed * 0.0009)) * h
 
+    // ------------------------------------------------------------ tyre force -> chassis
+    let jack = 0
     if (Fz > 0) {
-      // tyre force -> body, applied at roll-centre height above the contact point
       _f.copy(_tf).scale(tyre.Fx).addScaled(_tl, tyre.Fy)
-      // surface ploughing drag
       if (surf.drag > 0) {
         _f.addScaled(_tf, -surf.drag * Fz * clamp(Vx, -30, 30) * 0.1)
         _f.addScaled(_tl, -surf.drag * Fz * clamp(Vy, -30, 30) * 0.1)
       }
-      // normal force component not carried by the spring (ground not perpendicular to strut)
+      // link geometry: lateral force through the instant centre (roll centre migration) and
+      // longitudinal force through the side-view swing arm (anti-dive / anti-squat)
+      const fOut = (_f.x * this.left.x + _f.y * this.left.y + _f.z * this.left.z) * side
+      const fLong = _f.x * this.fwd.x + _f.y * this.fwd.y + _f.z * this.fwd.z
+      jack = fOut * kin.jackAt(travel) + (wh.front ? fLong : -fLong) * kin.antiTan
+      // horizontal part of the normal force (road not perpendicular to the strut) goes to the body
       _f.addScaled(_n, Fz).addScaled(up, -Fz * nu)
-      _app.subVectors(wh.contactPoint, this.pos).addScaled(up, wh.rollCenter)
+      _app.subVectors(wh.contactPoint, this.pos)
       this.F.add(_f)
       this.T.add(_tq.crossVectors(_app, _f))
-      // reaction torque on the wheel
+      // self-aligning moment reacts through the upright into the chassis
+      this.T.addScaled(_n, tyre.Mz)
+      if (wh.front) this.rackTorque += tyre.Mz - kin.mechTrail * tyre.Fy
       const rr = (wh.model.compound.rollingRes + surf.rolling) * Fz * Re * Math.tanh(wh.omega * 2)
       wh.driveTorque = -tyre.Fx * Re - rr
-    } else {
-      wh.driveTorque = 0
+      // the rubber that leaves the tyre stays on the track
+      if (s.surface === Surface.Asphalt && ground.layRubber) ground.layRubber(s, h * (0.0004 + tyre.slipPower * 3e-8))
+    } else wh.driveTorque = 0
+
+    // ------------------------------------------------------------ suspension
+    let Fs = wh.k * wh.c
+    const knee = wh.knee
+    if (cdot > 0) Fs += cdot < knee ? wh.bump * cdot : wh.bump * knee + wh.bump * 0.4 * (cdot - knee)
+    else Fs += -cdot < knee ? wh.rebound * cdot : -wh.rebound * knee + wh.rebound * 0.4 * (cdot + knee)
+    if (wh.c > wh.bumpStopAt) {
+      const x = wh.c - wh.bumpStopAt
+      Fs += wh.bumpStopRate * x * x
     }
+    const other = this.wheels[wh.index ^ 1]
+    Fs += wh.arb * (wh.c - other.c)
+    // link (jacking) force acts between chassis and upright like the spring does
+    const Fsus = Fs - jack
+    wh.springForce = Fs
+    const gu = -GRAVITY * up.y
+    wh.vWheel += ((Fz * nu - Fsus) / wh.unsprungMass + gu) * h
+    _f.copy(up).scale(Fsus)
+    this.F.add(_f)
+    this.T.add(_tq.crossVectors(_r, _f))
     wh.hub.copy(_hub)
   }
 

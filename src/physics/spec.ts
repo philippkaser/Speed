@@ -215,8 +215,9 @@ export const CARS: CarSpec[] = [
     aero: { cdA: 0.92, clAFront: 1.15, clARear: 1.55, wingFrontStep: 0.06, wingRearStep: 0.11, dragPerDownforce: 0.07, rideSens: 2.6, refRideHeight: 0.07, dragHeight: 0.12 },
     defaultSetup: {
       compound: 'RM',
-      pressureF: 1.62,
-      pressureR: 1.62,
+      // cold pressures that reach ~1.9 bar once the tyres are at working temperature
+      pressureF: 1.4,
+      pressureR: 1.34,
       brakeBias: 0.575,
       brakePressure: 1,
       springF: 150,

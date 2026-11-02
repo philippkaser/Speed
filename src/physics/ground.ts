@@ -52,20 +52,35 @@ export interface GroundSample {
   lz: number
   /** cached index hint for the next query (spatial coherence) */
   hint: number
+  /** world position the sample was taken at (reference for heightNear) */
+  qx: number
+  qz: number
+  /** dynamic grip multiplier of the surface at this point (rubber, marbles, green track) */
+  grip: number
 }
 
 export function makeSample(): GroundSample {
-  return { height: 0, nx: 0, ny: 1, nz: 0, surface: Surface.Asphalt, s: 0, d: 0, wallLeft: 1e9, wallRight: 1e9, lx: 1, lz: 0, hint: -1 }
+  return { height: 0, nx: 0, ny: 1, nz: 0, surface: Surface.Asphalt, s: 0, d: 0, wallLeft: 1e9, wallRight: 1e9, lx: 1, lz: 0, hint: -1, qx: 0, qz: 0, grip: 1 }
 }
 
 export interface Ground {
   sample(x: number, z: number, out: GroundSample): void
+  /** fast surface height near a previous sample (used for multi-point tyre contact) */
+  heightNear?(ref: GroundSample, x: number, z: number): number
+  /** tyres lay rubber / pick up marbles (dynamic track) */
+  layRubber?(ref: GroundSample, amount: number): void
 }
 
 /** Infinite flat asphalt plane, used for tests and the garage. */
 export class FlatGround implements Ground {
   constructor(public height = 0, public surface: Surface = Surface.Asphalt, public grip = 1) {}
+  heightNear(_ref: GroundSample, _x: number, _z: number) {
+    return this.height
+  }
   sample(x: number, z: number, out: GroundSample) {
+    out.qx = x
+    out.qz = z
+    out.grip = 1
     out.height = this.height
     out.nx = 0
     out.ny = 1
