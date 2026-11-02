@@ -44,6 +44,8 @@ export function commentaryFor(e: Stamped, tr: TeamRace): Line | null {
             : null
       return null
     }
+    case 'undercut':
+      return { text: one([`The strategy has worked for ${n(e.car)}! Jumps ${n(e.other)} in the pit cycle.`, `Undercut! ${n(e.car)} comes out ahead of ${n(e.other)}.`, `${n(e.car)} gains P${e.pos} on strategy, ${n(e.other)} loses out.`]), big: e.pos <= 5 || mine(e.car) || mine(e.other) }
     case 'fastest':
       return { text: `Fastest lap for ${n(e.car)}, ${fmtTime(e.time)}.`, big: false }
     case 'mistake':

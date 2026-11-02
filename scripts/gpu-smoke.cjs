@@ -18,6 +18,7 @@ const cases = process.env.SMOKE_ONLY ? [['high', '?offscreen&webgpu&q=high']] : 
   ['low', '?offscreen&webgpu&q=low'],
   ['high', '?offscreen&webgpu&q=high'],
   ['ultra, driving', '?offscreen&webgpu&q=ultra&drive'],
+  ['high, team race broadcast', '?offscreen&webgpu&q=high&team'],
 ]
 const FATAL = /THREE\.|WebGPU|GPU|pipeline|shader/i
 

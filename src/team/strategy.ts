@@ -131,7 +131,8 @@ export function estimate(s: Strategy, r: RaceRules, mode: DriveMode = 'race'): E
     if (lap === 1) t += FIRST_LAP
     fuel -= burn
     tread -= r.treadPerLap[c] * m.wear
-    if (!problem && fuel < 0) problem = `Runs dry on lap ${lap}`
+    // a quarter of a lap in reserve: real burn varies with traffic and the start
+    if (!problem && fuel < r.fuelPerLap * m.fuel * 0.25) problem = fuel < 0 ? `Runs dry on lap ${lap}` : `Fuel critical on lap ${lap}`
     if (!problem && tread < TREAD_LIMIT) problem = `${TYRES[c].name}s finished on lap ${lap}`
     const stop = stops.find((x) => x.lap === lap)
     if (stop && lap < r.laps) {

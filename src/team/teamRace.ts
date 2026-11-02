@@ -8,7 +8,7 @@ import { COMPOUNDS } from '../physics/spec'
 import { wearGrip } from '../physics/tyre'
 import { pitLane, PitPath, type PitLane, type Pose } from '../track/pitlane'
 import { type Driver, driverName, type Team } from './data'
-import { type Compound, type DriveMode, ENGINE_WORK_PER_LAP, fuelFor, MODES, type RaceRules, raceRules, type Strategy, TREAD_LIMIT, TYRES } from './strategy'
+import { type Compound, type DriveMode, ENGINE_WORK_PER_LAP, fuelFor, MODES, type RaceRules, raceRules, stopTime, type Strategy, TREAD_LIMIT, TYRES } from './strategy'
 
 export type RaceEvent =
   | { kind: 'start' }
@@ -20,6 +20,7 @@ export type RaceEvent =
   | { kind: 'mistake'; car: string }
   | { kind: 'retire'; car: string; reason: string }
   | { kind: 'battle'; car: string; other: string; pos: number }
+  | { kind: 'undercut'; car: string; other: string; pos: number }
   | { kind: 'lastLap' }
   | { kind: 'chequered'; car: string }
   | { kind: 'finish'; car: string; pos: number }
@@ -77,6 +78,10 @@ export class RaceCar {
   battleSince = -1
   /** track position at the previous frame (crossing detection) */
   prevS = -1
+  /** at pit entry: who was ahead and how many stops everybody had (undercut detection) */
+  aheadAtPitIn = new Set<string>()
+  stopsAtPitIn = new Map<string, number>()
+  pitInAt = -1e9
   battleAnnounced = false
   finished = false
   constructor(
@@ -427,6 +432,14 @@ export class TeamRace implements TeamRaceHooks {
     p.phase = 'in'
     p.enteredAt = this.game.raceTime
     c.entry.sim.scripted = true
+    c.aheadAtPitIn.clear()
+    c.stopsAtPitIn.clear()
+    c.pitInAt = this.game.raceTime
+    const pos = c.entry.timing.position
+    for (const o of this.cars) {
+      if (o.entry.timing.position < pos) c.aheadAtPitIn.add(o.id)
+      c.stopsAtPitIn.set(o.id, o.stops)
+    }
     this.emit({ kind: 'pit', car: c.id, phase: 'in' })
   }
 
@@ -535,11 +548,41 @@ export class TeamRace implements TeamRaceHooks {
     c.entry.sim.snapshot()
     c.pit = null
     c.lastPitAt = this.game.raceTime
+    this.checkUndercuts(c)
     if (c.mine) {
       const pos = c.entry.timing.position
       const behind = this.cars.find((o) => o.entry.timing.position === pos + 1)
       this.radio(c, 'rejoin', `You are P${pos}${behind ? `, ${behind.name} ${behind.interval > 0 ? behind.interval.toFixed(1) + ' seconds' : ''} behind` : ''}. Tyres are cold, careful.`, 'engineer', 0)
     }
+  }
+
+  /**
+   * After a stop: who won or lost track position through the pit cycle? Compared with every car that
+   * stopped shortly before this one, using the order when that car went in.
+   */
+  private checkUndercuts(c: RaceCar) {
+    const st = this.game.standings()
+    const pos = (id: string) => st.findIndex((e) => e.id === id) + 1
+    const inAt = c.pitInAt
+    for (const o of this.cars) {
+      if (o === c || o.retired || o.pit) continue
+      // o stopped first, within the same pit cycle
+      if (!(o.lastPitAt > 0 && o.pitInAt < inAt && inAt - o.pitInAt < 150)) continue
+      const cWasAhead = o.aheadAtPitIn.has(c.id)
+      const po = pos(o.id),
+        pc = pos(c.id)
+      if (cWasAhead && po < pc) this.emit({ kind: 'undercut', car: o.id, other: c.id, pos: po })
+      else if (!cWasAhead && pc < po) this.emit({ kind: 'undercut', car: c.id, other: o.id, pos: pc })
+    }
+  }
+
+  /** Where would the car rejoin if it boxed now (lane loss plus the stop)? */
+  rejoinEstimate(c: RaceCar, fuel = 0) {
+    const loss = this.rules.laneLoss + stopTime(this.rules, fuel)
+    const g = c.gap + loss
+    let ahead = 0
+    for (const o of this.cars) if (o !== c && !o.retired && o.gap < g && o.lapsDown <= c.lapsDown) ahead++
+    return ahead + 1
   }
 
   private retire(c: RaceCar, reason: string) {

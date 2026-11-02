@@ -12,11 +12,42 @@ bun test         # physics, AI and multiplayer integration tests
 bun run test:gpu # headless smoke test of the real WebGPU backend (needs Playwright + Chromium, dev server running)
 ```
 
-Useful URL switches: `?drive` (straight into a practice session), `?race`, `?showroom`, `?car=aurel-gt`, `?q=low|medium|high|ultra`, `?webgl` (force the WebGL2 backend), `?webgpu` (force WebGPU and never fall back), `?autopilot` (AI drives your car).
+Useful URL switches: `?team` (straight into a team race), `?hq` (Team HQ), `?drive` (straight into a practice session), `?race`, `?showroom`, `?car=aurel-gt`, `?q=low|medium|high|ultra`, `?webgl` (force the WebGL2 backend), `?webgpu` (force WebGPU and never fall back), `?autopilot` (AI drives your car).
 
 Debug switches: `?showvel` (motion vectors), `?donut` (full lock and full throttle with traction control off, for tyre smoke), `?offscreen` (render into a render target, used by the headless tests).
 
 If the 3D view ever stays black, open Settings → Graphics → Renderer and pick WebGL2, or add `?webgl` to the URL. The game also switches itself: on a fatal WebGPU error (a pipeline or shader that fails to build, a validation error, device loss) it moves to WebGL2, either automatically or from a notice.
+
+## Team Principal mode
+
+You run a two-car team from the pit wall while the race plays out as a live TV broadcast. The race itself is the full simulation: twelve AI-driven cars with real physics, real tyres and real fuel.
+
+**Before the race (Team HQ)**
+- name your team and pick its livery
+- set up both cars, with the engineer's lap estimate updating live
+- plan each car's strategy: start tyre and fuel, then the lap, tyre and fuel of every stop. Stint bars, an estimated race time and warnings ("runs dry on lap 9") update as you plan, and the optimiser offers its best strategies as presets
+- a six-round season with points for drivers and teams
+
+**During the race (pit wall)**
+- driver instructions: Push, Race or Save. Pushing is faster but costs tyres, fuel and risk; saving does the opposite
+- tread, tyre temperature and fuel against laps-to-go, plus the gaps ahead and behind
+- **BOX** with your choice of compound and fuel, a "pit now ≈ P7" rejoin prediction, and "stay out" to cancel a call
+- time acceleration (1×/2×/4×, key `F`) and camera control (director or follow your car: `0`, `1`, `2`; shot type: `V`)
+
+**What the simulation does**
+- **Fuel** is mass on the car, burnt in proportion to engine work.
+- **Tyre wear** is scaled to the race length so the compounds have distinct stint lengths. Grip falls steadily as a set wears, then drops off a cliff. Tyres come out of the pits cold.
+- **Pit stops** use a real pit lane: the road through the final corner's runoff, the speed limit, team boxes at the garages, crews, and double-stacking when both cars stop together. Each stop has crew variance and the odd slow stop.
+- **Drivers** differ in pace, consistency, tyre care and racecraft. They make mistakes, especially pushing on worn tyres, and late-brake for committed passes.
+- **Rivals** run their own strategies and react to tyres and fuel.
+
+**The broadcast**
+- **Director:** follows battles, overtakes, incidents, pit stops, the lead and your cars, and cuts between long-lens trackside cameras with operator-style pan and zoom, a helicopter, the T-cam onboard, a rear-wing camera, a chase drone, the pit box and the grid and finish cameras.
+- **Graphics:** timing tower, start lights, starting grid, lower thirds, battle graphics, a live pit-stop clock, banners for overtakes, undercuts, fastest laps and the last lap, team radio, and commentary (optionally spoken).
+
+**Scripts**
+- `bun scripts/sim-team-race.ts [laps]` runs a whole race headlessly.
+- `bun scripts/calibrate-race.ts` measures the lap times, wear and fuel numbers the strategy model is built on.
 
 ---
 

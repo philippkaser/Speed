@@ -1207,3 +1207,16 @@
   height: 20px;
   border-width: 2px;
 }
+.pw-rejoin {
+  font-style: normal;
+  color: #7f8995;
+}
+.bc-row .bar,
+.l3-row .bar,
+.bc-grid .gs .bar {
+  outline: 1px solid rgba(255, 255, 255, 0.25);
+}
+.results-table .sw,
+.hq-table .sw {
+  outline: 1px solid rgba(255, 255, 255, 0.25);
+}

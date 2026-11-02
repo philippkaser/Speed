@@ -33,6 +33,9 @@ tr.on((e) => {
     case 'radio':
       console.log(`${t}  [radio ${name(e.car)}] ${e.text}`)
       break
+    case 'undercut':
+      console.log(`${t}  STRATEGY: ${name(e.car)} jumps ${name(e.other)} (P${e.pos})`)
+      break
     case 'lead':
     case 'lastLap':
     case 'chequered':

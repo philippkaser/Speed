@@ -129,7 +129,7 @@ export function PitLaneScene({ track }: { track: Track }) {
       if (t.name) {
         const tex = boardTexture(t.name, t.color, t.accent)
         const board = new THREE.Mesh(new THREE.PlaneGeometry(10, 1.56), new THREE.MeshBasicNodeMaterial({ map: tex }))
-        track.pointAt(s, lane.dGarage + 0.45, _p)
+        track.pointAt(s, lane.dGarage - 0.25, _p)
         board.position.set(_p.x, _p.y + 4.75, _p.z)
         // face the lane (towards -d)
         board.rotation.y = track.headingAt(s) - Math.PI / 2

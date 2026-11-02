@@ -197,6 +197,7 @@ function Feed({ tr }: { tr: TeamRace }) {
         const push = (b: Omit<Banner, 'id'>) => setBanners((list) => [...list.slice(-2), { ...b, id: e.id }])
         if (e.kind === 'radio') setRadio({ e, at: performance.now() })
         else if (e.kind === 'overtake' && (e.pos <= 5 || tr.byId.get(e.car)?.mine || tr.byId.get(e.other)?.mine)) push({ kind: 'move', title: `${name(e.car)} ▲ P${e.pos}`, sub: `passes ${name(e.other)}`, color: tr.byId.get(e.car)?.team.color })
+        else if (e.kind === 'undercut' && (e.pos <= 8 || tr.byId.get(e.car)?.mine || tr.byId.get(e.other)?.mine)) push({ kind: 'move', title: `${name(e.car)} JUMPS ${name(e.other)}`, sub: `strategy gains P${e.pos}`, color: tr.byId.get(e.car)?.team.color })
         else if (e.kind === 'fastest') push({ kind: 'fastest', title: 'FASTEST LAP', sub: `${name(e.car)} · ${fmtTime(e.time)}` })
         else if (e.kind === 'lead') push({ kind: 'lead', title: 'NEW LEADER', sub: name(e.car), color: tr.byId.get(e.car)?.team.color })
         else if (e.kind === 'lastLap') push({ kind: 'last', title: 'FINAL LAP', sub: '' })
@@ -420,6 +421,7 @@ function CarCard({ tr, c }: { tr: TeamRace; c: RaceCar }) {
                 ) : (
                   'No stop planned'
                 )}
+                {tr.started && !c.finished && <i className="pw-rejoin">· pit now ≈ P{tr.rejoinEstimate(c, next?.fuel ?? 0)}</i>}
               </span>
               {!c.finished && (
                 <button className="box" onClick={suggest}>
