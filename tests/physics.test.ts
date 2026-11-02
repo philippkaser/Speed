@@ -186,3 +186,26 @@ function run_(world: PhysicsWorld, seconds: number, each: (t: number) => void) {
     world.stepOnce(PHYSICS_DT)
   }
 }
+
+test('locking the brakes grinds a flat spot that makes the tyre load oscillate', () => {
+  const { world, v, car } = makeWorld(0, { abs: false })
+  v.setVelocityForward(200 / 3.6)
+  v.gear = 5
+  car.input.brake = 1
+  run_(world, 1.2, () => {})
+  const flat = Math.max(...v.wheels.map((w) => w.flatSpot))
+  car.input.brake = 0
+  car.input.throttle = 0.3
+  // after release, measure front load variation while rolling
+  let lo = Infinity,
+    hi = -Infinity
+  run_(world, 1.0, (t) => {
+    if (t > 0.3) {
+      lo = Math.min(lo, v.wheels[0].tyre.Fz)
+      hi = Math.max(hi, v.wheels[0].tyre.Fz)
+    }
+  })
+  console.log(`lock-up: flat spot ${(flat * 1000).toFixed(2)} mm, front load swing ${(hi - lo).toFixed(0)} N`)
+  expect(flat).toBeGreaterThan(0.00005)
+  expect(hi - lo).toBeGreaterThan(150)
+})

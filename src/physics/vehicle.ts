@@ -84,6 +84,8 @@ export class Wheel {
   absFactor = 1
   kin!: Kinematics
   envelopeX = 0 // longitudinal position of the effective contact (enveloping), m
+  flatSpot = 0 // depth of a flat spot ground into the tread by locking up (m)
+  flatAngle = 0 // wheel rotation angle where the flat spot sits
   defl = 0
   brakeTemp = 120
   brakeTorque = 0
@@ -369,6 +371,7 @@ export class Vehicle {
       wh.sample.hint = -1
       wh.absFactor = 1
       wh.brakeTemp = 180
+      wh.flatSpot = 0
     }
     this.engine.omega = this.spec.engine.idleRpm * (Math.PI / 30)
     this.engine.boost = 0
@@ -838,7 +841,9 @@ export class Vehicle {
           pz = _hub.z + hz * xk + oz
         let g = NX === 1 ? s.height : ground.heightNear!(s, px, pz)
         if (rough > 0) g += (valueNoise2(px * surf.roughnessFreq, pz * surf.roughnessFreq) - 0.5) * 2 * rough
-        const dk = (g - (_hub.y - Math.sqrt(R * R - xk * xk))) * _n.y
+        // flat spot: the tread is shorter where it was ground flat by a lock-up
+        const rEff = wh.flatSpot > 0 ? R - wh.flatSpot * Math.pow(Math.max(0, Math.cos(wh.spin - wh.flatAngle + xk / R)), 24) : R
+        const dk = (g - (_hub.y - Math.sqrt(rEff * rEff - xk * xk))) * _n.y
         _env[k] = dk
         if (dk > mx) mx = dk
       }
@@ -939,8 +944,15 @@ export class Vehicle {
       if (wh.absFactor < 0.97) this.absActive = true
       bt = brake * wh.brakeMax * wh.absFactor + handbrake
     } else wh.absFactor = 1
+    // race pads: low bite when cold, fade when overheated
     const fade = wh.brakeTemp > 750 ? clamp(1 - (wh.brakeTemp - 750) / 900, 0.6, 1) : 1
-    wh.brakeTorque = bt * fade
+    const cold = 0.8 + 0.2 * smoothstep(80, 220, wh.brakeTemp)
+    wh.brakeTorque = bt * fade * cold
+    // a locked, sliding wheel grinds a flat spot into the tread at the current rotation angle
+    if (Fz > 0 && Math.abs(wh.omega) < 0.5 && Math.abs(tyre.slideVelocity()) > 8) {
+      if (wh.flatSpot < 1e-5) wh.flatAngle = wh.spin
+      wh.flatSpot = Math.min(0.004, wh.flatSpot + Math.abs(tyre.slideVel) * h * Fz * 1.5e-9 * wh.model.compound.wearRate)
+    }
     wh.brakeTemp += (Math.abs(wh.brakeTorque * wh.omega) * 0.00006 - (wh.brakeTemp - 35) * (0.012 + this.speed * 0.0009)) * h
 
     // ------------------------------------------------------------ tyre force -> chassis

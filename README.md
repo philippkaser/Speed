@@ -39,7 +39,7 @@ A rigid-body simulation at a fixed **600 Hz**, independent of the frame rate, wi
   - a friction clutch (auto clutch on launch, never stalls)
   - a sequential gearbox with ignition cut and auto-blip
   - a clutch-pack LSD with preload and power/coast ramps
-  - brakes with temperature and fade
+  - brakes with temperature, fade and cold-pad bite; locking a wheel grinds a flat spot into the tyre
   
   The drivetrain is solved as velocity constraints with projected Gauss–Seidel impulses, so clutch lock-up, diff lock and wheel lock all emerge from friction limits.
 - **Aero map**: front and rear downforce with ground effect (rising towards the ground, stalling when too low). Rake moves the centre of pressure, yaw and roll spoil the underbody, there's induced and yaw drag, and dirty air robs the front more than the rear. Wing levels are adjustable.

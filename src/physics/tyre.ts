@@ -275,6 +275,9 @@ export class TyreState {
   coldPressure = 1.6
   contactBias = 0 // lateral load bias from partial road contact (-1..1, + = left)
 
+  slideVelocity() {
+    return this.slideVel
+  }
   get surfTemp() {
     return (this.ribSurf[0] + this.ribSurf[1] + this.ribSurf[2]) / 3
   }

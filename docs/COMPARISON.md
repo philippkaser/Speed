@@ -20,8 +20,8 @@ The four commercial titles don't publish their models. Statements about them are
 | Road surface | iRacing/ACC: laser-scanned, mm accuracy | Procedural micro-geometry: long undulations, mid unevenness, laying joints, braking ripples in braking zones | Behind (no scanned data) |
 | Aerodynamics | iRacing/ACC: CFD / wind-tunnel aero maps | Analytic map: ground effect with stall, rake moves the centre of pressure, yaw and roll losses, induced drag, dirty air robs the front | Behind in data, on par in structure |
 | Track evolution | iRacing/ACC | Rubber grid (2 m × 1 m) laid by every car's tyres (visible on the road), green track, marbles off-line, track temperature from sun elevation | On par (simplified) |
-| Drivetrain | AC/ACC | Engine map, turbo spool, limiter, engine braking, friction clutch, sequential box with cut/blip, clutch-pack LSD with preload and ramps, brake temperature and fade. Solved as impulse constraints. No driveline torsional compliance. | Slightly behind |
-| Damage | All four | None | Behind |
+| Drivetrain | AC/ACC | Engine map, turbo spool, limiter, engine braking, friction clutch, sequential box with cut/blip, clutch-pack LSD with preload and ramps, brake temperature, fade and cold-pad bite. Solved as impulse constraints. No driveline torsional compliance. | Slightly behind |
+| Damage & wear | All four | Per-rib tread wear, flat spots from lock-ups (felt once per revolution through the contact model), brake fade and cold-brake bite. No body or mechanical damage. | Behind |
 | Validation | Not published | `bun test`: 0–100, top speed, braking, skidpad g, rest stability, crashes, AI laps; tyre and kinematics characterisation (a/3 trail, Mz before Fy peak, load sensitivity, combined slip, camber thrust and temperature spread, roll-centre migration) | Not comparable: SPEED's tests are open; the others publish none |
 
 ## Drive feel
