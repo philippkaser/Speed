@@ -267,7 +267,9 @@ class AudioEngine {
         if (!w.contact) continue
         const onTarmac = w.surface === Surface.Asphalt || w.surface === Surface.Runoff || w.surface === Surface.Pit || w.surface === Surface.Kerb
         if (onTarmac) {
-          const s = clamp((w.tyre.combinedSlip - 0.82) * 1.6, 0, 1) * clamp(w.tyre.slideVel / 3, 0, 1)
+          // scrub starts once ~45% of the contact patch slides (about 60% of the peak slip angle),
+          // and builds into a squeal as the sliding region grows past the peak (~80%)
+          const s = clamp((w.tyre.sliding - 0.45) * 2.2, 0, 1) * clamp(w.tyre.slideVel / 2.5, 0, 1)
           squeal = Math.max(squeal, s)
           slideV = Math.max(slideV, w.tyre.slideVel)
         }

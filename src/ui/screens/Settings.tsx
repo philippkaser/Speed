@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { ffb } from '../../input/ffb'
 import { useGameStore } from '../../state/gameStore'
 import { type QualityPreset, useSettings } from '../../state/settings'
 import { Btn, FieldRow, Segmented, Slider, Toggle } from '../components'
@@ -61,6 +62,8 @@ export function SettingsPanel({ onClose, inGame = false }: { onClose: () => void
             </FieldRow>
             <div className="section-title">Image</div>
             <Toggle label="Temporal anti-aliasing" value={gfx.taa} onChange={(v) => s.setGraphics({ taa: v })} />
+            <Slider label="Temporal upscaling" sub="Internal render resolution reconstructed to full resolution (100% = native)" value={gfx.upscale ?? 1} min={0.5} max={1} step={0.05} unit="%" format={(v) => Math.round(v * 100) + ''} onChange={(v) => s.setGraphics({ upscale: v })} />
+            <Toggle label="Auto exposure" sub="Eye adaptation (cockpit, looking into the sun)" value={gfx.autoExposure ?? false} onChange={(v) => s.setGraphics({ autoExposure: v })} />
             <Toggle label="Bloom" value={gfx.bloom} onChange={(v) => s.setGraphics({ bloom: v })} />
             <Slider label="Motion blur" value={gfx.motionBlur} min={0} max={1} step={0.05} unit="%" format={(v) => Math.round(v * 100) + ''} onChange={(v) => s.setGraphics({ motionBlur: v })} />
             <Slider label="Vegetation density" value={gfx.trees} min={0.2} max={1.6} step={0.1} format={(v) => v.toFixed(1)} unit="×" onChange={(v) => s.setGraphics({ trees: v })} />
@@ -177,11 +180,45 @@ function Controls() {
         </FieldRow>
       ))}
       <Toggle label="Invert pedals" value={c.invertPedals} onChange={(v) => s.setControls({ invertPedals: v })} />
+      <div className="section-title">Force feedback</div>
+      <FfbRow />
+      <Slider label="Force feedback gain" sub="Steering-rack torque from tyre aligning moments + road texture" value={c.ffbGain} min={0} max={1.5} step={0.05} unit="%" format={(v) => Math.round(v * 100) + ''} onChange={(v) => s.setControls({ ffbGain: v })} />
+      <Toggle label="Invert force direction" value={c.ffbInvert} onChange={(v) => s.setControls({ ffbInvert: v })} />
+      <Slider label="Wheel rotation" value={c.wheelRange} min={180} max={1080} step={10} unit="°" onChange={(v) => s.setControls({ wheelRange: v })} />
       <div className="section-title">Keys</div>
       <div style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.9 }}>
         W/S or ↑/↓ throttle & brake · A/D or ←/→ steer · Space handbrake · E/Shift shift up · Q/Ctrl shift down · C camera · B look back · Z/X look left/right · R reset to track · [ ] brake balance · T traction control · L driving line · H toggle HUD · Esc pause
       </div>
     </>
+  )
+}
+
+function FfbRow() {
+  const range = useSettings((s) => s.controls.wheelRange)
+  const [, force] = useState(0)
+  const label = ffb.status === 'on' ? `Connected · ${ffb.message}` : ffb.status === 'error' ? `Error · ${ffb.message}` : ffb.status === 'unsupported' ? ffb.message : 'Logitech G29 / G923 (PS) / G27 / G25 / DFGT over WebHID — experimental'
+  return (
+    <FieldRow label="Wheel force feedback" sub={label}>
+      {ffb.status === 'on' ? (
+        <Btn
+          onClick={async () => {
+            await ffb.disconnect()
+            force((x) => x + 1)
+          }}
+        >
+          Disconnect
+        </Btn>
+      ) : (
+        <Btn
+          onClick={async () => {
+            await ffb.connect(range)
+            force((x) => x + 1)
+          }}
+        >
+          Connect wheel
+        </Btn>
+      )}
+    </FieldRow>
   )
 }
 

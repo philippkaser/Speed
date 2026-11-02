@@ -12,6 +12,7 @@ import { motionBlur } from 'three/addons/tsl/display/MotionBlur.js'
 import { ssgi } from 'three/addons/tsl/display/SSGINode.js'
 import { ssr } from 'three/addons/tsl/display/SSRNode.js'
 import { traa } from 'three/addons/tsl/display/TRAANode.js'
+import { taau } from 'three/addons/tsl/display/TAAUNode.js'
 import { fxaa } from 'three/addons/tsl/display/FXAANode.js'
 import { lensflare } from 'three/addons/tsl/display/LensflareNode.js'
 import {
@@ -39,6 +40,9 @@ import {
   time,
   int,
   convertToTexture,
+  rtt,
+  luminance,
+  max,
 } from 'three/tsl'
 import { useSettings } from '../state/settings'
 
@@ -51,7 +55,13 @@ export const postUniforms = {
   exposure: uniform(1),
   grain: uniform(0.012),
   saturation: uniform(1.06),
+  /** eye adaptation multiplier (auto exposure) */
+  adapt: uniform(1),
+  meterTap: uniform(0),
 }
+
+/** Eye adaptation: fast adaptation relative to a slowly drifting reference (partial, like an eye). */
+const eye = { fast: 0, slow: 0, ready: false, frame: 0, pending: false }
 
 export function PostFX() {
   const { gl, scene } = useThree()
@@ -66,10 +76,15 @@ export function PostFX() {
   const useTAA = gfx.taa
   const useMB = gfx.motionBlur > 0
   const useBloom = gfx.bloom
+  // temporal upscaling: render the scene (and SSGI/SSR) at a reduced internal resolution and let
+  // TAAU reconstruct the output resolution from jittered history (like DLSS/FSR2)
+  const upscale = useTAA ? Math.min(1, Math.max(0.5, gfx.upscale ?? 1)) : 1
+  const useAE = gfx.autoExposure ?? false
 
   const pipeline = useMemo(() => {
     const rp = new THREE.RenderPipeline(renderer)
     const scenePass = pass(scene, camera)
+    if (upscale < 0.999) scenePass.setResolutionScale(upscale)
     const outputs: Record<string, any> = { output }
     if (useTAA || useMB) outputs.velocity = velocity
     if (useSSGI || useSSR || useAO) outputs.normal = packNormalToRGB(normalView)
@@ -95,12 +110,13 @@ export function PostFX() {
       gi.aoIntensity.value = 1.15
       gi.thickness.value = 0.8
       gi.useTemporalFiltering = useTAA
+      gi.resolutionScale = upscale
       const diffuse = scenePass.getTextureNode('diffuseColor')
       composite = vec4(color.rgb.mul(gi.getAONode()).add(diffuse.rgb.mul(gi.getGINode().rgb)), color.a)
     } else if (useAO && sceneNormal) {
       const a = gtao(depth, sceneNormal, camera)
       a.radius.value = 1.2
-      a.resolutionScale = 0.5
+      a.resolutionScale = 0.5 * upscale
       composite = vec4(color.rgb.mul(a.getTextureNode().r), color.a)
     }
     if (useSSR && sceneNormal) {
@@ -109,12 +125,19 @@ export function PostFX() {
       r.maxDistance.value = 60
       r.thickness.value = 0.35
       r.quality.value = gfx.preset === 'ultra' ? 0.6 : 0.4
-      r.resolutionScale = gfx.preset === 'ultra' ? 1 : 0.5
+      r.resolutionScale = (gfx.preset === 'ultra' ? 1 : 0.5) * upscale
       composite = vec4(composite.rgb.add(r.rgb), color.a)
     }
     let out: any = composite
-    if (useTAA && vel) out = traa(out, depth, vel, camera)
-    else out = fxaa(out)
+    // luminance meter for auto exposure: tiny render target, read back asynchronously on the CPU
+    let meter: any = null
+    if (useAE) {
+      meter = rtt(vec4(luminance(composite.rgb).max(1e-4).log(), 0, 0, 1), 48, 27, { type: THREE.FloatType })
+      // keep the meter in the graph (its contribution is scaled by a zero uniform)
+      composite = vec4(composite.rgb.add(meter.sample(vec2(0.5, 0.5)).r.mul(postUniforms.meterTap)), composite.a)
+    }
+    if (useTAA && vel) out = upscale < 0.999 ? taau(composite, depth, vel, camera) : traa(composite, depth, vel, camera)
+    else out = fxaa(composite)
     if (useMB && vel) out = motionBlur(convertToTexture(out), vel.mul(postUniforms.motionBlur), int(12))
     if (useBloom) {
       const b = bloom(out, 0.14, 0.4, 1.15)
@@ -132,9 +155,10 @@ export function PostFX() {
     graded = graded.mul(float(1).sub(vig.mul(postUniforms.vignette)))
     const n = hash(screenUV.mul(vec2(1931.3, 2711.7)).add(time.mul(37.1)).x.add(screenUV.y.mul(911.1)))
     graded = graded.mul(float(1).add(n.sub(0.5).mul(postUniforms.grain)))
-    rp.outputNode = vec4(graded.mul(postUniforms.exposure), 1)
+    rp.outputNode = vec4(graded.mul(postUniforms.exposure).mul(postUniforms.adapt), 1)
+    ;(rp as any).__meter = meter
     return rp
-  }, [renderer, scene, camera, useSSGI, useSSR, useAO, useTAA, useMB, useBloom, gfx.preset])
+  }, [renderer, scene, camera, useSSGI, useSSR, useAO, useTAA, useMB, useBloom, gfx.preset, upscale, useAE])
 
   useEffect(() => () => pipeline.dispose(), [pipeline])
 
@@ -144,6 +168,40 @@ export function PostFX() {
     if (cut) cameraCut.frames--
     postUniforms.motionBlur.value = cut ? 0 : gfx.motionBlur * Math.min(1, 1 / 60 / Math.max(dt, 1e-3))
     pipeline.render()
+    const meter = (pipeline as any).__meter
+    if (meter && !eye.pending && eye.frame++ % 6 === 0) {
+      eye.pending = true
+      renderer
+        .readRenderTargetPixelsAsync(meter.renderTarget, 0, 0, 48, 27)
+        .then((px: ArrayLike<number>) => {
+          let sum = 0,
+            n = 0
+          for (let i = 0; i < px.length; i += 4) {
+            const v = px[i]
+            if (Number.isFinite(v)) {
+              sum += v
+              n++
+            }
+          }
+          if (n) {
+            const logAvg = sum / n
+            if (!eye.ready) {
+              eye.fast = eye.slow = logAvg
+              eye.ready = true
+            }
+            eye.fast = logAvg
+          }
+        })
+        .catch(() => {})
+        .finally(() => (eye.pending = false))
+    }
+    if (meter && eye.ready) {
+      // reference drifts over ~40 s; the eye opens faster (darker scene) than it closes
+      eye.slow += (eye.fast - eye.slow) * Math.min(1, dt / 40)
+      const target = Math.exp(Math.max(-0.55, Math.min(0.5, (eye.slow - eye.fast) * 0.6)))
+      const rate = target > postUniforms.adapt.value ? 1.4 : 3.5
+      postUniforms.adapt.value += (target - postUniforms.adapt.value) * Math.min(1, dt * rate)
+    } else postUniforms.adapt.value = 1
   }, 1)
   return null
 }

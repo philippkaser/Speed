@@ -1023,16 +1023,52 @@ input[type='range']::-moz-range-thumb {
   grid-template-columns: 34px 34px;
   gap: 8px 26px;
 }
+.tyres {
+  gap: 8px 18px !important;
+  grid-template-columns: auto auto !important;
+}
+.tyre-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.tyre-wrap {
+  display: flex;
+  gap: 3px;
+  align-items: stretch;
+}
 .tyre {
   width: 34px;
-  height: 52px;
+  height: 50px;
   border-radius: 9px;
-  border: 2px solid rgba(255, 255, 255, 0.2);
+  border: 2px solid rgba(255, 255, 255, 0.22);
   display: grid;
-  place-items: center;
-  font-size: 11px;
+  grid-template-columns: repeat(3, 1fr);
+  overflow: hidden;
+}
+.tyre i {
+  display: block;
+  transition: background 0.35s;
+}
+.tyre-wear {
+  width: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+}
+.tyre-wear i {
+  display: block;
+  width: 100%;
+  background: rgba(255, 255, 255, 0.7);
+}
+.tyre-label {
+  font-size: 10px;
   font-weight: 700;
-  transition: background 0.4s;
+  color: var(--muted);
+  white-space: nowrap;
 }
 .gmeter {
   width: 92px;
@@ -1237,4 +1273,42 @@ input[type='range']::-moz-range-thumb {
   .hud-bl {
     zoom: 0.85;
   }
+}
+
+/* engineering telemetry (I) */
+.telemetry {
+  position: absolute;
+  left: 28px;
+  top: 230px;
+  padding: 12px 14px;
+  pointer-events: none;
+}
+.telemetry pre {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.ffb-meter {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+.ffb-meter::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.5);
+}
+.ffb-meter i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--gold);
 }

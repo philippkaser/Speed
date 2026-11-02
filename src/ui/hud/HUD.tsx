@@ -174,15 +174,26 @@ export function HUD() {
         }
         if (st.innerHTML !== html) st.innerHTML = html
       }
-      // tyres
+      // tyres: three tread zones (display left->right = car left->right), hot pressure, wear
       for (let i = 0; i < 4; i++) {
         const w = v.wheels[i]
         const e = el['ty' + i] as HTMLElement | null
         if (!e) continue
         const cp = w.model.compound
-        const temp = w.tyre.surfTemp * 0.6 + w.tyre.coreTemp * 0.4
-        e.style.background = tempColor(temp, cp.optTemp, cp.tempWindow)
-        e.textContent = String(Math.round(temp))
+        const t = w.tyre
+        const bars = e.children
+        for (let k = 0; k < 3; k++) {
+          const rib = 2 - k
+          const temp = t.ribSurf[rib] * 0.6 + t.ribBulk[rib] * 0.4
+          const b = bars[k] as HTMLElement
+          b.style.background = tempColor(temp, cp.optTemp, cp.tempWindow)
+          b.title = Math.round(temp) + '°C'
+        }
+        const avg = (t.ribSurf[0] + t.ribSurf[1] + t.ribSurf[2]) / 3
+        const lab = el['tyl' + i]
+        if (lab) lab.textContent = `${Math.round(avg)}° ${t.pressure.toFixed(2)}`
+        const wr = el['tyw' + i] as HTMLElement | null
+        if (wr) wr.style.height = `${Math.round(t.wear * 100)}%`
       }
       // g meter
       const gd = el.gdot as SVGCircleElement | null
@@ -312,9 +323,6 @@ export function HUD() {
           <path d={arcPath(limiter / maxRpm, 1)} stroke="rgba(255,59,74,0.45)" strokeWidth="16" fill="none" />
           <path ref={ref('tachFill')} d={arcPath(0, 1)} stroke="#fff" strokeWidth="16" fill="none" strokeDasharray={`0 ${arcLen}`} style={{ filter: 'drop-shadow(0 0 6px rgba(255,255,255,0.35))' }} />
           {ticks}
-          <text x={TACH_CX} y={TACH_CY - 6} textAnchor="middle" fontSize="10" letterSpacing="2" fill="rgba(255,255,255,0.45)">
-            ×1000 RPM
-          </text>
         </svg>
         <div className="tach-readout">
           <div className="gear num" ref={ref('gear')}>
@@ -357,8 +365,20 @@ export function HUD() {
       <div className="hud-box hud-br">
         <div className="tyres">
           {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="tyre num" ref={ref('ty' + i)}>
-              --
+            <div key={i} className="tyre-cell">
+              <div className="tyre-wrap">
+                <div className="tyre" ref={ref('ty' + i)}>
+                  <i />
+                  <i />
+                  <i />
+                </div>
+                <div className="tyre-wear">
+                  <i ref={ref('tyw' + i)} />
+                </div>
+              </div>
+              <div className="tyre-label num" ref={ref('tyl' + i)}>
+                --
+              </div>
             </div>
           ))}
         </div>

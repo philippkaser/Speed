@@ -1,6 +1,7 @@
 // Imperative game runtime. Owns the track, the physics world, cars (player / AI / remote),
 // timing and race flow. React reads from it through refs and a lightweight store.
 import { AIDriver, type TrafficCar } from '../ai/aiDriver'
+import { ffb } from '../input/ffb'
 import { input } from '../input/input'
 import { makeSample } from '../physics/ground'
 import { clamp } from '../physics/math'
@@ -288,6 +289,8 @@ export class Game {
   }
 
   onlineStartAt = 0
+  private ffbFrame = false
+  paused = false
   /** time trial ghost: samples [t, x, y, z, qx, qy, qz, qw] at 30 Hz */
   ghostRec: number[] = []
   ghostBest: Float32Array | null = null
@@ -358,7 +361,20 @@ export class Game {
       const fl = v.wheels[0].tyre,
         rl = v.wheels[2].tyre
       const kerb = v.wheels.some((w) => w.surface === 1) ? 0.35 : 0
-      input.rumble(clamp(Math.max(0, rl.combinedSlip - 0.9) * 0.6 + kerb + v.scrape, 0, 1), clamp(Math.max(0, fl.combinedSlip - 0.9) * 0.5 + (v.absActive ? 0.25 : 0), 0, 1))
+      // pads: low-frequency motor = rear slip, kerbs, scraping; high-frequency = front slip, ABS,
+      // road texture and the steering going light (aligning torque dropping past the peak)
+      const light = clamp((fl.combinedSlip - 1) * 0.8, 0, 0.4)
+      input.rumble(clamp(Math.max(0, rl.combinedSlip - 0.9) * 0.6 + kerb + v.scrape, 0, 1), clamp(light + v.roadFeel * 0.5 + (v.absActive ? 0.25 : 0), 0, 1))
+      // wheels: steering-rack torque + road texture over WebHID
+      if (ffb.status === 'on') {
+        const cs = useSettings.getState().controls
+        this.ffbFrame = !this.ffbFrame
+        const lowSpeedCentre = -c.steer * 0.25 * clamp(1 - v.speed / 3, 0, 1)
+        const texture = v.roadFeel * 0.14 * (this.ffbFrame ? 1 : -1)
+        let force = (v.ffb + lowSpeedCentre + texture) * cs.ffbGain
+        if (cs.ffbInvert) force = -force
+        ffb.update(this.paused ? 0 : force)
+      }
     }
 
     // AI controls (traffic list in track coordinates)

@@ -1,7 +1,8 @@
-import { useEffect, useMemo } from 'react'
+import { useFrame } from '@react-three/fiber'
+import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three/webgpu'
 import type { Track } from '../track/track'
-import { armcoMaterial, concreteWallMaterial, fenceMaterial, kerbMaterial, markingMaterial, mountainMaterial, roadMaterial, runoffMaterial, terrainMaterial, tyreWallMaterial, vergeMaterial } from './materials'
+import { rubberTexture, armcoMaterial, concreteWallMaterial, fenceMaterial, kerbMaterial, markingMaterial, mountainMaterial, roadMaterial, runoffMaterial, terrainMaterial, tyreWallMaterial, vergeMaterial } from './materials'
 import { Scenery } from './Scenery'
 import { debugFlag } from '../util/debug'
 import { buildBarriers, buildKerbs, buildMarkings, buildMountains, buildRoad, buildRunoff, buildTerrain, buildVerge } from './trackGeometry'
@@ -33,7 +34,9 @@ export function TrackScene({ track }: { track: Track }) {
     const g = new THREE.Group()
     g.name = 'track'
     const t0 = performance.now()
-    g.add(mesh(buildRoad(track), roadMaterial(), { name: 'road' }))
+    const rubber = rubberTexture(track)
+    g.userData.rubber = rubber
+    g.add(mesh(buildRoad(track), roadMaterial(rubber), { name: 'road' }))
     g.add(mesh(buildKerbs(track), kerbMaterial(), { name: 'kerbs' }))
     g.add(mesh(buildRunoff(track), runoffMaterial(), { name: 'runoff' }))
     g.add(mesh(buildVerge(track), vergeMaterial(), { name: 'verge' }))
@@ -61,6 +64,16 @@ export function TrackScene({ track }: { track: Track }) {
     console.info(`[track] geometry built in ${(performance.now() - t0).toFixed(0)} ms`)
     return g
   }, [track])
+
+  // the racing line darkens as the field lays rubber (refresh a few times a minute)
+  const acc = useRef(0)
+  useFrame((_, dt) => {
+    acc.current += dt
+    if (acc.current > 4 && track.rubberDirty) {
+      acc.current = 0
+      group.userData.rubber.refresh()
+    }
+  })
 
   useEffect(
     () => () => {

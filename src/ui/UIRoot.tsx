@@ -8,6 +8,7 @@ import { useGameStore } from '../state/gameStore'
 import { useSettings } from '../state/settings'
 import { Btn, fmtTime } from './components'
 import { HUD } from './hud/HUD'
+import { Telemetry } from './hud/Telemetry'
 import { Garage } from './screens/Garage'
 import { Home, Title } from './screens/Home'
 import { Lobby } from './screens/Lobby'
@@ -167,6 +168,7 @@ function Driving() {
   return (
     <>
       <HUD />
+      <Telemetry />
       {paused && !showResults && <PauseMenu />}
       {showResults && <Results />}
     </>

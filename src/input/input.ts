@@ -13,7 +13,7 @@ export interface DriverControls {
   device: 'keyboard' | 'gamepad' | 'wheel'
 }
 
-export type ActionName = 'camera' | 'lookBack' | 'reset' | 'pause' | 'hud' | 'racingLine' | 'shiftUp' | 'shiftDown' | 'lookLeft' | 'lookRight' | 'biasFwd' | 'biasRear' | 'tcCycle'
+export type ActionName = 'camera' | 'lookBack' | 'reset' | 'pause' | 'hud' | 'racingLine' | 'shiftUp' | 'shiftDown' | 'lookLeft' | 'lookRight' | 'biasFwd' | 'biasRear' | 'tcCycle' | 'telemetry'
 
 const KEYMAP: Record<string, ActionName> = {
   KeyC: 'camera',
@@ -34,6 +34,7 @@ const KEYMAP: Record<string, ActionName> = {
   BracketRight: 'biasFwd',
   BracketLeft: 'biasRear',
   KeyT: 'tcCycle',
+  KeyI: 'telemetry',
 }
 
 const WHEEL_IDS = /wheel|g2[79]|g9[23]|g920|g923|t300|t150|t248|tmx|fanatec|csl|podium|simucube|moza|046d-c2|044f-b6|0eb7/i

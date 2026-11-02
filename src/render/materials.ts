@@ -27,6 +27,7 @@ import {
   sin,
 } from 'three/tsl'
 import { getTextures } from './textures'
+import type { Track } from '../track/track'
 
 const aTrack = () => attribute('aTrack', 'vec4')
 
@@ -37,7 +38,26 @@ function band(x: any, a: number, b: number) {
   return smoothstep(float(a).sub(w), float(a).add(w), x).mul(float(1).sub(smoothstep(float(b).sub(w), float(b).add(w), x)))
 }
 
-export function roadMaterial() {
+/** Track rubber map (2 m x 1 m cells) as a texture, refreshed while cars lay rubber. */
+export function rubberTexture(track: Track) {
+  const cols = track.rubberCols
+  const rows = track.rubber.length / cols
+  const data = new Uint8Array(cols * rows * 4)
+  const tex = new THREE.DataTexture(data, cols, rows, THREE.RGBAFormat, THREE.UnsignedByteType)
+  tex.magFilter = THREE.LinearFilter
+  tex.minFilter = THREE.LinearFilter
+  tex.wrapS = THREE.ClampToEdgeWrapping
+  tex.wrapT = THREE.RepeatWrapping
+  const refresh = () => {
+    for (let k = 0; k < track.rubber.length; k++) data[k * 4] = Math.round(track.rubber[k] * 255)
+    tex.needsUpdate = true
+    track.rubberDirty = false
+  }
+  refresh()
+  return { tex, refresh, rows }
+}
+
+export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }) {
   const t = getTextures().asphalt
   const m = new THREE.MeshStandardNodeMaterial()
   const tr = aTrack()
@@ -52,7 +72,10 @@ export function roadMaterial() {
   let albedo = tex.rgb.mul(mix(float(0.82), float(1.18), macro)).mul(mix(float(0.94), float(1.06), macro2))
   let rough = tex.a.mul(mix(float(0.94), float(1.04), macro2))
   // rubbered-in racing line: darker and a touch smoother
-  const rl = exp(d.sub(racing).div(1.25).pow(2).negate())
+  // dynamic rubber map from the simulation (falls back to the static racing line)
+  const rl = rubber
+    ? smoothstep(0.14, 0.95, texture(rubber.tex, vec2(d.add(8).div(16), s.div(2).add(0.5).div(rubber.rows))).r)
+    : exp(d.sub(racing).div(1.25).pow(2).negate())
   const rubberNoise = mx_noise_float(vec3(s.mul(0.08), d.mul(0.6), 3.1)).mul(0.25).add(0.75)
   albedo = albedo.mul(mix(float(1), float(0.55), rl.mul(rubberNoise)))
   rough = mix(rough, rough.mul(0.86), rl)

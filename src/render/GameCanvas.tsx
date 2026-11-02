@@ -3,6 +3,7 @@ import { PerformanceMonitor } from '@react-three/drei'
 import { useEffect, useState } from 'react'
 import * as THREE from 'three/webgpu'
 import { audio } from '../audio/audio'
+import { ffb } from '../input/ffb'
 import { game } from '../game/game'
 import { useGameStore } from '../state/gameStore'
 import { useSettings } from '../state/settings'
@@ -50,7 +51,10 @@ function GameLoop() {
   const paused = useGameStore((s) => s.paused)
   useFrame((_, dt) => {
     if (!paused) game.update(dt)
-    else game.world.alpha = 1
+    else {
+      game.world.alpha = 1
+      ffb.update(0)
+    }
     audio.update(dt, paused)
   }, -10)
   return null

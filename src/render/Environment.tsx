@@ -7,6 +7,7 @@ import { SkyMesh } from 'three/addons/objects/SkyMesh.js'
 import { cameraPosition, dot, exp, float, Fn, length, max, mix, output, positionWorld, pow, uniform, vec3, vec4 } from 'three/tsl'
 import { useSettings } from '../state/settings'
 import { debugFlag } from '../util/debug'
+import { setTrackTemp } from '../physics/tyre'
 
 export interface SunState {
   dir: THREE.Vector3
@@ -36,6 +37,8 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
   const shadowsQ = useSettings((s) => s.graphics.shadows)
   const sun = useMemo(() => computeSun(hour), [hour])
   Object.assign(sunState, sun)
+  // asphalt temperature follows the sun (feeds the tyre thermal model)
+  useEffect(() => setTrackTemp(24 + 26 * Math.max(0, Math.sin(sun.elevation))), [sun])
 
   const sky = useMemo(() => {
     const s = new SkyMesh()

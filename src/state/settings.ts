@@ -11,6 +11,8 @@ export interface GraphicsSettings {
   ssr: boolean
   ao: boolean
   taa: boolean
+  upscale: number // internal render scale reconstructed by temporal upscaling (1 = native TRAA)
+  autoExposure: boolean
   motionBlur: number // 0..1
   bloom: boolean
   shadows: 0 | 1 | 2 | 3 // off, low, high, ultra
@@ -32,6 +34,8 @@ export interface ControlSettings {
   steerAxis: number
   invertPedals: boolean
   vibration: boolean
+  ffbGain: number
+  ffbInvert: boolean
 }
 
 export interface AudioSettings {
@@ -59,10 +63,10 @@ export interface SettingsState {
 }
 
 export const PRESETS: Record<QualityPreset, Omit<GraphicsSettings, 'fov' | 'cameraShake' | 'showFps' | 'preset'>> = {
-  low: { resolutionScale: 0.7, ssgi: false, ssr: false, ao: false, taa: false, motionBlur: 0, bloom: true, shadows: 1, trees: 0.35, envProbe: false },
-  medium: { resolutionScale: 0.85, ssgi: false, ssr: false, ao: true, taa: true, motionBlur: 0.5, bloom: true, shadows: 2, trees: 0.7, envProbe: true },
-  high: { resolutionScale: 1, ssgi: true, ssr: true, ao: true, taa: true, motionBlur: 0.7, bloom: true, shadows: 2, trees: 1, envProbe: true },
-  ultra: { resolutionScale: 1, ssgi: true, ssr: true, ao: true, taa: true, motionBlur: 0.8, bloom: true, shadows: 3, trees: 1.4, envProbe: true },
+  low: { resolutionScale: 0.7, upscale: 1, autoExposure: false, ssgi: false, ssr: false, ao: false, taa: false, motionBlur: 0, bloom: true, shadows: 1, trees: 0.35, envProbe: false },
+  medium: { resolutionScale: 1, upscale: 0.7, autoExposure: true, ssgi: false, ssr: false, ao: true, taa: true, motionBlur: 0.5, bloom: true, shadows: 2, trees: 0.7, envProbe: true },
+  high: { resolutionScale: 1, upscale: 0.8, autoExposure: true, ssgi: true, ssr: true, ao: true, taa: true, motionBlur: 0.7, bloom: true, shadows: 2, trees: 1, envProbe: true },
+  ultra: { resolutionScale: 1, upscale: 1, autoExposure: true, ssgi: true, ssr: true, ao: true, taa: true, motionBlur: 0.8, bloom: true, shadows: 3, trees: 1.4, envProbe: true },
 }
 
 function defaultPreset(): QualityPreset {
@@ -89,6 +93,8 @@ export const useSettings = create<SettingsState>()(
         steerAxis: 0,
         invertPedals: false,
         vibration: true,
+        ffbGain: 0.8,
+        ffbInvert: false,
       },
       audio: { master: 0.85, engine: 1, effects: 0.85, music: 0.5 },
       assists: { abs: true, tc: 2, steering: 0.75, autoGear: true, stability: false },
