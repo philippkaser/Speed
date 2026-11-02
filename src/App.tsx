@@ -4,13 +4,15 @@ import { startAttract, startDriving, startShowroom } from './game/session'
 import { input } from './input/input'
 import { GameCanvas } from './render/GameCanvas'
 import { useGameStore } from './state/gameStore'
+import { useSettings } from './state/settings'
+import { game } from './game/game'
 import { UIRoot } from './ui/UIRoot'
 
 export function App() {
   useEffect(() => {
     input.attach()
     // small handle for automated tests / debugging from the console
-    ;(window as unknown as { speed: object }).speed = { store: useGameStore, setCamera: (c: string) => useGameStore.getState().set({ camera: c as never }) }
+    ;(window as unknown as { speed: object }).speed = { store: useGameStore, settings: useSettings, game, setCamera: (c: string) => useGameStore.getState().set({ camera: c as never }) }
     // URL shortcuts (handy for testing): ?drive, ?race, ?showroom, ?car=<id>
     const p = new URLSearchParams(location.search)
     const car = p.get('car')

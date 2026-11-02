@@ -82,6 +82,8 @@ type GameEvent =
 const AI_NAMES = ['M. Okafor', 'L. Marchetti', 'S. Lindqvist', 'K. Tanaka', 'A. Duarte', 'J. Becker', 'R. Moreau', 'D. Novak', 'P. Haddad', 'E. Varga', 'T. Silva']
 const AI_COLORS = ['#f2f2f0', '#0a0a0c', '#f5b800', '#0057b8', '#2e7d32', '#ff6f00', '#6a1b9a', '#9e9e9e', '#00838f', '#b71c1c', '#c0a060']
 
+const DONUT = typeof location !== 'undefined' && new URLSearchParams(location.search).has('donut')
+
 export class Game {
   track: Track
   world: PhysicsWorld
@@ -357,6 +359,13 @@ export class Game {
       if (sh.up) inp.shiftUp = true
       if (sh.down) inp.shiftDown = true
       v.assists = { ...useSettings.getState().assists }
+      if (DONUT) {
+        // test hook (?donut): full throttle at full lock with traction control off -> tyre smoke
+        inp.throttle = 1
+        inp.brake = 0
+        inp.steer = 1
+        v.assists.tc = 0
+      }
       // feedback
       const fl = v.wheels[0].tyre,
         rl = v.wheels[2].tyre

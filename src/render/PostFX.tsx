@@ -8,7 +8,6 @@ import { useEffect, useMemo } from 'react'
 import * as THREE from 'three/webgpu'
 import { bloom } from 'three/addons/tsl/display/BloomNode.js'
 import { ao as gtao } from 'three/addons/tsl/display/GTAONode.js'
-import { motionBlur } from 'three/addons/tsl/display/MotionBlur.js'
 import { ssgi } from 'three/addons/tsl/display/SSGINode.js'
 import { ssr } from 'three/addons/tsl/display/SSRNode.js'
 import { traa } from 'three/addons/tsl/display/TRAANode.js'
@@ -43,10 +42,14 @@ import {
   rtt,
   luminance,
   max,
+  screenSize,
 } from 'three/tsl'
 import { useSettings } from '../state/settings'
 import { reportGpuError } from './gpuHealth'
 import { debugFlag } from '../util/debug'
+import { motionBlurUniforms, reconstructMotionBlur } from './motionBlur'
+import { advanceVelocityFrame } from './velocityFix'
+import { particleScene, particleU, sceneDepth } from './particles'
 
 /** Set frames > 0 when the camera jumps so motion blur ignores the discontinuity. */
 export const cameraCut = { frames: 0 }
@@ -144,7 +147,16 @@ export function PostFX() {
     }
     if (useTAA && vel) out = upscale < 0.999 ? taau(composite, depth, vel, camera) : traa(composite, depth, vel, camera)
     else out = fxaa(composite)
-    if (useMB && vel) out = motionBlur(convertToTexture(out), vel.mul(postUniforms.motionBlur), int(12))
+    if (useMB && vel) out = reconstructMotionBlur(convertToTexture(out), vel, depth)
+    // particles (smoke, dust, sparks): own pass, soft against the scene depth, composited over the
+    // lit image (premultiplied colour, transmittance in alpha). After TAA and motion blur, so they
+    // neither ghost nor pick up the scene's motion vectors.
+    sceneDepth.value = scenePass.getTexture('depth')
+    particleU.soft.value = 1
+    const particlePass = pass(particleScene, camera)
+    particlePass.setResolutionScale(gfx.preset === 'high' || gfx.preset === 'ultra' ? 0.75 : 0.5)
+    const parts = particlePass.getTextureNode('output')
+    out = vec4(out.rgb.mul(parts.a).add(parts.rgb), 1)
     if (useBloom) {
       const b = bloom(out, 0.14, 0.4, 1.15)
       out = vec4(out.rgb.add(b.rgb), 1)
@@ -162,6 +174,13 @@ export function PostFX() {
     const n = hash(screenUV.mul(vec2(1931.3, 2711.7)).add(time.mul(37.1)).x.add(screenUV.y.mul(911.1)))
     graded = graded.mul(float(1).add(n.sub(0.5).mul(postUniforms.grain)))
     rp.outputNode = vec4(graded.mul(postUniforms.exposure).mul(postUniforms.adapt), 1)
+    // debug view (?showvel): raw motion vectors, 8 levels per pixel of motion per frame,
+    // |x| in red, |y| in green, signs in blue
+    if (debugFlag('showvel') && vel) {
+      const px = vel.xy.mul(vec2(0.5, -0.5)).mul(vec2(screenSize))
+      rp.outputNode = vec4(px.abs().mul(8 / 255), float(px.x.greaterThan(0)).mul(0.5).add(float(px.y.greaterThan(0)).mul(0.25)), 1)
+      rp.outputColorTransform = false
+    }
     ;(rp as any).__meter = meter
     return rp
   }, [renderer, scene, camera, useSSGI, useSSR, useAO, useTAA, useMB, useBloom, gfx.preset, upscale, useAE])
@@ -172,7 +191,15 @@ export function PostFX() {
     // constant shutter: blur length corresponds to 1/60 s regardless of frame rate; none across camera cuts
     const cut = cameraCut.frames > 0
     if (cut) cameraCut.frames--
-    postUniforms.motionBlur.value = cut ? 0 : gfx.motionBlur * Math.min(1, 1 / 60 / Math.max(dt, 1e-3))
+    // shutter: the setting is the exposure as a fraction of 1/60 s, whatever the frame rate
+    const shutter = cut ? 0 : gfx.motionBlur * Math.min(3, 1 / 60 / Math.max(dt, 1e-3))
+    postUniforms.motionBlur.value = shutter
+    const mb = motionBlurUniforms
+    mb.shutter.value = shutter
+    mb.near.value = particleU.near.value = camera.near
+    mb.far.value = particleU.far.value = camera.far
+    mb.frame.value = (mb.frame.value + 1) % 1024
+    advanceVelocityFrame()
     if ((pipeline as any).__broken) {
       renderer.render(scene, camera)
       return

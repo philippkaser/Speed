@@ -14,6 +14,8 @@ bun run test:gpu # headless smoke test of the real WebGPU backend (needs Playwri
 
 Useful URL switches: `?drive` (straight into a practice session), `?race`, `?showroom`, `?car=aurel-gt`, `?q=low|medium|high|ultra`, `?webgl` (force the WebGL2 backend), `?webgpu` (force WebGPU and never fall back), `?autopilot` (AI drives your car).
 
+Debug switches: `?showvel` (motion vectors), `?donut` (full lock and full throttle with traction control off, for tyre smoke), `?offscreen` (render into a render target, used by the headless tests).
+
 If the 3D view ever stays black, open Settings → Graphics → Renderer and pick WebGL2, or add `?webgl` to the URL. The game also switches itself: on a fatal WebGPU error (a pipeline or shader that fails to build, a validation error, device loss) it moves to WebGL2, either automatically or from a notice.
 
 ---
@@ -91,7 +93,7 @@ The G-buffer fits WebGPU's default 32-byte colour-attachment budget, and the ren
   - **SSGI** for screen-space indirect light and AO (WebGPU) or GTAO (fallback)
   - **SSR** for screen-space reflections, including dielectrics such as clear coat and asphalt sheen
   - **TRAA** temporal AA
-  - motion blur with a constant 1/60 s shutter
+  - motion blur as a reconstruction filter. It weighs every tap by depth and velocity, so the car stays sharp against a streaking background and doesn't smear into it. Taps are jittered per pixel and per frame, the shutter stays constant whatever the frame rate, and streak length is capped. Motion vectors advance once per frame per object; three's default advanced them per draw, which broke meshes with several material groups.
   - bloom
   - grading, vignette and grain
   
@@ -114,7 +116,10 @@ The G-buffer fits WebGPU's default 32-byte colour-attachment budget, and the ren
   - armco, painted concrete walls, tyre walls, catch fences
   - grandstands with crowds, pit building, start gantry with working lights, bridge, billboards, 300/200/100 m boards, marshal posts
   - card-based foliage trees in chunked LODs with wind sway
-- **Effects**: tyre smoke driven by contact-patch slip power, dust on grass and gravel, skid marks, sparks.
+- **Effects**: tyre smoke, dust on grass and gravel, skid marks and sparks.
+  - Smoke comes from the contact patch in proportion to friction power above the vaporisation onset, and more from a hot tread.
+  - Each puff rides the car's wake, rises with buoyancy while hot, wanders with turbulence, rolls along the road, and grows by turbulent diffusion while its optical depth falls as 1/r² (mass conserved).
+  - Particles render in their own pass, composited over the lit image and sorted back to front. They fade softly against the scene depth instead of cutting into the road. The smoke is shaded as a scattering medium: sun lighting with self-shadowing along the light path, sky light from the environment, and Henyey-Greenstein forward scattering (thin smoke glows against the sun).
 - **Gameplay aids**: a GT-style driving line (red braking zones, yellow at the limit, green under acceleration) from your car's own speed profile, a time-trial ghost of your best lap, and opponent name tags with positions (drei `<Html>`).
 - **Cameras**:
   - chase and near chase, with a slip-aware yaw lag, speed-dependent FOV and road/kerb shake

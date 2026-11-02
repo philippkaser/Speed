@@ -79,9 +79,13 @@ function OffscreenDriver() {
   useEffect(() => {
     let alive = true
     const device = (gl as any).backend?.device as { queue: { onSubmittedWorkDone(): Promise<void> } } | undefined
+    // virtual clock: a steady 60 fps however long a software-rendered frame really takes
+    // (R3F's advance() takes seconds)
+    let t = 0
     const loop = async () => {
       while (alive) {
-        advance(performance.now())
+        t += 1 / 60
+        advance(t)
         if (device) {
           await device.queue.onSubmittedWorkDone()
           await new Promise((r) => setTimeout(r, 0))
@@ -115,6 +119,8 @@ function configureRenderer(r: THREE.WebGPURenderer) {
   r.outputColorSpace = THREE.SRGBColorSpace
   r.shadowMap.enabled = true
   r.shadowMap.type = THREE.PCFShadowMap
+  // the particle pass relies on clearing to black with full transmittance in alpha
+  r.setClearColor(0x000000, 1)
 }
 
 function GameLoop() {

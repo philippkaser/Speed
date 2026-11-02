@@ -1,17 +1,57 @@
 // Tyre smoke, dust, skid marks and sparks driven by the physics state.
+//
+// Smoke is emitted from the contact patch in proportion to the friction power above the point where
+// the tread starts to vaporise (hotter tread smokes more). Each puff then:
+//  - is carried by the car's wake (air dragged along behind the car, decaying with distance) and
+//    relaxes towards it with an aerodynamic drag time constant,
+//  - rises with buoyancy that fades as it cools, and wanders with turbulence (a random-walk velocity),
+//  - rolls along the road instead of sinking into it,
+//  - grows by turbulent diffusion (radius ~ sqrt(age)) while its optical depth drops as 1/r^2.
+// Puffs are sorted back to front each frame for correct blending. Rendering is in particles.ts.
 import { useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo } from 'react'
 import * as THREE from 'three/webgpu'
-import { attribute, color, float, mix, smoothstep, uv, vec3, length, mx_noise_float, positionWorld, time } from 'three/tsl'
+import { attribute, float, mx_noise_float, smoothstep, uv, vec3 } from 'three/tsl'
 import { game } from '../game/game'
 import { Surface } from '../physics/ground'
 import { clamp } from '../physics/math'
+import { sunState } from './Environment'
+import { particleScene, particleU, smokeMaterial, sparkMaterial } from './particles'
 
-const MAX_SMOKE = 900
+const MAX_SMOKE = 1600
 const MAX_SPARKS = 400
 const MAX_SKID = 6000
 
-interface Particle {
+interface Puff {
+  x: number
+  y: number
+  z: number
+  vx: number
+  vy: number
+  vz: number
+  // turbulent velocity (random walk)
+  tx: number
+  ty: number
+  tz: number
+  ground: number
+  age: number
+  life: number
+  r0: number
+  spread: number
+  density: number
+  seed: number
+  rot: number
+  spin: number
+  car: number
+  r: number
+  g: number
+  b: number
+  // per-frame
+  rad: number
+  depth: number
+}
+
+interface Spark {
   x: number
   y: number
   z: number
@@ -20,37 +60,6 @@ interface Particle {
   vz: number
   age: number
   life: number
-  size: number
-  grow: number
-  alpha: number
-  r: number
-  g: number
-  b: number
-}
-
-function smokeMaterial() {
-  const m = new THREE.MeshStandardNodeMaterial({ transparent: true, depthWrite: false })
-  const a = attribute('aAlpha', 'float')
-  const tint = attribute('aTint', 'vec3')
-  const d = length(uv().sub(0.5)).mul(2)
-  const n = mx_noise_float(vec3(uv().mul(3.5), time.mul(0.3).add(positionWorld.x.mul(0.05)))).mul(0.5).add(0.5)
-  const soft = smoothstep(1.0, 0.15, d).mul(n.mul(0.7).add(0.3))
-  m.colorNode = tint
-  m.opacityNode = soft.mul(a)
-  m.roughnessNode = float(1)
-  m.metalnessNode = float(0)
-  // light scattering through the plume
-  m.emissiveNode = tint.mul(0.12)
-  return m
-}
-
-function sparkMaterial() {
-  const m = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending })
-  const a = attribute('aAlpha', 'float')
-  const d = length(uv().sub(0.5)).mul(2)
-  m.colorNode = mix(color(8, 2.4, 0.4), color(12, 9, 4), a).mul(smoothstep(1, 0.2, d))
-  m.opacityNode = a
-  return m
 }
 
 function skidMaterial() {
@@ -64,29 +73,32 @@ function skidMaterial() {
   return m
 }
 
+const gauss = () => (Math.random() + Math.random() + Math.random() - 1.5) * 1.15
+
 export function Effects() {
-  const { camera } = useThree()
+  const { camera, scene } = useThree()
   const sys = useMemo(() => {
-    // ---- smoke
     const quad = new THREE.PlaneGeometry(1, 1)
+    // ---- smoke & dust
     const smokeGeo = quad.clone()
-    const smokeAlpha = new THREE.InstancedBufferAttribute(new Float32Array(MAX_SMOKE), 1)
-    const smokeTint = new THREE.InstancedBufferAttribute(new Float32Array(MAX_SMOKE * 3), 3)
-    smokeGeo.setAttribute('aAlpha', smokeAlpha)
-    smokeGeo.setAttribute('aTint', smokeTint)
+    const inst = (n: number) => new THREE.InstancedBufferAttribute(new Float32Array(MAX_SMOKE * n), n).setUsage(THREE.DynamicDrawUsage)
+    const aPuff = inst(4),
+      aTint = inst(3)
+    smokeGeo.setAttribute('aPuff', aPuff)
+    smokeGeo.setAttribute('aTint', aTint)
     const smoke = new THREE.InstancedMesh(smokeGeo, smokeMaterial(), MAX_SMOKE)
+    smoke.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
     smoke.frustumCulled = false
     smoke.count = 0
-    smoke.renderOrder = 5
     // ---- sparks
     const sparkGeo = quad.clone()
-    const sparkAlpha = new THREE.InstancedBufferAttribute(new Float32Array(MAX_SPARKS), 1)
+    const sparkAlpha = new THREE.InstancedBufferAttribute(new Float32Array(MAX_SPARKS), 1).setUsage(THREE.DynamicDrawUsage)
     sparkGeo.setAttribute('aAlpha', sparkAlpha)
     const sparks = new THREE.InstancedMesh(sparkGeo, sparkMaterial(), MAX_SPARKS)
     sparks.frustumCulled = false
     sparks.count = 0
     sparks.renderOrder = 6
-    // ---- skid marks: ring buffer of quads
+    // ---- skid marks: ring buffer of quads (part of the main scene, they are road decals)
     const skidGeo = new THREE.BufferGeometry()
     const skidPos = new Float32Array(MAX_SKID * 4 * 3)
     const skidUV = new Float32Array(MAX_SKID * 4 * 2)
@@ -109,89 +121,107 @@ export function Effects() {
     skids.renderOrder = 1
     return {
       smoke,
-      smokeAlpha,
-      smokeTint,
+      attrs: { aPuff, aTint },
       sparks,
       sparkAlpha,
       skids,
       skidPos,
       skidA,
       skidHead: 0,
-      smokeP: [] as Particle[],
-      sparkP: [] as Particle[],
+      puffs: [] as Puff[],
+      sparkP: [] as Spark[],
+      // fractional emission carried between frames, per wheel
+      acc: new Map<string, number>(),
       lastContact: new Map<string, { x: number; y: number; z: number; lx: number; lz: number; on: boolean }>(),
-      eventCursor: 0,
     }
   }, [])
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    particleScene.add(sys.smoke, sys.sparks)
+    return () => {
+      particleScene.remove(sys.smoke, sys.sparks)
       sys.smoke.geometry.dispose()
       sys.sparks.geometry.dispose()
       sys.skids.geometry.dispose()
-    },
-    [sys],
-  )
+    }
+  }, [sys])
 
   const m4 = useMemo(() => new THREE.Matrix4(), [])
-  const q = useMemo(() => new THREE.Quaternion(), [])
   const sc = useMemo(() => new THREE.Vector3(), [])
   const p3 = useMemo(() => new THREE.Vector3(), [])
+  const fwd = useMemo(() => new THREE.Vector3(), [])
 
   useFrame((_, dtRaw) => {
     const dt = Math.min(dtRaw, 0.05)
     const camPos = camera.position
     let skidDirty = false
+
+    // lighting of the particle scene follows the main scene
+    particleU.sunDir.value.copy(sunState.dir)
+    particleU.sunColor.value.copy(sunState.color).multiplyScalar(sunState.intensity)
+    if (particleScene.environment !== scene.environment) particleScene.environment = scene.environment
+    particleScene.environmentIntensity = scene.environmentIntensity
+
     // ------------------------------------------------------------- emitters
-    for (const c of game.cars) {
+    const cars = game.cars
+    for (let ci = 0; ci < cars.length; ci++) {
+      const c = cars[ci]
       const v = c.sim.vehicle
-      const near = camPos.distanceToSquared(v.pos as unknown as THREE.Vector3) < 400 * 400
+      const near = camPos.distanceToSquared(v.pos as unknown as THREE.Vector3) < 350 * 350
       for (let wi = 0; wi < 4; wi++) {
         const w = v.wheels[wi]
         const key = c.id + wi
         const t = w.tyre
         const onTarmac = w.surface === Surface.Asphalt || w.surface === Surface.Kerb || w.surface === Surface.Runoff || w.surface === Surface.Pit
         const sliding = w.contact && onTarmac && (t.combinedSlip > 1.15 || Math.abs(t.slipRatio) > 0.3) && t.slideVel > 2.5
-        // smoke from hard sliding (slip power), dust off-track
         if (near && w.contact) {
-          if (sliding) {
-            const rate = clamp((t.slipPower - 9000) / 30000, 0, 1) * 60 * dt
-            emitN(sys.smokeP, rate, () => ({
-              x: w.contactPoint.x + (Math.random() - 0.5) * 0.3,
-              y: w.contactPoint.y + 0.15,
-              z: w.contactPoint.z + (Math.random() - 0.5) * 0.3,
-              vx: v.vel.x * 0.25 + (Math.random() - 0.5) * 1.2,
-              vy: 0.6 + Math.random() * 0.8,
-              vz: v.vel.z * 0.25 + (Math.random() - 0.5) * 1.2,
-              age: 0,
-              life: 2.2 + Math.random() * 1.8,
-              size: 0.7,
-              grow: 1.6,
-              alpha: 0.32,
-              r: 0.82,
-              g: 0.82,
-              b: 0.84,
-            }))
-          } else if (!onTarmac && v.speed > 6 && (w.surface === Surface.Gravel || w.surface === Surface.Grass)) {
-            const gravel = w.surface === Surface.Gravel
-            const rate = clamp(v.speed / 30, 0, 1) * (gravel ? 45 : 18) * dt
-            emitN(sys.smokeP, rate, () => ({
-              x: w.contactPoint.x,
-              y: w.contactPoint.y + 0.1,
-              z: w.contactPoint.z,
-              vx: v.vel.x * 0.4 + (Math.random() - 0.5) * 2,
-              vy: 0.8 + Math.random() * 1.5,
-              vz: v.vel.z * 0.4 + (Math.random() - 0.5) * 2,
-              age: 0,
-              life: 1.6 + Math.random(),
-              size: 0.9,
-              grow: 2.2,
-              alpha: gravel ? 0.4 : 0.22,
-              r: gravel ? 0.55 : 0.36,
-              g: gravel ? 0.47 : 0.33,
-              b: gravel ? 0.36 : 0.22,
-            }))
+          let rate = 0
+          let dust = false
+          if (onTarmac) {
+            // friction power above the onset of smoking, more once the tread is hot
+            const hot = clamp((t.surfTemp - 70) / 90, 0, 1)
+            rate = clamp((t.slipPower - 7000 * (1.4 - hot * 0.6)) / 26000, 0, 1.6) * 34
+          } else if (v.speed > 5 && (w.surface === Surface.Gravel || w.surface === Surface.Grass)) {
+            dust = true
+            rate = clamp(v.speed / 30, 0, 1) * (w.surface === Surface.Gravel ? 26 : 10)
           }
+          let acc = (sys.acc.get(key) ?? 0) + rate * dt
+          while (acc >= 1 && sys.puffs.length < MAX_SMOKE) {
+            acc -= 1
+            const gravel = w.surface === Surface.Gravel
+            const cp = w.contactPoint
+            // vapour leaves the patch with part of the car's speed and spreads sideways
+            const sx = (Math.random() - 0.5) * 0.35,
+              sz = (Math.random() - 0.5) * 0.35
+            const shade = dust ? 1 : 0.9 + Math.random() * 0.08
+            sys.puffs.push({
+              x: cp.x + sx,
+              y: cp.y + 0.16,
+              z: cp.z + sz,
+              vx: v.vel.x * 0.45 + gauss() * 0.7,
+              vy: 0.35 + Math.random() * 0.6,
+              vz: v.vel.z * 0.45 + gauss() * 0.7,
+              tx: 0,
+              ty: 0,
+              tz: 0,
+              ground: cp.y,
+              age: 0,
+              life: dust ? 1.8 + Math.random() * 1.2 : 3.6 + Math.random() * 2.6,
+              r0: dust ? 0.35 : 0.28,
+              spread: dust ? 1.25 : 1.05 + Math.random() * 0.35,
+              density: dust ? (gravel ? 1.3 : 0.6) : 1.5 + Math.random() * 0.7,
+              seed: Math.random(),
+              rot: Math.random() * Math.PI * 2,
+              spin: (Math.random() - 0.5) * 0.6,
+              car: ci,
+              r: dust ? (gravel ? 0.56 : 0.4) : 0.86 * shade,
+              g: dust ? (gravel ? 0.48 : 0.37) : 0.86 * shade,
+              b: dust ? (gravel ? 0.37 : 0.27) : 0.88 * shade,
+              rad: 0,
+              depth: 0,
+            })
+          }
+          sys.acc.set(key, Math.min(acc, 1))
         }
         // skid marks
         const prev = sys.lastContact.get(key)
@@ -233,12 +263,6 @@ export function Effects() {
           vz: v.vel.z * 0.8 + (Math.random() - 0.5) * 5,
           age: 0,
           life: 0.25 + Math.random() * 0.4,
-          size: 0.05,
-          grow: 0,
-          alpha: 1,
-          r: 1,
-          g: 1,
-          b: 1,
         }))
       }
     }
@@ -256,20 +280,13 @@ export function Effects() {
         vz: (Math.random() - 0.5) * 9,
         age: 0,
         life: 0.3 + Math.random() * 0.5,
-        size: 0.05,
-        grow: 0,
-        alpha: 1,
-        r: 1,
-        g: 1,
-        b: 1,
       }))
     }
     ev.length = 0
 
-    // ------------------------------------------------------------- simulate & upload
-    const camQ = camera.quaternion
-    let n = 0
-    const P = sys.smokeP
+    // ------------------------------------------------------------- smoke simulation
+    const P = sys.puffs
+    camera.getWorldDirection(fwd)
     for (let i = P.length - 1; i >= 0; i--) {
       const p = P[i]
       p.age += dt
@@ -278,29 +295,66 @@ export function Effects() {
         P.pop()
         continue
       }
-      const drag = Math.exp(-dt * 1.4)
-      p.vx *= drag
-      p.vz *= drag
-      p.vy = p.vy * drag + 0.25 * dt
+      // air velocity: light wind plus the wake of the car that made the puff
+      const car = cars[p.car]?.sim.vehicle
+      let ax = 0.6,
+        az = 0.25
+      if (car) {
+        const dx = p.x - car.pos.x,
+          dy = p.y - car.pos.y,
+          dz = p.z - car.pos.z
+        const wake = 0.42 * Math.exp(-Math.sqrt(dx * dx + dy * dy + dz * dz) / 5)
+        ax += car.vel.x * wake
+        az += car.vel.z * wake
+      }
+      // turbulent velocity: random walk with a ~0.6 s correlation time
+      const k = Math.exp(-dt / 0.6),
+        sig = 0.9 * Math.sqrt(1 - k * k)
+      p.tx = p.tx * k + gauss() * sig
+      p.ty = p.ty * k + gauss() * sig * 0.5
+      p.tz = p.tz * k + gauss() * sig
+      // drag towards the air (smaller puffs follow the air faster), buoyancy while hot
+      const relax = 1 - Math.exp(-dt / (0.35 + p.age * 0.25))
+      p.vx += (ax + p.tx - p.vx) * relax
+      p.vz += (az + p.tz - p.vz) * relax
+      p.vy += (0.15 + p.ty - p.vy) * relax + 0.9 * Math.exp(-p.age / 1.2) * dt
       p.x += p.vx * dt
       p.y += p.vy * dt
       p.z += p.vz * dt
+      p.rot += p.spin * dt
+      // turbulent diffusion
+      p.rad = p.r0 + p.spread * Math.sqrt(p.age) + 0.12 * p.age
+      // rolls along the road surface
+      const minY = p.ground + p.rad * 0.35
+      if (p.y < minY) {
+        p.y = minY
+        if (p.vy < 0) p.vy *= -0.2
+      }
+      p.depth = (p.x - camPos.x) * fwd.x + (p.y - camPos.y) * fwd.y + (p.z - camPos.z) * fwd.z
     }
+    // back to front
+    P.sort((a, b) => b.depth - a.depth)
+    const A = sys.attrs
+    let n = 0
     for (const p of P) {
       if (n >= MAX_SMOKE) break
+      if (p.depth < -p.rad * 2) continue
       const t = p.age / p.life
-      const size = p.size + p.grow * Math.sqrt(t) * 2.2
-      m4.compose(p3.set(p.x, p.y, p.z), camQ, sc.set(size, size, size))
+      // mass conserved: optical depth falls with the square of the size
+      const thin = Math.min(1, ((p.r0 + 0.25) / p.rad) ** 2)
+      const fade = Math.min(1, p.age / 0.12) * (1 - smooth01((t - 0.55) / 0.45))
+      const size = p.rad * 2.6
+      m4.compose(p3.set(p.x, p.y, p.z), camera.quaternion, sc.set(size, size, size))
       sys.smoke.setMatrixAt(n, m4)
-      sys.smokeAlpha.setX(n, p.alpha * (1 - t) * Math.min(1, t * 8))
-      sys.smokeTint.setXYZ(n, p.r, p.g, p.b)
+      A.aPuff.setXYZW(n, p.density * thin * fade, p.seed, p.rot, p.rad)
+      A.aTint.setXYZ(n, p.r, p.g, p.b)
       n++
     }
     sys.smoke.count = n
     sys.smoke.instanceMatrix.needsUpdate = true
-    sys.smokeAlpha.needsUpdate = true
-    sys.smokeTint.needsUpdate = true
+    for (const a of Object.values(A)) a.needsUpdate = true
 
+    // ------------------------------------------------------------- sparks
     let k = 0
     const S = sys.sparkP
     for (let i = S.length - 1; i >= 0; i--) {
@@ -319,9 +373,9 @@ export function Effects() {
     for (const p of S) {
       if (k >= MAX_SPARKS) break
       const t = p.age / p.life
-      // stretch along velocity
+      // stretched along the velocity
       const vel = Math.hypot(p.vx, p.vy, p.vz)
-      m4.compose(p3.set(p.x, p.y, p.z), camQ, sc.set(0.04, 0.04 + vel * 0.012, 0.04))
+      m4.compose(p3.set(p.x, p.y, p.z), camera.quaternion, sc.set(0.04, 0.04 + vel * 0.012, 0.04))
       sys.sparks.setMatrixAt(k, m4)
       sys.sparkAlpha.setX(k, 1 - t)
       k++
@@ -334,19 +388,17 @@ export function Effects() {
       ;(sys.skids.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true
       ;(sys.skids.geometry.getAttribute('aAlpha') as THREE.BufferAttribute).needsUpdate = true
     }
-    void q
   }, 0)
 
-  return (
-    <>
-      <primitive object={sys.skids} />
-      <primitive object={sys.smoke} />
-      <primitive object={sys.sparks} />
-    </>
-  )
+  return <primitive object={sys.skids} />
 }
 
-function emitN(list: Particle[], rate: number, make: () => Particle) {
+function smooth01(x: number) {
+  const t = clamp(x, 0, 1)
+  return t * t * (3 - 2 * t)
+}
+
+function emitN<T>(list: T[], rate: number, make: () => T) {
   let count = Math.floor(rate)
   if (Math.random() < rate - count) count++
   for (let i = 0; i < count && list.length < 2000; i++) list.push(make())
