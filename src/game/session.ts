@@ -4,6 +4,7 @@ import { net } from '../net/client'
 import { useGameStore } from '../state/gameStore'
 import { useSettings } from '../state/settings'
 import { game } from './game'
+import { startTeamRace } from '../team/session'
 
 export function startAttract() {
   const g = useGameStore.getState()
@@ -38,6 +39,10 @@ export function startDriving(kind: 'practice' | 'race') {
 export function restartSession() {
   const kind = useGameStore.getState().sessionKind
   if (kind === 'online') return
+  if (kind === 'team') {
+    startTeamRace()
+    return
+  }
   startDriving(kind)
 }
 

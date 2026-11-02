@@ -178,9 +178,13 @@ export function Effects() {
           let rate = 0
           let dust = false
           if (onTarmac) {
-            // friction power above the onset of smoking, more once the tread is hot
+            // rubber only smokes when the tread surface flashes past its vaporisation point: sustained
+            // sliding at several m/s with high friction power (slides, lock-ups, wheelspin), not
+            // cornering at the limit, where the contact patch mostly grips (measured on a racing lap:
+            // the old power-only threshold was crossed 14% of the time, this one 0.01%)
             const hot = clamp((t.surfTemp - 70) / 90, 0, 1)
-            rate = clamp((t.slipPower - 7000 * (1.4 - hot * 0.6)) / 26000, 0, 1.6) * 34
+            const slide = smooth01((t.slideVel - 5) / 6)
+            rate = clamp((t.slipPower - 16000 * (1.25 - hot * 0.45)) / 30000, 0, 1.6) * slide * 34
           } else if (v.speed > 5 && (w.surface === Surface.Gravel || w.surface === Surface.Grass)) {
             dust = true
             rate = clamp(v.speed / 30, 0, 1) * (w.surface === Surface.Gravel ? 26 : 10)

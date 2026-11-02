@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { audio } from '../audio/audio'
 import { game } from '../game/game'
 import { quitToMenu, restartSession, startAttract } from '../game/session'
@@ -15,6 +15,9 @@ import { Home, Title } from './screens/Home'
 import { Lobby } from './screens/Lobby'
 import { RaceSetup } from './screens/RaceSetup'
 import { Settings, SettingsPanel } from './screens/Settings'
+import { Broadcast } from './team/Broadcast'
+import { TeamHQ } from './team/TeamHQ'
+import { TeamResults } from './team/TeamResults'
 
 function Boot() {
   const ready = useGameStore((s) => s.sceneReady)
@@ -84,6 +87,37 @@ function PauseMenu() {
       </div>
     )
   const online = g.sessionKind === 'online'
+  if (game.mode === 'team')
+    return (
+      <div className="overlay">
+        <div className="panel pause-menu">
+          <h2>Paused</h2>
+          <Btn primary onClick={() => g.set({ paused: false })}>
+            Resume
+          </Btn>
+          <Btn
+            onClick={() => {
+              g.set({ paused: false })
+              restartSession()
+            }}
+          >
+            Restart race
+          </Btn>
+          <Btn onClick={() => setSettings(true)}>Settings</Btn>
+          <Btn
+            ghost
+            sound="back"
+            onClick={() => {
+              g.set({ paused: false })
+              startAttract()
+              g.setScreen('teamHQ')
+            }}
+          >
+            Retire to team HQ
+          </Btn>
+        </div>
+      </div>
+    )
   return (
     <div className="overlay">
       <div className="panel pause-menu">
@@ -192,6 +226,15 @@ function Driving() {
     })
   }, [])
   const showResults = finished || (useGameStore.getState().sessionKind === 'online' && !!netResults)
+  const onTeamComplete = useCallback(() => setFinished(true), [])
+  if (game.mode === 'team')
+    return (
+      <>
+        <Broadcast onComplete={onTeamComplete} />
+        {paused && !finished && <PauseMenu />}
+        {finished && <TeamResults />}
+      </>
+    )
   return (
     <>
       <HUD />
@@ -216,7 +259,7 @@ export function UIRoot() {
             g.set({ paused: !g.paused })
             audio.ui(g.paused ? 'back' : 'select')
           } else if (g.screen !== 'home' && g.screen !== 'title' && g.screen !== 'boot') {
-            if (g.screen === 'garage' || g.screen === 'lobby') startAttract()
+            if (g.screen === 'garage' || g.screen === 'lobby' || g.screen === 'teamHQ') startAttract()
             g.setScreen('home')
             audio.ui('back')
           }
@@ -272,6 +315,7 @@ export function UIRoot() {
       {screen === 'settings' && <Settings />}
       {screen === 'lobby' && <Lobby />}
       {screen === 'driving' && <Driving />}
+      {screen === 'teamHQ' && <TeamHQ />}
       <Boot />
       <GpuNotice />
     </div>

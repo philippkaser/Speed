@@ -14,7 +14,14 @@ import { useSettings } from '../state/settings'
 import { Track } from '../track/track'
 import { getTrackDef } from '../track/trackDef'
 
-export type Mode = 'attract' | 'showroom' | 'practice' | 'race' | 'online'
+/** What the game loop needs from the team race engine (src/team/teamRace.ts). */
+export interface TeamRaceHooks {
+  beforePhysics(dt: number): void
+  afterPhysics(dt: number): void
+  dispose(): void
+}
+
+export type Mode = 'attract' | 'showroom' | 'practice' | 'race' | 'online' | 'team'
 export type Phase = 'idle' | 'grid' | 'countdown' | 'racing' | 'finished'
 
 export class LapTiming {
@@ -54,6 +61,25 @@ export interface CarEntry {
   isRemote: boolean
   timing: LapTiming
   sample: ReturnType<typeof makeSample>
+  /** team race: livery and timing-screen identity */
+  teamId?: string
+  accent?: string
+  number?: number
+  code?: string
+}
+
+/** One car of a team race (pit wall mode). */
+export interface TeamEntryConfig {
+  id: string
+  name: string
+  code: string
+  teamId: string
+  color: string
+  accent: string
+  number: number
+  carId: string
+  setup: CarSetup
+  skill: number
 }
 
 export interface SessionConfig {
@@ -82,6 +108,9 @@ type GameEvent =
 const AI_NAMES = ['M. Okafor', 'L. Marchetti', 'S. Lindqvist', 'K. Tanaka', 'A. Duarte', 'J. Becker', 'R. Moreau', 'D. Novak', 'P. Haddad', 'E. Varga', 'T. Silva']
 const AI_COLORS = ['#f2f2f0', '#0a0a0c', '#f5b800', '#0057b8', '#2e7d32', '#ff6f00', '#6a1b9a', '#9e9e9e', '#00838f', '#b71c1c', '#c0a060']
 
+/** pre-start sequence of a team race: grid shot, five red lights, random hold */
+export const TEAM_COUNTDOWN = 9
+
 const DONUT = typeof location !== 'undefined' && new URLSearchParams(location.search).has('donut')
 
 export class Game {
@@ -100,6 +129,11 @@ export class Game {
   listeners = new Set<(e: GameEvent) => void>()
   private trackCache = new Map<string, Track>()
   finishOrder: string[] = []
+  /** team race engine (pit wall mode) */
+  teamRace: TeamRaceHooks | null = null
+  /** simulation speed multiplier (team races) */
+  timeScale = 1
+  countdownTotal = 4.5
 
   constructor() {
     this.track = this.getTrack('valle-alta')
@@ -128,6 +162,8 @@ export class Game {
   /** Start a new session. */
   start(cfg: SessionConfig) {
     const prevCar = this.config?.carId
+    this.endTeamRace()
+    this.timeScale = 1
     this.config = cfg
     this.mode = cfg.mode
     this.track = this.getTrack(cfg.trackId)
@@ -180,7 +216,7 @@ export class Game {
     }
     if (cfg.mode === 'race' || cfg.mode === 'online') {
       this.phase = 'grid'
-      this.countdown = 4.5
+      this.countdown = this.countdownTotal = 4.5
       for (const c of this.cars) c.sim.frozen = true
     } else if (cfg.mode === 'attract') {
       this.phase = 'racing'
@@ -215,8 +251,50 @@ export class Game {
     // cars behind the line start at "lap 0" with negative progress
     t.distance = t.s > this.track.length / 2 ? t.s - this.track.length : t.s
     t.lapStartTime = this.sessionTime
-    t.started = this.mode === 'race' || this.mode === 'online' ? false : t.distance > 0
+    t.started = this.mode === 'race' || this.mode === 'online' || this.mode === 'team' ? false : t.distance > 0
     t.trace = new Float32Array(Math.ceil(this.track.length / 10) + 1)
+  }
+
+  /** Team race: every car is AI driven, the player runs the pit wall. Cars are given in grid order. */
+  startTeam(trackId: string, laps: number, cars: TeamEntryConfig[]) {
+    this.endTeamRace()
+    this.timeScale = 1
+    this.config = { mode: 'team', trackId, carId: cars[0]?.carId ?? 'vanta-gt3', color: '#fff', opponents: cars.length, laps, aiSkill: 1, playerName: '' }
+    this.mode = 'team'
+    this.track = this.getTrack(trackId)
+    this.world = new PhysicsWorld(this.track)
+    this.cars = []
+    this.player = null
+    this.finishOrder = []
+    this.totalLaps = laps
+    this.raceTime = 0
+    this.sessionTime = 0
+    const slots = this.gridPositions(cars.length)
+    cars.forEach((cfg, i) => {
+      const v = new Vehicle(getCar(cfg.carId), cfg.setup)
+      const g = slots[i]
+      v.reset(g.x, g.z, g.yaw, this.track)
+      const sim = this.world.addCar(cfg.id, v)
+      const ai = new AIDriver(v, this.track, cfg.skill, 0.5)
+      ai.id = cfg.id
+      const e = this.addEntry(cfg.id, cfg.name, cfg.carId, cfg.color, sim, false)
+      e.ai = ai
+      e.teamId = cfg.teamId
+      e.accent = cfg.accent
+      e.number = cfg.number
+      e.code = cfg.code
+      sim.frozen = true
+    })
+    this.phase = 'grid'
+    this.countdown = this.countdownTotal = TEAM_COUNTDOWN + 0.3 + Math.random() * 1.1
+    for (const c of this.cars) this.initTiming(c)
+    this.version++
+    this.emit({ type: 'session' })
+  }
+
+  endTeamRace() {
+    this.teamRace?.dispose()
+    this.teamRace = null
   }
 
   gridPositions(count: number) {
@@ -321,7 +399,7 @@ export class Game {
 
   /** Called every frame before rendering. */
   update(dt: number) {
-    dt = Math.min(dt, 0.1)
+    dt = Math.min(dt, 0.1) * this.timeScale
     const tr = this.track
     this.sessionTime += dt
 
@@ -407,6 +485,7 @@ export class Game {
     }
 
     // physics
+    this.teamRace?.beforePhysics(dt)
     this.world.update(dt)
 
     if (this.mode === 'online' && this.player) net.tick(dt, this.player.sim.vehicle, this.player.timing.distance, this.player.timing.lap)
@@ -423,6 +502,7 @@ export class Game {
       }
     }
     this.updatePositions()
+    this.teamRace?.afterPhysics(dt)
     this.world.events.length = Math.min(this.world.events.length, 64)
   }
 
@@ -529,7 +609,7 @@ export class Game {
     t.valid = true
     t.deltaToBest = 0
     if (t.trace) t.trace.fill(0)
-    if ((this.mode === 'race' || this.mode === 'online') && t.lap >= this.totalLaps && !t.finished) {
+    if ((this.mode === 'race' || this.mode === 'online' || this.mode === 'team') && t.lap >= this.totalLaps && !t.finished) {
       t.finished = true
       t.finishTime = this.raceTime
       this.finishOrder.push(c.id)
@@ -537,7 +617,10 @@ export class Game {
       this.emit({ type: 'finish', car: c.id, position: t.position })
       if (c.isPlayer && this.mode === 'online') net.send({ type: 'finish', time: t.finishTime, bestLap: t.best })
       if (c.isPlayer) this.phase = 'finished'
-      if (c.ai) c.ai.skill *= 0.85 // cool-down lap
+      if (c.ai) {
+        c.ai.skill *= 0.85 // cool-down lap
+        c.ai.rebuildProfile()
+      }
     }
   }
 

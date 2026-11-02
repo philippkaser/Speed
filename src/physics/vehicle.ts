@@ -217,20 +217,43 @@ export class Vehicle {
     this.applySetup(this.setup)
   }
 
+  /** fuel on board (kg); the tank sits at the centre of gravity */
+  fuel = 0
+  /** tank empty: the engine gets no fuel */
+  fuelCut = false
+
+  /** Sprung mass and inertia from spec, ballast and fuel. */
+  private updateMass() {
+    const sp = this.spec
+    const unsprung = 2 * (sp.suspFront.unsprungMass + sp.suspRear.unsprungMass)
+    this.mass = sp.mass + this.setup.ballast + this.fuel - unsprung
+    this.invMass = 1 / this.mass
+    const m = this.mass
+    const iyaw = m * this.a * this.b * 0.92 * sp.inertiaScale[1]
+    this.inertia.set(iyaw * 0.94 * sp.inertiaScale[0], iyaw, (m * ((sp.width * 0.8) ** 2 + (sp.height * 0.7) ** 2)) / 12 * sp.inertiaScale[2])
+  }
+
+  /** Total mass including unsprung parts, ballast and fuel (kg). */
+  get totalMass() {
+    return this.spec.mass + this.setup.ballast + this.fuel
+  }
+
+  setFuel(kg: number) {
+    this.fuel = Math.max(0, kg)
+    this.fuelCut = this.fuel <= 0 && this.fuelTracked
+    this.updateMass()
+  }
+  /** fuel is only simulated where a session asks for it (team races) */
+  fuelTracked = false
+
   /** (Re)derive all physical parameters from spec + setup. Keeps dynamic state. */
   applySetup(setup: CarSetup) {
     this.setup = { ...setup }
     const sp = this.spec
     const st = this.setup
-    const unsprung = 2 * (sp.suspFront.unsprungMass + sp.suspRear.unsprungMass)
-    const totalMass = sp.mass + st.ballast
-    this.mass = totalMass - unsprung
-    this.invMass = 1 / this.mass
     this.b = sp.wheelbase * sp.weightFront
     this.a = sp.wheelbase - this.b
-    const m = this.mass
-    const iyaw = m * this.a * this.b * 0.92 * sp.inertiaScale[1]
-    this.inertia.set(iyaw * 0.94 * sp.inertiaScale[0], iyaw, m * ((sp.width * 0.8) ** 2 + (sp.height * 0.7) ** 2) / 12 * sp.inertiaScale[2])
+    this.updateMass()
 
     const compound = COMPOUNDS[st.compound] ?? COMPOUNDS.RM
     const rhF = st.rideHeightF / 1000,
@@ -339,7 +362,8 @@ export class Vehicle {
   }
 
   /** Place the car at rest on the ground at the given position and heading (yaw, rad). */
-  reset(x: number, z: number, yaw: number, ground: Ground) {
+  /** Place the car at rest. keepTyres preserves tread, temperatures, flat spots and brake heat. */
+  reset(x: number, z: number, yaw: number, ground: Ground, keepTyres = false) {
     const s = makeSample()
     ground.sample(x, z, s)
     this.q.setFromAxisAngle(0, 1, 0, yaw)
@@ -365,13 +389,17 @@ export class Vehicle {
       wh.c = wh.cStatic
       wh.vWheel = 0
       wh.omega = 0
-      wh.tyre.reset(72, wh.tyre.coldPressure)
-      wh.tyre.surfTemp = wh.tyre.coreTemp = 72
+      if (!keepTyres) {
+        wh.tyre.reset(72, wh.tyre.coldPressure)
+        wh.tyre.surfTemp = wh.tyre.coreTemp = 72
+        wh.brakeTemp = 180
+        wh.flatSpot = 0
+      } else {
+        wh.tyre.u = wh.tyre.v = 0
+      }
       wh.deflPrev = 0
       wh.sample.hint = -1
       wh.absFactor = 1
-      wh.brakeTemp = 180
-      wh.flatSpot = 0
     }
     this.engine.omega = this.spec.engine.idleRpm * (Math.PI / 30)
     this.engine.boost = 0
@@ -1010,7 +1038,7 @@ export class Vehicle {
     const W = this.wheels
     // free accelerations
     for (let i = 0; i < 4; i++) W[i].omega += (W[i].driveTorque / W[i].inertia) * h
-    const Te = engineTorque(sp.engine, eng, throttle, h, rnd)
+    const Te = engineTorque(sp.engine, eng, this.fuelCut ? 0 : throttle, h, rnd)
     // drivetrain losses: ~9% of positive crank torque + viscous drag on the driven wheels
     eng.omega += ((Te > 0 ? Te * 0.91 : Te) / sp.engine.inertia) * h
     W[2].omega -= W[2].omega * 0.35 * h / W[2].inertia

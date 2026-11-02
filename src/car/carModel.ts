@@ -107,9 +107,9 @@ function numberTexture(num: number) {
   })
 }
 
-export function paintMaterial(base: string, body: BodyDef, num: number) {
+export function paintMaterial(base: string, body: BodyDef, num: number, accentColor?: string) {
   const c = new THREE.Color(base)
-  const accent = contrastColor(c)
+  const accent = accentColor ? new THREE.Color(accentColor) : contrastColor(c)
   const m = new THREE.MeshPhysicalNodeMaterial({ clearcoat: 1, clearcoatRoughness: 0.035 })
   const p = positionLocal
   const ax = abs(p.x)
@@ -366,7 +366,12 @@ function strip(parts: THREE.BufferGeometry[]) {
 
 let numberSeq = 3
 
-export function buildCarModel(carId: string, paint: string, lod = 0): CarModel {
+export interface Livery {
+  accent?: string
+  number?: number
+}
+
+export function buildCarModel(carId: string, paint: string, lod = 0, livery?: Livery): CarModel {
   const spec = getCar(carId)
   const body = makeBody(spec)
   const root = new THREE.Group()
@@ -376,12 +381,12 @@ export function buildCarModel(carId: string, paint: string, lod = 0): CarModel {
 
   const headU = uniform(3.5)
   const tailU = uniform(0.7)
-  const num = numberSeq++ % 99
+  const num = livery?.number ?? numberSeq++ % 99
   const trimMat = new THREE.MeshStandardNodeMaterial({ color: 0x08090a, roughness: 0.45, metalness: 0.1 })
   const wellMat = new THREE.MeshStandardNodeMaterial({ color: 0x030303, roughness: 0.95 })
   const carbon = carbonMaterial()
   const materials: THREE.Material[] = []
-  materials[Mat.Paint] = paintMaterial(paint, body, num)
+  materials[Mat.Paint] = paintMaterial(paint, body, num, livery?.accent)
   materials[Mat.Glass] = glassMaterial()
   materials[Mat.Trim] = trimMat
   materials[Mat.Carbon] = carbon

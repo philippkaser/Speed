@@ -90,7 +90,8 @@ export function Title() {
   )
 }
 
-const MENU: { id: 'race' | 'trial' | 'online' | 'garage' | 'settings'; t: string; d: string }[] = [
+const MENU: { id: 'team' | 'race' | 'trial' | 'online' | 'garage' | 'settings'; t: string; d: string }[] = [
+  { id: 'team', t: 'Team Principal', d: 'Run a two-car team from the pit wall: setups, tyres, fuel and pit calls, live on TV.' },
   { id: 'race', t: 'Race', d: 'Grid start against AI drivers on the Autodromo Valle Alta.' },
   { id: 'trial', t: 'Time Trial', d: 'Hot laps, ghost delta and sector times. Find the limit.' },
   { id: 'online', t: 'Online', d: 'Race friends in real time. Create or join a lobby.' },
@@ -104,7 +105,10 @@ export function Home() {
   const st = carStats(spec)
   const pick = (id: (typeof MENU)[number]['id']) => {
     audio.init()
-    if (id === 'race') {
+    if (id === 'team') {
+      g.set({ sessionKind: 'team' })
+      g.setScreen('teamHQ')
+    } else if (id === 'race') {
       g.set({ sessionKind: 'race' })
       g.setScreen('raceSetup')
     } else if (id === 'trial') {

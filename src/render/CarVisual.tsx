@@ -13,7 +13,7 @@ const _q2 = new THREE.Quaternion()
 export const carPoses = new Map<string, { pos: THREE.Vector3; quat: THREE.Quaternion; model?: CarModel }>()
 
 export function CarVisual({ entry, lod = 0 }: { entry: CarEntry; lod?: number }) {
-  const model = useMemo(() => buildCarModel(entry.carId, entry.color, lod), [entry.carId, entry.color, lod])
+  const model = useMemo(() => buildCarModel(entry.carId, entry.color, lod, { accent: entry.accent, number: entry.number }), [entry.carId, entry.color, lod, entry.accent, entry.number])
   useEffect(() => {
     const pose = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), model }
     carPoses.set(entry.id, pose)

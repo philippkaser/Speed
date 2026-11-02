@@ -464,15 +464,7 @@ export function Scenery({ track, heights }: { track: Track; heights: TerrainHeig
         m.receiveShadow = true
         g.add(m)
       }
-      // pit lane surface
-      const laneGeo = new THREE.PlaneGeometry(300, 18)
-      laneGeo.rotateX(-Math.PI / 2)
-      const lane = new THREE.Mesh(laneGeo, new THREE.MeshStandardNodeMaterial({ color: 0x2a2b2c, roughness: 0.82 }))
-      const lp = at(sMid, track.L.wall[i] + 9.5)
-      lane.position.set(lp.x, lp.y + 0.01, lp.z)
-      lane.rotation.y = yawAt(sMid) - Math.PI / 2
-      lane.receiveShadow = true
-      g.add(lane)
+      // the pit lane surface, boxes and crews are built by PitLaneScene
     }
 
     // ---- start light gantry

@@ -17,7 +17,7 @@ export interface TrafficCar {
 export function speedProfileFor(v: Vehicle, track: Track, skill = 1, out?: Float32Array) {
   const sp = v.spec
   const cp = COMPOUNDS[v.setup.compound] ?? COMPOUNDS.RM
-  const m = sp.mass + v.setup.ballast
+  const m = v.totalMass
   const peakPower = Math.max(...sp.engine.torque.map(([rpm, t]) => (t * rpm * Math.PI) / 30)) * 0.9
   return track.computeSpeedProfile(
     {
@@ -40,6 +40,11 @@ export class AIDriver {
   reverseTime = 0
   s = 0
   d = 0
+  /** 0..1: commits to a pass (brakes later when alongside a car it is overtaking) */
+  attack = 0
+  /** driver error: carries this much extra speed into the corners while overdriveTime > 0 */
+  overdrive = 0
+  overdriveTime = 0
   private steerPrev = 0
   private trace = 0
   id = ''
@@ -78,6 +83,7 @@ export class AIDriver {
     // ---- traffic: pick a lane to pass slower cars ahead
     let blockSpeed = Infinity
     let wantOffset = 0
+    let alongside = false
     for (const o of traffic) {
       if (o.id === this.id) continue
       let ds = o.s - this.s
@@ -98,6 +104,7 @@ export class AIDriver {
       }
       // side by side: keep away
       if (Math.abs(ds) < 6 && Math.abs(lat) < 2.6) wantOffset += (lat > 0 ? -1 : 1) * 1.5
+      if (ds > -3 && ds < 9 && Math.abs(lat) > 1.6 && Math.abs(lat) < 4.5) alongside = true
     }
     this.targetOffset = wantOffset
     this.offset = lerp(this.offset, this.targetOffset, clamp(dt * 1.2, 0, 1))
@@ -136,6 +143,12 @@ export class AIDriver {
     // reduce target if off line (driving on the wrong part of the track)
     const lineErr = Math.abs(this.d - (tr.racing[tr.idx(this.s)] + this.offset))
     vt *= clamp(1 - Math.max(0, lineErr - 2) * 0.03, 0.75, 1)
+    // a committed pass: out-brake the car alongside
+    if (alongside && this.attack > 0) vt *= 1 + 0.045 * this.attack
+    if (this.overdriveTime > 0) {
+      this.overdriveTime -= dt
+      vt *= 1 + this.overdrive
+    }
     vt = Math.min(vt, blockSpeed)
     const err = vt - speed
     let throttle = 0,
@@ -183,6 +196,6 @@ export class AIDriver {
     const s = this.s - 10
     const i = tr.idx(s)
     const p = tr.pointAt(s, tr.racing[i], { x: 0, y: 0, z: 0 })
-    this.vehicle.reset(p.x, p.z, tr.headingAt(s), tr)
+    this.vehicle.reset(p.x, p.z, tr.headingAt(s), tr, true)
   }
 }

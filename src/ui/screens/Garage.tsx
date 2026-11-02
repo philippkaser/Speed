@@ -153,12 +153,23 @@ export function Tuning() {
   const carId = g.career.carId
   const spec = getCar(carId)
   const setup: CarSetup = g.career.setups[carId] ?? spec.defaultSetup
-  const set = (patch: Partial<CarSetup>) => {
-    const next = { ...setup, ...patch }
-    g.updateCareer((c) => ({ ...c, setups: { ...c.setups, [carId]: next } }))
-    // live update of the showroom / track car
-    if (game.player) game.player.sim.vehicle.applySetup(next)
-  }
+  return (
+    <SetupSheet
+      carId={carId}
+      setup={setup}
+      onChange={(next) => {
+        g.updateCareer((c) => ({ ...c, setups: { ...c.setups, [carId]: next } }))
+        // live update of the showroom / track car
+        if (game.player) game.player.sim.vehicle.applySetup(next)
+      }}
+    />
+  )
+}
+
+/** Full setup sheet for one car (used by the garage and the team HQ). */
+export function SetupSheet({ carId, setup, onChange, hideCompound = false }: { carId: string; setup: CarSetup; onChange: (s: CarSetup) => void; hideCompound?: boolean }) {
+  const spec = getCar(carId)
+  const set = (patch: Partial<CarSetup>) => onChange({ ...setup, ...patch })
   const fF = rideFrequency(setup.springF, cornerSprungMass(spec, true, setup))
   const fR = rideFrequency(setup.springR, cornerSprungMass(spec, false, setup))
   const clF = spec.aero.clAFront + setup.wingF * spec.aero.wingFrontStep
@@ -196,10 +207,12 @@ export function Tuning() {
         </div>
       </div>
       <div className="section-title">Tyres</div>
-      <div className="field" style={{ gridTemplateColumns: '1fr auto' }}>
-        <div className="lab">Compound</div>
-        <Segmented options={Object.values(COMPOUNDS).map((c) => ({ value: c.id, label: c.id }))} value={setup.compound} onChange={(v) => set({ compound: v })} />
-      </div>
+      {!hideCompound && (
+        <div className="field" style={{ gridTemplateColumns: '1fr auto' }}>
+          <div className="lab">Compound</div>
+          <Segmented options={Object.values(COMPOUNDS).map((c) => ({ value: c.id, label: c.id }))} value={setup.compound} onChange={(v) => set({ compound: v })} />
+        </div>
+      )}
       {dual('pressureF', 'pressureR', 'Cold pressure', 1.1, 2.8, 0.05, 'bar', (v) => v.toFixed(2))}
       <div className="section-title">Brakes</div>
       <Slider label="Brake balance" sub="Share of braking torque at the front" value={setup.brakeBias} min={0.45} max={0.75} step={0.005} unit="% F" format={(v) => (v * 100).toFixed(1)} onChange={(v) => set({ brakeBias: v })} />
@@ -222,7 +235,7 @@ export function Tuning() {
       <Slider label="Final drive" sub="Lower = higher top speed" value={setup.finalDrive} min={2.6} max={4.4} step={0.01} format={(v) => v.toFixed(2)} onChange={(v) => set({ finalDrive: v })} />
       <Slider label="Ballast" value={setup.ballast} min={0} max={120} step={5} unit="kg" onChange={(v) => set({ ballast: v })} />
       <div className="row" style={{ marginTop: 18, justifyContent: 'flex-end' }}>
-        <Btn ghost sound="back" onClick={() => set({ ...spec.defaultSetup })}>
+        <Btn ghost sound="back" onClick={() => set({ ...spec.defaultSetup, compound: setup.compound })}>
           Reset to default
         </Btn>
       </div>

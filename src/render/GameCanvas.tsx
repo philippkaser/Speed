@@ -13,6 +13,7 @@ import { Effects } from './Effects'
 import { Environment } from './Environment'
 import { PostFX } from './PostFX'
 import { TrackScene } from './TrackScene'
+import { PitLaneScene } from './PitLaneScene'
 import { RacingLine } from './RacingLine'
 import { Ghost } from './Ghost'
 import { ReflectionProbe } from './ReflectionProbe'
@@ -158,6 +159,7 @@ function World() {
     <>
       <Environment hour={hour} focus={{ current: cameraFocus }} />
       <TrackScene track={track} />
+      <PitLaneScene key={'pit' + version} track={track} />
       {!debugFlag('nocar') && cars.map((c) => (
         <CarVisual key={c.id + ':' + version} entry={c} lod={c.isPlayer ? 0 : 1} />
       ))}

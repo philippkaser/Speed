@@ -1,6 +1,8 @@
 import { Component, type ReactNode, useEffect } from 'react'
 import { reportGpuError } from './render/gpuHealth'
 import { startAttract, startDriving, startShowroom } from './game/session'
+import { startTeamRace, teamRace } from './team/session'
+import { director } from './render/broadcastCam'
 import { input } from './input/input'
 import { GameCanvas } from './render/GameCanvas'
 import { useGameStore } from './state/gameStore'
@@ -12,12 +14,17 @@ export function App() {
   useEffect(() => {
     input.attach()
     // small handle for automated tests / debugging from the console
-    ;(window as unknown as { speed: object }).speed = { store: useGameStore, settings: useSettings, game, setCamera: (c: string) => useGameStore.getState().set({ camera: c as never }) }
+    ;(window as unknown as { speed: object }).speed = { store: useGameStore, settings: useSettings, game, director, teamRace, setCamera: (c: string) => useGameStore.getState().set({ camera: c as never }) }
     // URL shortcuts (handy for testing): ?drive, ?race, ?showroom, ?car=<id>
     const p = new URLSearchParams(location.search)
     const car = p.get('car')
     if (car) useGameStore.getState().updateCareer((c) => ({ ...c, carId: car }))
-    if (p.has('drive') || p.has('race')) {
+    if (p.has('team')) {
+      startTeamRace()
+    } else if (p.has('hq')) {
+      startAttract()
+      useGameStore.getState().set({ screen: 'teamHQ', sessionKind: 'team' })
+    } else if (p.has('drive') || p.has('race')) {
       startDriving(p.has('race') ? 'race' : 'practice')
       useGameStore.getState().set({ screen: 'driving' })
     } else if (p.has('showroom')) {

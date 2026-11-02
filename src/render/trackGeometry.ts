@@ -1,5 +1,6 @@
 // Geometry generation for the circuit: road, kerbs, runoff, verges, terrain, barriers, markings.
 import * as THREE from 'three/webgpu'
+import { inPitGap } from '../track/pitlane'
 import { makeSample, Surface } from '../physics/ground'
 import { clamp, lerp, smoothstep, valueNoise2 } from '../physics/math'
 import { DS, type Track } from '../track/track'
@@ -293,6 +294,9 @@ export class TerrainHeight {
       this.lastWallDist = b.dist
       return far
     }
+    // global nearest lookup: a hint carried along a grid row can stay latched onto another part of
+    // the circuit (two sections ~100 m apart at s 1390-1530), which raised the ground over the road
+    this.sample.hint = -1
     tr.sample(x, z, this.sample)
     const s = this.sample
     const i = tr.idx(s.s)
@@ -415,7 +419,8 @@ export function barrierKinds(track: Track) {
     for (let i = 0; i < track.n; i++) {
       const s = i * DS
       const onStraight = s > track.length - 380 || s < 420
-      if (onStraight) k[i] = 1 // concrete
+      if (side > 0 && inPitGap(track, s)) k[i] = 3 // opening for the pit road
+      else if (onStraight) k[i] = 1 // concrete
       else if (S.outer[i] === Surface.Gravel && track.speed[i] < 46) k[i] = 2 // tyre wall
       else k[i] = 0
     }
@@ -520,7 +525,7 @@ export function buildBarriers(track: Track) {
     let prev = -1
     for (let i = 0; i <= track.n; i += 4) {
       const ii = i % track.n
-      const want = track.speed[ii] > 45 || K[ii] === 1
+      const want = (track.speed[ii] > 45 || K[ii] === 1) && K[ii] !== 3
       if (!want) {
         prev = -1
         continue

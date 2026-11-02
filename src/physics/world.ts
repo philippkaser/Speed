@@ -34,6 +34,8 @@ export class SimCar {
   hullSamples: GroundSample[] = []
   slipstream = 0
   frozen = false // e.g. on the grid before the start
+  /** pose driven from outside (pit lane): no dynamics, no collisions */
+  scripted = false
   constructor(
     public id: string,
     public vehicle: Vehicle,
@@ -83,7 +85,7 @@ export class PhysicsWorld {
       this.alpha = 1
       return 0
     }
-    this.accumulator += Math.min(frameDt, 0.1)
+    this.accumulator += Math.min(frameDt, 0.25)
     let n = 0
     while (this.accumulator >= PHYSICS_DT) {
       for (const c of this.cars) c.snapshot()
@@ -103,6 +105,7 @@ export class PhysicsWorld {
 
   stepOnce(h: number) {
     for (const c of this.cars) {
+      if (c.scripted) continue
       if (c.frozen) {
         // hold position but let the engine rev on the grid
         const v = c.vehicle
@@ -119,9 +122,10 @@ export class PhysicsWorld {
       c.vehicle.step(h, c.input, this.ground, c)
     }
     // barrier / body-ground contacts at half rate (300 Hz is plenty, saves ~40% of the query cost)
-    if ((this.steps & 1) === 0) for (let i = 0; i < this.cars.length; i++) this.resolveEnvironment(i)
+    if ((this.steps & 1) === 0) for (let i = 0; i < this.cars.length; i++) if (!this.cars[i].scripted) this.resolveEnvironment(i)
     for (let i = 0; i < this.cars.length; i++) {
-      for (let j = i + 1; j < this.cars.length; j++) this.collideCars(this.cars[i], this.cars[j], i)
+      if (this.cars[i].scripted) continue
+      for (let j = i + 1; j < this.cars.length; j++) if (!this.cars[j].scripted) this.collideCars(this.cars[i], this.cars[j], i)
       for (const k of this.kinematics) if (k.active) this.collideKinematic(this.cars[i], k, i)
     }
     for (const c of this.cars) {

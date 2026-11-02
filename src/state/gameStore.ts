@@ -4,7 +4,7 @@ import { persist } from 'zustand/middleware'
 import type { DriveCam } from '../render/CameraRig'
 import { CARS, type CarSetup } from '../physics/spec'
 
-export type Screen = 'boot' | 'title' | 'home' | 'garage' | 'tuning' | 'raceSetup' | 'settings' | 'lobby' | 'loading' | 'driving' | 'results'
+export type Screen = 'boot' | 'title' | 'home' | 'garage' | 'tuning' | 'raceSetup' | 'settings' | 'lobby' | 'loading' | 'driving' | 'results' | 'teamHQ'
 
 export interface Career {
   carId: string
@@ -23,7 +23,7 @@ interface GameUIState {
   opponents: number
   aiSkill: number
   timeOfDay: number
-  sessionKind: 'practice' | 'race' | 'online'
+  sessionKind: 'practice' | 'race' | 'online' | 'team'
   sceneReady: boolean
   rendererInfo: string
   /** first fatal GPU/renderer error of this page load */

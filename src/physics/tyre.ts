@@ -274,6 +274,8 @@ export class TyreState {
   pressure = 1.9 // bar, gauge (hot)
   coldPressure = 1.6
   contactBias = 0 // lateral load bias from partial road contact (-1..1, + = left)
+  /** abrasion multiplier (race-length scaling, driving style); 1 = physical */
+  wearMul = 1
 
   slideVelocity() {
     return this.slideVel
@@ -328,6 +330,16 @@ export interface TyreInputs {
  * Advance the tyre state and compute forces in the contact frame (Fx along heading, Fy to the
  * left, Mz about the contact normal).
  */
+/**
+ * Grip left in a rib with the given tread (1 = new). A worn tread loses grip slowly and steadily
+ * (thinner, hotter-running rubber), then falls off a cliff once the compound layer is nearly gone.
+ */
+export function wearGrip(tread: number) {
+  const w = clamp(tread, 0, 1)
+  const cliff = w < 0.4 ? ((0.4 - w) / 0.4) ** 2 : 0
+  return 1 - 0.06 * (1 - w) - 0.3 * cliff
+}
+
 export function updateTyre(model: TyreModel, st: TyreState, inp: TyreInputs) {
   const cp = model.compound
   const sp = model.spec
@@ -371,7 +383,7 @@ export function updateTyre(model: TyreModel, st: TyreState, inp: TyreInputs) {
     const T = 0.62 * st.ribSurf[r] + 0.38 * st.ribBulk[r]
     const tDev = (T - cp.optTemp) / cp.tempWindow
     const tempMu = clamp(1 - cp.tempGripLoss * tDev * tDev, 0.74, 1.01)
-    const wearMu = 0.86 + 0.14 * st.ribWear[r]
+    const wearMu = wearGrip(st.ribWear[r])
     const p = model.ribPressure(Fz * st.ribLoad[r], a)
     const presMu = Math.pow(Math.max(p, 1e3) / model.pRef, -model.nP)
     st.ribMu[r] = model.muS * tempMu * wearMu * presMu * inp.surfaceGrip
@@ -468,7 +480,7 @@ function thermal(model: TyreModel, st: TyreState, inp: TyreInputs, o: BrushOut |
     toCarcass += H_BC * (B[r] - st.carcassTemp) + 0.3 * roll
     // abrasion ~ slip work on that rib (plus faster when overheated)
     const hot = S[r] > cp.optTemp + cp.tempWindow ? 1 + (S[r] - cp.optTemp - cp.tempWindow) * 0.05 : 1
-    st.ribWear[r] = Math.max(0, st.ribWear[r] - slip * cp.wearRate * 9e-9 * hot * dt)
+    st.ribWear[r] = Math.max(0, st.ribWear[r] - slip * cp.wearRate * 9e-9 * hot * st.wearMul * dt)
   }
   const hCarc = 20 + 0.8 * v
   const qC = toCarcass - hCarc * (st.carcassTemp - AMBIENT_TEMP) - H_CG * (st.carcassTemp - st.gasTemp)

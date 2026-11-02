@@ -11,6 +11,7 @@ import { useGameStore } from '../state/gameStore'
 import { carPoses } from './CarVisual'
 import { cameraPose } from '../audio/cameraPose'
 import { cameraCut } from './PostFX'
+import { broadcastCamera } from './broadcastCam'
 
 export const CAMERA_MODES = ['chase', 'chaseNear', 'cockpit', 'hood', 'bumper'] as const
 export type DriveCam = (typeof CAMERA_MODES)[number]
@@ -118,6 +119,11 @@ export function CameraRig() {
     const camMode = useGameStore.getState().camera
     s.shakeT += dt
 
+    // --------------------------------------------------------------- team race: TV broadcast
+    if (mode === 'team') {
+      broadcastCamera(cam, dt, cameraFocus)
+      return
+    }
     // --------------------------------------------------------------- attract (menu background)
     if (mode === 'attract') {
       attractCamera(cam, s, dt)
