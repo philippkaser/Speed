@@ -367,5 +367,6 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
     cockpitEye,
     bodyOffset,
     setVisibleParts,
+    wheels: wheels.map((w) => ({ pivot: w.pivot, spin: w.spin, radius: meta.wheels[w.k].radius, index: w.index })),
   } as unknown as CarModel
 }

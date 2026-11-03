@@ -7,6 +7,7 @@ import { game } from '../game/game'
 import { buildCarModel, type CarModel } from '../car/carModel'
 import { buildGltfCar, gltfState, hasGltfCar, onCarModels } from '../car/gltfCars'
 import { getCar } from '../physics/spec'
+import { registerWheels } from './motionHistory'
 
 const _q = new THREE.Quaternion()
 const _q2 = new THREE.Quaternion()
@@ -38,6 +39,20 @@ export function CarVisual({ entry, lod = 0 }: { entry: CarEntry; lod?: number })
       model.dispose()
     }
   }, [entry.id, model])
+
+  // spinning wheels: the motion blur reconstructs their rotation from the physics wheel speed
+  useEffect(
+    () =>
+      registerWheels(
+        (model.wheels ?? []).map((w) => ({
+          pivot: w.pivot,
+          spin: w.spin,
+          radius: w.radius,
+          omega: () => entry.sim.vehicle.wheels[w.index]?.omega ?? 0,
+        })),
+      ),
+    [model, entry],
+  )
 
   useFrame(() => {
     const sim = entry.sim

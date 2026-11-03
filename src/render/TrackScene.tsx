@@ -50,7 +50,8 @@ export function TrackScene({ track }: { track: Track }) {
     const b = buildBarriers(track)
     g.add(mesh(b.armco, armcoMaterial(), { cast: true, name: 'armco' }))
     g.add(mesh(b.concrete, concreteWallMaterial(), { cast: true, name: 'concrete' }))
-    const fence = mesh(b.fence, fenceMaterial(), { name: 'fence' })
+    g.add(mesh(b.fence, fenceMaterial('frame'), { name: 'fence-frame' }))
+    const fence = mesh(b.fence, fenceMaterial('wire'), { name: 'fence' })
     fence.renderOrder = 2
     g.add(fence)
     const postGeo = new THREE.BoxGeometry(0.08, 1.0, 0.12)

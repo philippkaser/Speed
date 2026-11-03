@@ -18,6 +18,8 @@ export interface CarModel {
   cockpitEye: THREE.Vector3 // in root (CoG) space
   bodyOffset: THREE.Vector3
   setVisibleParts: (opts: { body?: boolean; interior?: boolean; driver?: boolean }) => void
+  /** the four wheels: pivot (steers, rides), spin (child of pivot, turns about +x), physics index */
+  wheels?: { pivot: THREE.Object3D; spin: THREE.Object3D; radius: number; index: number }[]
 }
 
 const geometryCache = new Map<string, THREE.BufferGeometry>()
@@ -582,7 +584,7 @@ export function buildCarModel(carId: string, paint: string, lod = 0, livery?: Li
   bodyGroup.add(interior)
 
   // ---- wheels
-  const wheelGroups: { pivot: THREE.Group; spin: THREE.Group; discU: UNum }[] = []
+  const wheelGroups: { pivot: THREE.Group; spin: THREE.Group; discU: UNum; radius: number }[] = []
   const rimMat = new THREE.MeshStandardNodeMaterial({ color: spec.bodyStyle === 'coupe' ? 0x9a9ea3 : 0x1c1d20, metalness: 1, roughness: spec.bodyStyle === 'coupe' ? 0.22 : 0.32 })
   const nutMat = new THREE.MeshStandardNodeMaterial({ color: 0xc0151a, metalness: 0.6, roughness: 0.35 })
   const caliperMat = new THREE.MeshStandardNodeMaterial({ color: spec.bodyStyle === 'coupe' ? 0xd4af37 : 0xc8102e, roughness: 0.4, metalness: 0.2 })
@@ -609,7 +611,7 @@ export function buildCarModel(carId: string, paint: string, lod = 0, livery?: Li
     cal.rotation.x = 0.6
     pivot.add(cal)
     root.add(pivot)
-    wheelGroups.push({ pivot, spin, discU })
+    wheelGroups.push({ pivot, spin, discU, radius: w.r })
   }
 
   // body offset (model -> CoG space) computed on first update from the physics geometry
@@ -661,6 +663,7 @@ export function buildCarModel(carId: string, paint: string, lod = 0, livery?: Li
     })
   }
 
-  return { root, body, spec, update, dispose, cockpitEye, bodyOffset, setVisibleParts }
+  const wheels = wheelGroups.map((g, index) => ({ pivot: g.pivot, spin: g.spin, radius: g.radius, index }))
+  return { root, body, spec, update, dispose, cockpitEye, bodyOffset, setVisibleParts, wheels }
 }
 

@@ -4,7 +4,8 @@ import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo } from 'react'
 import * as THREE from 'three/webgpu'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { color, cos, float, Fn, instanceIndex, mix, positionLocal, sin, time, uniform, uv, vec3, mx_noise_float, step, texture } from 'three/tsl'
+import { color, cos, float, Fn, instanceIndex, mix, positionLocal, positionPrevious, sin, uniform, uv, vec3, mx_noise_float, step, texture } from 'three/tsl'
+import { motionTime } from './motionHistory'
 import { game } from '../game/game'
 import { valueNoise2 } from '../physics/math'
 import { useSettings } from '../state/settings'
@@ -189,7 +190,13 @@ function foliageMaterial(kind: 'needle' | 'leaf') {
   const phase = instanceIndex.toFloat().mul(1.731)
   const h = positionLocal.y.max(0)
   const sway = h.mul(h).mul(0.0012)
-  m.positionNode = positionLocal.add(vec3(sin(time.mul(1.1).add(phase)).mul(sway), 0, cos(time.mul(0.83).add(phase.mul(1.3))).mul(sway)))
+  const wind = (t: any) => vec3(sin(t.mul(1.1).add(phase)).mul(sway), 0, cos(t.mul(0.83).add(phase.mul(1.3))).mul(sway))
+  // the previous position sways too, with last frame's clock: motion vectors see the wind's motion,
+  // not the whole displacement (which smeared every tree)
+  m.positionNode = Fn(() => {
+    positionPrevious.assign(positionPrevious.add(wind(motionTime.prev)))
+    return positionLocal.add(wind(motionTime.now))
+  })()
   m.roughnessNode = float(0.85)
   const t = texture(tex, uv())
   // trunk vertices have uv (0,0) -> sample is transparent; keep them opaque via vertex colour darkness

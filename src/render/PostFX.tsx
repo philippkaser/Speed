@@ -2,7 +2,7 @@
 //   scene pass with MRT (colour, normals, diffuse albedo, metal/rough, velocity)
 //   -> SSGI (screen-space indirect diffuse + AO)  or  GTAO
 //   -> SSR (screen-space reflections, incl. dielectrics like clear coat & asphalt sheen)
-//   -> TRAA (temporal reprojection AA)  -> motion blur  -> bloom -> lens effects -> tone mapping
+//   -> TRAA (temporal reprojection AA)  -> per-object motion blur  -> bloom -> lens effects -> tone mapping
 import { useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo } from 'react'
 import * as THREE from 'three/webgpu'
@@ -31,7 +31,6 @@ import {
   vec2,
   vec3,
   vec4,
-  velocity,
   mix,
   smoothstep,
   length,
@@ -47,11 +46,11 @@ import {
 import { useSettings } from '../state/settings'
 import { reportGpuError } from './gpuHealth'
 import { debugFlag } from '../util/debug'
-import { motionBlurUniforms, reconstructMotionBlur } from './motionBlur'
-import { advanceVelocityFrame } from './velocityFix'
+import { motionBlur, motionBlurUniforms, motionDebugView } from './motionBlur'
+import { beginMotionFrame, motionBlendMode, motionVelocityOutput } from './motionHistory'
 import { particleScene, particleU, sceneDepth } from './particles'
 
-/** Set frames > 0 when the camera jumps so motion blur ignores the discontinuity. */
+/** Set frames > 0 when the camera jumps: no camera motion (blur, TAA reprojection) across the cut. */
 export const cameraCut = { frames: 0 }
 
 export const postUniforms = {
@@ -94,13 +93,20 @@ export function PostFX() {
     // RGBA8 / RGBA16F target counts as 8, so at most four targets: roughness rides in the normal
     // target's alpha and metalness in the albedo target's alpha (or a target of its own without SSGI).
     const outputs: Record<string, any> = { output }
-    if (useTAA || useMB) outputs.velocity = velocity
+    // velocity: NDC motion per frame, wheel slot, inverse depth of the surface that owns the motion
+    if (useTAA || useMB) outputs.velocity = motionVelocityOutput
     if (useSSGI || useSSR || useAO) outputs.normal = vec4(packNormalToRGB(normalView), useSSR ? roughness : float(1))
     if (useSSGI) outputs.diffuseColor = vec4(diffuseColor.rgb, useSSR ? metalness : float(0))
     else if (useSSR) outputs.metal = vec4(metalness, 0, 0, 1)
     // test switch: an over-budget G-buffer that WebGPU refuses, to exercise the WebGL2 fallback
     if (debugFlag('gpufail') && !isWebGL) for (let i = 0; i < 8; i++) outputs['fail' + i] = vec4(1)
-    scenePass.setMRT(mrt(outputs))
+    const mrtNode = mrt(outputs)
+    if (outputs.velocity) {
+      // transparent surfaces keep the motion of what is behind them; nothing drawn = infinitely far
+      mrtNode.setBlendMode('velocity', motionBlendMode)
+      mrtNode.setClearColor('velocity', 0x000000, 0)
+    }
+    scenePass.setMRT(mrtNode)
     if (outputs.fail0) for (let i = 0; i < 8; i++) scenePass.getTexture('fail' + i)
     const color = scenePass.getTextureNode('output')
     const depth = scenePass.getTextureNode('depth')
@@ -108,6 +114,11 @@ export function PostFX() {
     const normalTex = outputs.normal ? scenePass.getTextureNode('normal') : null
     const sceneNormal = normalTex ? sample((uv) => unpackRGBToNormal(normalTex.sample(uv).xyz)) : null
     const vel = outputs.velocity ? scenePass.getTextureNode('velocity') : null
+    if (vel) {
+      // carries integer wheel slots: never filtered
+      const vt = scenePass.getTexture('velocity')
+      vt.minFilter = vt.magFilter = THREE.NearestFilter
+    }
 
     let composite: any = color
     if (useSSGI && sceneNormal) {
@@ -138,6 +149,7 @@ export function PostFX() {
       composite = vec4(composite.rgb.add(r.rgb), color.a)
     }
     let out: any = composite
+    let tileDebug: any = null
     // luminance meter for auto exposure: tiny render target, read back asynchronously on the CPU
     let meter: any = null
     if (useAE) {
@@ -147,7 +159,13 @@ export function PostFX() {
     }
     if (useTAA && vel) out = upscale < 0.999 ? taau(composite, depth, vel, camera) : traa(composite, depth, vel, camera)
     else out = fxaa(composite)
-    if (useMB && vel) out = reconstructMotionBlur(convertToTexture(out), vel, depth)
+    if (useMB && vel) {
+      const taps = gfx.preset === 'ultra' ? 24 : gfx.preset === 'high' ? 20 : 14
+      const src = typeof out.getTextureNode === 'function' ? out.getTextureNode() : convertToTexture(out)
+      const node = motionBlur(src, vel, { taps, wheels: true })
+      out = node.getTextureNode()
+      if (debugFlag('showtiles')) tileDebug = node.getTileDebugNode()
+    }
     // particles (smoke, dust, sparks): own pass, soft against the scene depth, composited over the
     // lit image (premultiplied colour, transmittance in alpha). After TAA and motion blur, so they
     // neither ghost nor pick up the scene's motion vectors.
@@ -177,8 +195,11 @@ export function PostFX() {
     // debug view (?showvel): raw motion vectors, 8 levels per pixel of motion per frame,
     // |x| in red, |y| in green, signs in blue
     if (debugFlag('showvel') && vel) {
-      const px = vel.xy.mul(vec2(0.5, -0.5)).mul(vec2(screenSize))
-      rp.outputNode = vec4(px.abs().mul(8 / 255), float(px.x.greaterThan(0)).mul(0.5).add(float(px.y.greaterThan(0)).mul(0.25)), 1)
+      rp.outputNode = motionDebugView(vel)
+      rp.outputColorTransform = false
+    }
+    if (tileDebug) {
+      rp.outputNode = tileDebug
       rp.outputColorTransform = false
     }
     ;(rp as any).__meter = meter
@@ -188,18 +209,20 @@ export function PostFX() {
   useEffect(() => () => pipeline.dispose(), [pipeline])
 
   useFrame((_, dt) => {
-    // constant shutter: blur length corresponds to 1/60 s regardless of frame rate; none across camera cuts
     const cut = cameraCut.frames > 0
     if (cut) cameraCut.frames--
-    // shutter: the setting is the exposure as a fraction of 1/60 s, whatever the frame rate
-    const shutter = cut ? 0 : gfx.motionBlur * Math.min(3, 1 / 60 / Math.max(dt, 1e-3))
+    // constant exposure: the setting is the shutter time as a fraction of 1/60 s, whatever the frame
+    // rate (motion vectors span one frame, so they are scaled by exposure / frame time)
+    const frameDt = Math.max(dt, 1e-3)
+    const shutter = gfx.motionBlur * Math.min(3, 1 / 60 / frameDt)
     postUniforms.motionBlur.value = shutter
     const mb = motionBlurUniforms
     mb.shutter.value = shutter
-    mb.near.value = particleU.near.value = camera.near
-    mb.far.value = particleU.far.value = camera.far
     mb.frame.value = (mb.frame.value + 1) % 1024
-    advanceVelocityFrame()
+    particleU.near.value = camera.near
+    particleU.far.value = camera.far
+    // a cut drops the camera's motion for that frame; objects keep theirs
+    beginMotionFrame(scene, camera, { cut, exposure: shutter * frameDt, dt: frameDt })
     if ((pipeline as any).__broken) {
       renderer.render(scene, camera)
       return

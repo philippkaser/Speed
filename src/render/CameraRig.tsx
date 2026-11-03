@@ -27,6 +27,9 @@ const _v = new THREE.Vector3(),
 
 export const cameraFocus = new THREE.Vector3()
 
+const _params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : null
+const SIDECAM = _params?.has('sidecam') ? _params.get('sidecam') || 'side' : null
+
 const _prevCam = new THREE.Vector3()
 function publishPose(cam: THREE.PerspectiveCamera, dt: number) {
   const p = cameraPose
@@ -157,6 +160,54 @@ export function CameraRig() {
       cam.near = 0.1
       s.initialized = true
       pose.model?.setVisibleParts({ body: true, interior: true })
+      return
+    }
+
+    // --------------------------------------------------------------- debug: tracking shot alongside
+    // (?sidecam, ?sidecam=front|rear) to look at wheels and background streaks side-on
+    if (SIDECAM) {
+      const heading = Math.atan2(_fwd.x, _fwd.z)
+      if (!s.initialized) {
+        s.yaw = heading
+        s.initialized = true
+        cameraCut.frames = 3
+      }
+      s.yaw += angleDiff(heading, s.yaw) * clamp(dt * 4, 0, 1)
+      if (SIDECAM === 'post') {
+        // fixed camera beside the track, 9 m ahead of where the car was when window.__postcam was set
+        const w = window as unknown as { __postcam?: boolean }
+        if (w.__postcam) {
+          w.__postcam = false
+          _v2.set(Math.cos(heading), 0, -Math.sin(heading))
+          s.tvPos.copy(carPos).addScaledVector(_fwd, 9).addScaledVector(_v2, 6.5)
+          s.tvPos.y = carPos.y + 0.7
+          s.pos.copy(carPos).addScaledVector(_fwd, 9)
+          s.pos.y = carPos.y + 0.4
+          cameraCut.frames = 1
+        }
+        cam.position.copy(s.tvPos)
+        cam.up.set(0, 1, 0)
+        cam.lookAt(s.pos)
+        cam.fov = 50
+        cam.near = 0.1
+        cam.far = 12000
+        cam.updateProjectionMatrix()
+        cameraFocus.copy(carPos)
+        return
+      }
+      const off = SIDECAM === 'front' ? 0.9 : SIDECAM === 'rear' ? 2.4 : 1.57
+      const a = s.yaw + off
+      _v.set(carPos.x + Math.sin(a) * 4.8, carPos.y + 0.45, carPos.z + Math.cos(a) * 4.8)
+      cam.position.copy(_v)
+      _look.copy(carPos).add(_v2.set(0, 0.35, 0))
+      cam.up.set(0, 1, 0)
+      cam.lookAt(_look)
+      cam.fov = 42
+      cam.near = 0.1
+      cam.far = 12000
+      cam.updateProjectionMatrix()
+      cameraFocus.copy(carPos)
+      pose.model?.setVisibleParts({ body: true, interior: true, driver: true })
       return
     }
 

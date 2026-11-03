@@ -219,8 +219,14 @@ export function concreteWallMaterial() {
   return m
 }
 
-export function fenceMaterial() {
-  const m = new THREE.MeshStandardNodeMaterial({ side: THREE.DoubleSide, transparent: true, depthWrite: false })
+/**
+ * Catch fence in two layers: the posts and the top rail are solid (alpha tested, so they write depth
+ * and motion and streak with the barriers), the wire mesh is a blended veil that keeps the motion of
+ * whatever is seen through it.
+ */
+export function fenceMaterial(part: 'wire' | 'frame' = 'wire') {
+  const solid = part === 'frame'
+  const m = new THREE.MeshStandardNodeMaterial({ side: THREE.DoubleSide, transparent: !solid, depthWrite: solid, alphaTest: solid ? 0.5 : 0 })
   const s = uv().x,
     h = uv().y
   // diamond wire mesh
@@ -232,7 +238,8 @@ export function fenceMaterial() {
   m.colorNode = vec3(0.35, 0.36, 0.37)
   m.metalnessNode = float(0.7)
   m.roughnessNode = float(0.45)
-  m.opacityNode = clamp(wire.mul(0.55).add(post).add(top), 0, 1).mul(min(float(1), float(1)))
+  const frame = clamp(post.add(top), 0, 1)
+  m.opacityNode = solid ? frame : clamp(wire.mul(0.55), 0, 1).mul(frame.oneMinus())
   return m
 }
 
