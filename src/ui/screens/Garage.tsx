@@ -5,6 +5,7 @@ import { CARS, COMPOUNDS, cornerSprungMass, getCar, rideFrequency, type CarSetup
 import { useGameStore } from '../../state/gameStore'
 import { Btn, Segmented, Slider } from '../components'
 import { BottomBar, carStats, TopBar } from './Home'
+import { GLTF_CARS } from '../../car/gltfCars'
 
 const PAINTS = ['#c8102e', '#e4002b', '#ff6f00', '#f5b800', '#2e7d32', '#00838f', '#0d47a1', '#1d3b6e', '#6a1b9a', '#f2f2f0', '#9ea3a8', '#3c4045', '#0a0a0c', '#b08d57', '#00bcd4', '#c51162']
 
@@ -50,6 +51,27 @@ export function Garage() {
                 )
               })}
             </div>
+            {carId === 'vanta-gt3' && (
+              <>
+                <div className="section-title" style={{ marginTop: 22 }}>
+                  Bodywork
+                </div>
+                <div className="car-list">
+                  {GLTF_CARS.map((m) => (
+                    <button
+                      key={m.id}
+                      className={'car-item' + ((g.career.gt3Model ?? 'ferrari-296-gt3') === m.id ? ' on' : '')}
+                      onClick={() => {
+                        g.updateCareer((c) => ({ ...c, gt3Model: m.id }))
+                        setTimeout(startShowroom, 0)
+                      }}
+                    >
+                      <div className="n">{m.name}</div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
             <div className="section-title" style={{ marginTop: 22 }}>
               Paint
             </div>

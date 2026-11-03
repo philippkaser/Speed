@@ -198,7 +198,7 @@ export function CameraRig() {
 
     const model = pose.model
     const inside = camMode === 'cockpit' || camMode === 'hood' || camMode === 'bumper'
-    model?.setVisibleParts({ body: camMode !== 'hood' && camMode !== 'bumper', interior: true })
+    model?.setVisibleParts({ body: camMode !== 'hood' && camMode !== 'bumper', interior: true, driver: camMode !== 'cockpit' || lookBack })
 
     if (!inside || lookBack) {
       const near = camMode === 'chaseNear'

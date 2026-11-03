@@ -19,6 +19,8 @@ export interface Driver {
 }
 
 export interface Team {
+  /** detailed car model (src/car/gltfCars.ts) */
+  model?: 'ferrari-296-gt3' | 'amg-gt3'
   id: string
   name: string
   short: string
@@ -34,6 +36,7 @@ const d = (id: string, first: string, last: string, code: string, number: number
 export const RIVAL_TEAMS: Team[] = [
   {
     id: 'nordkap',
+    model: 'amg-gt3',
     name: 'Nordkap Racing',
     short: 'NKR',
     color: '#0b3d91',
@@ -43,6 +46,7 @@ export const RIVAL_TEAMS: Team[] = [
   },
   {
     id: 'ferro',
+    model: 'ferrari-296-gt3',
     name: 'Ferro Corse',
     short: 'FER',
     color: '#a30d16',
@@ -52,6 +56,7 @@ export const RIVAL_TEAMS: Team[] = [
   },
   {
     id: 'halcyon',
+    model: 'amg-gt3',
     name: 'Halcyon Motorsport',
     short: 'HAL',
     color: '#00897b',
@@ -61,6 +66,7 @@ export const RIVAL_TEAMS: Team[] = [
   },
   {
     id: 'kitsune',
+    model: 'ferrari-296-gt3',
     name: 'Kitsune GP',
     short: 'KIT',
     color: '#ff6d00',
@@ -70,6 +76,7 @@ export const RIVAL_TEAMS: Team[] = [
   },
   {
     id: 'solano',
+    model: 'amg-gt3',
     name: 'Solano Works',
     short: 'SOL',
     color: '#f2f2ef',
@@ -82,6 +89,7 @@ export const RIVAL_TEAMS: Team[] = [
 export function defaultPlayerTeam(): Team {
   return {
     id: 'player',
+    model: 'ferrari-296-gt3',
     name: 'Apex Valley Racing',
     short: 'AVR',
     color: '#111316',

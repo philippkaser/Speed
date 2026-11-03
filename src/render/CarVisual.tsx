@@ -1,10 +1,12 @@
 import { Html } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three/webgpu'
 import type { CarEntry } from '../game/game'
 import { game } from '../game/game'
 import { buildCarModel, type CarModel } from '../car/carModel'
+import { buildGltfCar, gltfState, hasGltfCar, onCarModels } from '../car/gltfCars'
+import { getCar } from '../physics/spec'
 
 const _q = new THREE.Quaternion()
 const _q2 = new THREE.Quaternion()
@@ -12,8 +14,22 @@ const _q2 = new THREE.Quaternion()
 /** Pose of every car in the current frame (interpolated), shared with cameras & effects. */
 export const carPoses = new Map<string, { pos: THREE.Vector3; quat: THREE.Quaternion; model?: CarModel }>()
 
+/** accent for cars without a team livery: light on dark paint, dark on light paint */
+function autoAccent(color: string) {
+  const c = new THREE.Color(color)
+  return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b > 0.35 ? '#141518' : '#e9ebee'
+}
+
 export function CarVisual({ entry, lod = 0 }: { entry: CarEntry; lod?: number }) {
-  const model = useMemo(() => buildCarModel(entry.carId, entry.color, lod, { accent: entry.accent, number: entry.number }), [entry.carId, entry.color, lod, entry.accent, entry.number])
+  const [modelsReady, setModelsReady] = useState(gltfState.ready)
+  useEffect(() => onCarModels(() => setModelsReady(gltfState.ready)), [])
+  const model = useMemo(
+    () =>
+      modelsReady && hasGltfCar(entry.model)
+        ? buildGltfCar(entry.model, getCar(entry.carId), { color: entry.color, accent: entry.accent ?? autoAccent(entry.color), uniqueMaterials: entry.isPlayer })
+        : buildCarModel(entry.carId, entry.color, lod, { accent: entry.accent, number: entry.number }),
+    [entry.carId, entry.color, lod, entry.accent, entry.number, entry.model, entry.isPlayer, modelsReady],
+  )
   useEffect(() => {
     const pose = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), model }
     carPoses.set(entry.id, pose)

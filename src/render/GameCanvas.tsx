@@ -18,6 +18,7 @@ import { RacingLine } from './RacingLine'
 import { Ghost } from './Ghost'
 import { ReflectionProbe } from './ReflectionProbe'
 import { debugFlag } from '../util/debug'
+import { loadCarModels } from '../car/gltfCars'
 import { installGpuErrorHook, rendererStarted, switchToWebGL } from './gpuHealth'
 
 extend(THREE as any)
@@ -176,12 +177,19 @@ function SceneReady() {
     configureRenderer(gl as unknown as THREE.WebGPURenderer)
     let frames = 0
     let raf = 0
+    let alive = true
     const tick = () => {
       if (++frames > 3) useGameStore.getState().set({ sceneReady: true })
       else raf = requestAnimationFrame(tick)
     }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
+    // the detailed car models are part of the first impression: wait for them (at most 25 s)
+    Promise.race([loadCarModels(), new Promise((r) => setTimeout(r, 25000))]).then(() => {
+      if (alive) raf = requestAnimationFrame(tick)
+    })
+    return () => {
+      alive = false
+      cancelAnimationFrame(raf)
+    }
   }, [gl])
   return null
 }

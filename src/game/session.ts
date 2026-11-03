@@ -14,7 +14,7 @@ export function startAttract() {
 export function startShowroom() {
   const g = useGameStore.getState()
   const c = g.career
-  game.start({ mode: 'showroom', trackId: 'valle-alta', carId: c.carId, color: c.colors[c.carId], setup: c.setups[c.carId], opponents: 0, laps: 1, aiSkill: 1, playerName: useSettings.getState().playerName })
+  game.start({ gt3Model: c.gt3Model, mode: 'showroom', trackId: 'valle-alta', carId: c.carId, color: c.colors[c.carId], setup: c.setups[c.carId], opponents: 0, laps: 1, aiSkill: 1, playerName: useSettings.getState().playerName })
 }
 
 export function startDriving(kind: 'practice' | 'race') {
@@ -22,6 +22,7 @@ export function startDriving(kind: 'practice' | 'race') {
   const c = g.career
   audio.resume()
   game.start({
+    gt3Model: c.gt3Model,
     mode: kind,
     trackId: 'valle-alta',
     carId: c.carId,

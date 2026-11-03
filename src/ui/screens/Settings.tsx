@@ -4,6 +4,7 @@ import { useGameStore } from '../../state/gameStore'
 import { type QualityPreset, useSettings } from '../../state/settings'
 import { Btn, FieldRow, Segmented, Slider, Toggle } from '../components'
 import { BottomBar, TopBar } from './Home'
+import { gltfCarCredits } from '../../car/gltfCars'
 
 type Tab = 'graphics' | 'controls' | 'assists' | 'audio' | 'game'
 
@@ -117,6 +118,7 @@ export function SettingsPanel({ onClose, inGame = false }: { onClose: () => void
               />
             </FieldRow>
             <Toggle label="Show HUD" value={s.hudVisible} onChange={(v) => s.set({ hudVisible: v })} />
+            <Credits />
           </>
         )}
       </div>
@@ -257,5 +259,23 @@ function RendererRow() {
         }}
       />
     </FieldRow>
+  )
+}
+
+function Credits() {
+  const credits = gltfCarCredits()
+  if (!credits.length) return null
+  return (
+    <>
+      <div className="section-title">Credits</div>
+      {credits.map((c) => (
+        <div key={c.title} style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.5, marginBottom: 6 }}>
+          “{c.title}” by {c.author.replace(/\s*\(.*\)/, '')} · {c.license.replace(/\s*\(.*\)/, '')} ·{' '}
+          <a href={c.source} target="_blank" rel="noreferrer" style={{ color: 'var(--muted)' }}>
+            source
+          </a>
+        </div>
+      ))}
+    </>
   )
 }

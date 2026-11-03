@@ -13,6 +13,7 @@ import { Btn, fmtTime } from '../components'
 import { BottomBar, TopBar } from '../screens/Home'
 import { SetupSheet } from '../screens/Garage'
 import { TyreDot } from './Broadcast'
+import { GLTF_CARS } from '../../car/gltfCars'
 import './team.css'
 
 type Tab = 'overview' | 'setup' | 'strategy'
@@ -69,6 +70,16 @@ function TeamSide() {
               <button key={p} className={'swatch' + (p === t.accent ? ' on' : '')} style={{ background: p }} onClick={() => ts.setTeam({ accent: p })} aria-label={'accent ' + p} />
             ))}
           </div>
+        </div>
+        <div className="section-title" style={{ marginTop: 18 }}>
+          Car
+        </div>
+        <div className="seg-mini" style={{ flexWrap: 'wrap' }}>
+          {GLTF_CARS.map((m) => (
+            <button key={m.id} className={(t.model ?? 'ferrari-296-gt3') === m.id ? 'on' : ''} onClick={() => ts.setTeam({ model: m.id })}>
+              {m.name}
+            </button>
+          ))}
         </div>
         <div className="section-title" style={{ marginTop: 18 }}>
           Drivers

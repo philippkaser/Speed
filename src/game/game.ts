@@ -61,6 +61,8 @@ export interface CarEntry {
   isRemote: boolean
   timing: LapTiming
   sample: ReturnType<typeof makeSample>
+  /** detailed body for GT3 cars (src/car/gltfCars.ts) */
+  model?: 'ferrari-296-gt3' | 'amg-gt3'
   /** team race: livery and timing-screen identity */
   teamId?: string
   accent?: string
@@ -70,6 +72,7 @@ export interface CarEntry {
 
 /** One car of a team race (pit wall mode). */
 export interface TeamEntryConfig {
+  model?: 'ferrari-296-gt3' | 'amg-gt3'
   id: string
   name: string
   code: string
@@ -83,6 +86,8 @@ export interface TeamEntryConfig {
 }
 
 export interface SessionConfig {
+  /** bodywork of the player's GT3 car */
+  gt3Model?: 'ferrari-296-gt3' | 'amg-gt3'
   mode: Mode
   trackId: string
   carId: string
@@ -239,6 +244,8 @@ export class Game {
 
   private addEntry(id: string, name: string, carId: string, color: string, sim: SimCar, isPlayer: boolean): CarEntry {
     const e: CarEntry = { id, name, carId, color, sim, isPlayer, isRemote: false, timing: new LapTiming(), sample: makeSample() }
+    // GT3 class: the player's chosen bodywork, the field alternates between the two
+    if (carId === 'vanta-gt3') e.model = isPlayer ? (this.config?.gt3Model ?? 'ferrari-296-gt3') : this.cars.length % 2 === 0 ? 'amg-gt3' : 'ferrari-296-gt3'
     this.cars.push(e)
     return e
   }
@@ -280,6 +287,7 @@ export class Game {
       const e = this.addEntry(cfg.id, cfg.name, cfg.carId, cfg.color, sim, false)
       e.ai = ai
       e.teamId = cfg.teamId
+      e.model = cfg.model
       e.accent = cfg.accent
       e.number = cfg.number
       e.code = cfg.code

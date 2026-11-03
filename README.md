@@ -133,7 +133,13 @@ The G-buffer fits WebGPU's default 32-byte colour-attachment budget, and the ren
   Upscaling: Medium and High render internally at 70% and 80% and reconstruct full resolution with TAAU temporal upscaling; Ultra uses native TRAA. Auto exposure (eye adaptation) uses a GPU luminance meter read back asynchronously.
   
   Everything else is ACES filmic tone mapping. Quality presets are Low, Medium, High and Ultra. drei's `PerformanceMonitor` adapts the render resolution when the frame rate drops.
-- **Cars** (`src/car`): bodies are sculpted as **signed distance fields**, meshed with Surface Nets and snapped back onto the exact surface:
+- **GT3 cars** (`src/car/gltfCars.ts`): detailed Ferrari 296 GT3 and Mercedes-AMG GT3 models.
+  - `bun scripts/build-car-models.ts` turns the source GLBs in `src/car/*/source` into `public/models/*.glb` (12 and 15 MB from 68 and 55 MB). It normalises each model to the physics wheelbase, splits the wheels into four pivoted corners, separates the steering wheel (its axis is found from the rim geometry), merges draw calls by material, builds two simplified levels of detail, converts textures to WebP and compresses the geometry with meshopt.
+  - **Team liveries:** each car recolours the model's livery texture in the shader, mapping the navy base to the team colour and the red accents to the team accent, so logos and decals stay intact.
+  - **Level of detail** is chosen by on-screen size: the TV cameras' long lenses get the full model even from far away.
+  - Wheels spin, steer and follow the suspension, discs glow with brake temperature, brake lights respond to the pedal, and there is a driver in team colours.
+  - The other cars keep the procedural bodies below.
+- **Procedural cars** (`src/car/carModel.ts`): bodies are sculpted as **signed distance fields**, meshed with Surface Nets and snapped back onto the exact surface:
   - lofted tub and greenhouse, smooth-blended fenders, cut wheel arches, intakes, vents and a Kamm tail
   - triangles are classified into paint, glass, carbon, lights, grille and wheel wells
   - clear-coat metallic-flake paint with a procedural livery and race numbers
@@ -214,3 +220,11 @@ The clock offset comes from the lowest-RTT ping samples. Positions are derived f
 - WebGPU gives the full pipeline (SSGI). On the WebGL2 fallback, SSGI is replaced by GTAO and everything else stays.
 - Browsers expose no force feedback for steering wheels, so wheels get no FFB. Gamepads get rumble.
 - Set `VITE_SPEED_SERVER=wss://host/ws` at build time to point the client at a separately hosted server.
+
+## Credits
+
+Car models by **vecarz** ([Sketchfab](https://sketchfab.com/heynic)):
+- [Ferrari 296 GT3 VERSTAPPEN | www.vecarz.com](https://sketchfab.com/3d-models/ferrari-296-gt3-verstappen-wwwvecarzcom-cd9e1436a1a2471ea4106490f2ec8955), licensed [CC BY-NC 4.0](http://creativecommons.org/licenses/by-nc/4.0/). Non-commercial use only.
+- [Mercedes AMG GT3 Evo 2020 | www.vecarz.com](https://sketchfab.com/3d-models/mercedes-amg-gt3-evo-2020-wwwvecarzcom-39e77243109f4e5cb7134b6f31c8f619), licensed [CC BY 4.0](http://creativecommons.org/licenses/by/4.0/).
+
+Both are modified for the game (normalised, re-pivoted, simplified, recompressed, recoloured per team). The credits also appear in Settings → Gameplay.

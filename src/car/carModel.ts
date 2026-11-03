@@ -10,13 +10,14 @@ import { surfaceNets } from './sdf'
 
 export interface CarModel {
   root: THREE.Group
-  body: BodyDef
+  /** body extent along the car (model space); the procedural model passes its full definition */
+  body: Pick<BodyDef, 'zFront' | 'zRear'>
   spec: CarSpec
   update: (v: Vehicle, entry?: { id: string }) => void
   dispose: () => void
   cockpitEye: THREE.Vector3 // in root (CoG) space
   bodyOffset: THREE.Vector3
-  setVisibleParts: (opts: { body?: boolean; interior?: boolean }) => void
+  setVisibleParts: (opts: { body?: boolean; interior?: boolean; driver?: boolean }) => void
 }
 
 const geometryCache = new Map<string, THREE.BufferGeometry>()
