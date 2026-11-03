@@ -77,6 +77,10 @@ export function CameraRig() {
     lastMode: '' as string,
     fovKick: 0,
     wasLookBack: false,
+    // g forces for the camera, low-passed: the physics values change abruptly from frame to frame
+    // (gear changes, kerbs), and a camera that follows them twitches by centimetres every frame
+    gLong: 0,
+    gLat: 0,
   })
 
   // orbit drag in showroom
@@ -173,6 +177,27 @@ export function CameraRig() {
         cameraCut.frames = 3
       }
       s.yaw += angleDiff(heading, s.yaw) * clamp(dt * 4, 0, 1)
+      if (SIDECAM === 'heli') {
+        // the broadcast helicopter (broadcastCam.ts): 75 m out, 58 m up, long lens, lagging operator
+        const a = heading + Math.PI + 1.2
+        _v.set(carPos.x + Math.sin(a) * 75, carPos.y + 58, carPos.z + Math.cos(a) * 75)
+        if (s.lastMode !== 'heli') {
+          s.pos.copy(_v)
+          s.lookPos.copy(carPos)
+          s.lastMode = 'heli'
+        }
+        s.pos.lerp(_v, clamp(dt * 1.2, 0, 1))
+        s.lookPos.lerp(carPos, clamp(dt * 5, 0, 1))
+        cam.position.copy(s.pos)
+        cam.up.set(0, 1, 0)
+        cam.lookAt(s.lookPos)
+        cam.fov = clamp((2 * Math.atan(22 / 2 / Math.max(cam.position.distanceTo(s.lookPos), 1)) * 180) / Math.PI, 8, 45)
+        cam.near = 0.5
+        cam.far = 12000
+        cam.updateProjectionMatrix()
+        cameraFocus.copy(carPos)
+        return
+      }
       if (SIDECAM === 'post') {
         // fixed camera beside the track, 9 m ahead of where the car was when window.__postcam was set
         const w = window as unknown as { __postcam?: boolean }
@@ -244,7 +269,10 @@ export function CameraRig() {
       shy = (valueNoise2(t * 37, 7.1) - 0.5) * shakeMag
 
     // FOV: widen with speed (sense of speed), small kick on acceleration
-    s.fovKick += (clamp(v.accelLong, -1.5, 1) * 2.2 - s.fovKick) * clamp(dt * 3, 0, 1)
+    const kg = 1 - Math.exp(-dt / 0.25)
+    s.gLong += (clamp(v.accelLong, -2, 2) - s.gLong) * kg
+    s.gLat += (clamp(v.accelLat, -2.5, 2.5) - s.gLat) * kg
+    s.fovKick += (clamp(s.gLong, -1.5, 1) * 2.2 - s.fovKick) * clamp(dt * 3, 0, 1)
     const speedFov = 13 * Math.pow(clamp((speed - 8) / 80, 0, 1), 1.2)
 
     const model = pose.model
@@ -253,13 +281,13 @@ export function CameraRig() {
 
     if (!inside || lookBack) {
       const near = camMode === 'chaseNear'
-      const dist = (near ? 4.6 : 6.2) + clamp(v.accelLong, -1.5, 1.2) * 0.22 + speed * 0.004
+      const dist = (near ? 4.6 : 6.2) + clamp(s.gLong, -1.5, 1.2) * 0.22 + speed * 0.004
       const height = near ? 1.35 : 1.75
       const cy = Math.cos(s.yaw),
         sy = Math.sin(s.yaw)
       _v.set(carPos.x - sy * dist, carPos.y + height + Math.sin(-s.pitch) * dist * 0.5, carPos.z - cy * dist)
       // lateral g pushes the camera slightly outwards
-      const lat = clamp(v.accelLat, -2, 2) * 0.12
+      const lat = clamp(s.gLat, -2, 2) * 0.12
       _v.x += cy * lat
       _v.z += -sy * lat
       // keep above terrain / road
@@ -293,8 +321,8 @@ export function CameraRig() {
     }
     // head sway (cockpit only)
     const k = camMode === 'cockpit' ? 1 : 0.15
-    s.headX += (clamp(v.accelLat, -2.5, 2.5) * 0.022 * k - s.headX) * clamp(dt * 8, 0, 1)
-    s.headY += (clamp(-v.accelLong, -2, 2) * 0.012 * k - s.headY) * clamp(dt * 8, 0, 1)
+    s.headX += (clamp(s.gLat, -2.5, 2.5) * 0.022 * k - s.headX) * clamp(dt * 8, 0, 1)
+    s.headY += (clamp(-s.gLong, -2, 2) * 0.012 * k - s.headY) * clamp(dt * 8, 0, 1)
     _v.set(lx + s.headX, ly + shy * 0.6, lz + s.headY)
     _v.applyQuaternion(carQ).add(carPos)
     cam.position.copy(_v)

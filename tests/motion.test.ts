@@ -3,7 +3,7 @@
 import { expect, test } from 'bun:test'
 import * as THREE from 'three/webgpu'
 import { velocity } from 'three/tsl'
-import { beginMotionFrame, registerWheels, wheelUniforms } from '../src/render/motionHistory'
+import { beginMotionFrame, motionCamera, registerWheels, wheelUniforms } from '../src/render/motionHistory'
 
 type VelocityUniforms = {
   update(frame: { object: THREE.Object3D; camera: THREE.Camera }): void
@@ -145,4 +145,49 @@ test('the nearest wheels keep their slots from frame to frame', () => {
   expect(b.tyre.userData.mbSlot).toBe(sb)
   a.off()
   b.off()
+})
+
+/** Screen motion (NDC per frame) of a static point as the blur's steady camera / the true camera see it. */
+function blurMotion(camera: THREE.PerspectiveCamera, world: THREE.Vector3) {
+  const view = world.clone().applyMatrix4(camera.matrixWorldInverse)
+  const cur = view.clone().applyMatrix4(camera.projectionMatrix)
+  const prev = (m: THREE.Matrix4) => {
+    const c = new THREE.Vector4(view.x, view.y, view.z, 1).applyMatrix4(m)
+    return new THREE.Vector2(c.x / c.w, c.y / c.w)
+  }
+  const pT = prev(motionCamera.toPrevTrue.value as THREE.Matrix4)
+  const pS = prev(motionCamera.toPrevSteady.value as THREE.Matrix4)
+  return { trueMotion: new THREE.Vector2(cur.x - pT.x, cur.y - pT.y), steady: new THREE.Vector2(cur.x - pS.x, cur.y - pS.y) }
+}
+
+test('the blur camera keeps a steady pan and drops shake and lens changes', () => {
+  const { scene, camera } = setup()
+  const point = new THREE.Vector3(0, 0, -20)
+  const step = (x: number) => {
+    camera.position.x = x
+    camera.updateMatrixWorld()
+    frame(scene, camera)
+  }
+  // a steady tracking move: 1 m per frame sideways
+  for (let i = 0; i < 40; i++) step(i)
+  let m = blurMotion(camera, point)
+  expect(m.steady.distanceTo(m.trueMotion)).toBeLessThan(1e-4)
+  const steadyPan = m.steady.clone()
+  // the same move with 3 cm of shake alternating every frame
+  let worst = 0
+  for (let i = 40; i < 80; i++) {
+    step(i + (i % 2 ? 0.03 : -0.03))
+    m = blurMotion(camera, point)
+    if (i > 50) worst = Math.max(worst, m.steady.distanceTo(steadyPan) / m.trueMotion.distanceTo(steadyPan))
+  }
+  // the true motion jitters by the full shake, the blur camera by a small fraction of it
+  expect(worst).toBeLessThan(0.35)
+  // the lens zooms while the camera holds still: TAA sees it, the blur does not
+  for (let i = 0; i < 30; i++) step(80)
+  camera.fov = 40
+  camera.updateProjectionMatrix()
+  frame(scene, camera)
+  m = blurMotion(camera, new THREE.Vector3(3, 1.5, -20))
+  expect(m.trueMotion.length()).toBeGreaterThan(0.01)
+  expect(m.steady.length()).toBeLessThan(1e-4)
 })

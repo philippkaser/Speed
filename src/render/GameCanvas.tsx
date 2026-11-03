@@ -204,9 +204,10 @@ function PlainRender() {
 /** Test hook: headless WebGPU canvases can only be read back right after a frame. */
 function CaptureHook() {
   const { gl } = useThree()
-  useFrame(() => {
-    const w = window as unknown as { __wantShot?: boolean; __shot?: string; __frames?: number }
+  useFrame((state) => {
+    const w = window as unknown as { __wantShot?: boolean; __shot?: string; __frames?: number; __onFrame?: (s: unknown) => void }
     w.__frames = (w.__frames ?? 0) + 1
+    w.__onFrame?.(state)
     if (!w.__wantShot) return
     w.__wantShot = false
     const rt = offscreen.rt
@@ -263,7 +264,7 @@ export function GameCanvas() {
       <World />
       <CameraRig />
       {!debugFlag('noprobe') && <ReflectionProbe />}
-      {!debugFlag('nopost') ? <PostFX /> : <PlainRender />}
+      {debugFlag('simonly') ? null : !debugFlag('nopost') ? <PostFX /> : <PlainRender />}
       <SceneReady />
       <CaptureHook />
       {OFFSCREEN && <OffscreenDriver />}

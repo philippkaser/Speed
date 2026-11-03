@@ -13,7 +13,8 @@ export interface GraphicsSettings {
   taa: boolean
   upscale: number // internal render scale reconstructed by temporal upscaling (1 = native TRAA)
   autoExposure: boolean
-  motionBlur: number // 0..1
+  /** shutter: exposure as a fraction of 1/60 s (0.5 = 180 degrees = 1/120 s, the film/broadcast norm) */
+  motionBlur: number
   bloom: boolean
   shadows: 0 | 1 | 2 | 3 // off, low, high, ultra
   trees: number // density multiplier
@@ -69,8 +70,8 @@ export interface SettingsState {
 export const PRESETS: Record<QualityPreset, Omit<GraphicsSettings, 'fov' | 'cameraShake' | 'showFps' | 'preset' | 'backend' | 'backendNote'>> = {
   low: { resolutionScale: 0.7, upscale: 1, autoExposure: false, ssgi: false, ssr: false, ao: false, taa: false, motionBlur: 0, bloom: true, shadows: 1, trees: 0.35, envProbe: false },
   medium: { resolutionScale: 1, upscale: 0.7, autoExposure: true, ssgi: false, ssr: false, ao: true, taa: true, motionBlur: 0.5, bloom: true, shadows: 2, trees: 0.7, envProbe: true },
-  high: { resolutionScale: 1, upscale: 0.8, autoExposure: true, ssgi: true, ssr: true, ao: true, taa: true, motionBlur: 0.7, bloom: true, shadows: 2, trees: 1, envProbe: true },
-  ultra: { resolutionScale: 1, upscale: 1, autoExposure: true, ssgi: true, ssr: true, ao: true, taa: true, motionBlur: 0.8, bloom: true, shadows: 3, trees: 1.4, envProbe: true },
+  high: { resolutionScale: 1, upscale: 0.8, autoExposure: true, ssgi: true, ssr: true, ao: true, taa: true, motionBlur: 0.5, bloom: true, shadows: 2, trees: 1, envProbe: true },
+  ultra: { resolutionScale: 1, upscale: 1, autoExposure: true, ssgi: true, ssr: true, ao: true, taa: true, motionBlur: 0.5, bloom: true, shadows: 3, trees: 1.4, envProbe: true },
 }
 
 function defaultPreset(): QualityPreset {
@@ -115,7 +116,14 @@ export const useSettings = create<SettingsState>()(
     }),
     {
       name: 'speed-settings-v1',
-      version: 1,
+      version: 2,
+      // v2: motion blur became a camera shutter; the old preset defaults (252 and 288 degrees) were
+      // far longer than any real camera's, move them to the 180 degree norm (custom values stay)
+      migrate: (persisted, version) => {
+        const p = (persisted ?? {}) as Partial<SettingsState>
+        if (version < 2 && p.graphics && (p.graphics.motionBlur === 0.7 || p.graphics.motionBlur === 0.8)) p.graphics = { ...p.graphics, motionBlur: 0.5 }
+        return p as SettingsState
+      },
       // nested merge so settings added in later versions get their defaults
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<SettingsState>

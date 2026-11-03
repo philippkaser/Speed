@@ -46,7 +46,7 @@ import {
 import { useSettings } from '../state/settings'
 import { reportGpuError } from './gpuHealth'
 import { debugFlag } from '../util/debug'
-import { motionBlur, motionBlurUniforms, motionDebugView } from './motionBlur'
+import { motionBlur, motionBlurUniforms } from './motionBlur'
 import { beginMotionFrame, motionBlendMode, motionVelocityOutput } from './motionHistory'
 import { particleScene, particleU, sceneDepth } from './particles'
 
@@ -149,7 +149,7 @@ export function PostFX() {
       composite = vec4(composite.rgb.add(r.rgb), color.a)
     }
     let out: any = composite
-    let tileDebug: any = null
+    let blurDebug: any = null
     // luminance meter for auto exposure: tiny render target, read back asynchronously on the CPU
     let meter: any = null
     if (useAE) {
@@ -160,11 +160,12 @@ export function PostFX() {
     if (useTAA && vel) out = upscale < 0.999 ? taau(composite, depth, vel, camera) : traa(composite, depth, vel, camera)
     else out = fxaa(composite)
     if (useMB && vel) {
-      const taps = gfx.preset === 'ultra' ? 24 : gfx.preset === 'high' ? 20 : 14
+      const q = gfx.preset === 'ultra' ? { pairs: 16, denseTaps: 64 } : gfx.preset === 'high' ? { pairs: 12, denseTaps: 48 } : { pairs: 8, denseTaps: 32 }
       const src = typeof out.getTextureNode === 'function' ? out.getTextureNode() : convertToTexture(out)
-      const node = motionBlur(src, vel, { taps, wheels: true })
+      const node = motionBlur(src, vel, { ...q, wheels: true })
       out = node.getTextureNode()
-      if (debugFlag('showtiles')) tileDebug = node.getTileDebugNode()
+      if (debugFlag('showtiles')) blurDebug = node.getTileDebugNode()
+      else if (debugFlag('showvel')) blurDebug = node.getStreakDebugNode()
     }
     // particles (smoke, dust, sparks): own pass, soft against the scene depth, composited over the
     // lit image (premultiplied colour, transmittance in alpha). After TAA and motion blur, so they
@@ -192,14 +193,9 @@ export function PostFX() {
     const n = hash(screenUV.mul(vec2(1931.3, 2711.7)).add(time.mul(37.1)).x.add(screenUV.y.mul(911.1)))
     graded = graded.mul(float(1).add(n.sub(0.5).mul(postUniforms.grain)))
     rp.outputNode = vec4(graded.mul(postUniforms.exposure).mul(postUniforms.adapt), 1)
-    // debug view (?showvel): raw motion vectors, 8 levels per pixel of motion per frame,
-    // |x| in red, |y| in green, signs in blue
-    if (debugFlag('showvel') && vel) {
-      rp.outputNode = motionDebugView(vel)
-      rp.outputColorTransform = false
-    }
-    if (tileDebug) {
-      rp.outputNode = tileDebug
+    // debug views: ?showvel (the streaks the blur uses), ?showtiles (its neighbour-max tiles)
+    if (blurDebug) {
+      rp.outputNode = blurDebug
       rp.outputColorTransform = false
     }
     ;(rp as any).__meter = meter

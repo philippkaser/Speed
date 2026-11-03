@@ -62,7 +62,26 @@ const cam = {
   curView: new THREE.Matrix4(),
   prevProj: new THREE.Matrix4(),
   curProj: new THREE.Matrix4(),
+  prevWorld: new THREE.Matrix4(),
+  /** the steady camera's velocity, in the current camera's frame (m/s, rad/s) */
+  vel: new THREE.Vector3(),
+  spin: new THREE.Vector3(),
+  /** where the steady camera was one frame ago (world) */
+  steadyPrevWorld: new THREE.Matrix4(),
+  /** first frame after a jump: take the measured motion as it is */
+  fresh: true,
 }
+
+/**
+ * The camera the motion blur sees: a stabilised one. A real camera car or helicopter carries its
+ * camera on a gimbal, so its pictures are blurred by the smooth path it flies, not by vibration.
+ * The game's cameras add shake on kerbs and at speed, jolt with gear changes and breathe their field
+ * of view with speed; blurred along, all of that smears the whole picture, the car included. So the
+ * blur follows the camera's velocity low-passed over a few frames (vibration averages out, a steady
+ * pan or a tracking shot is untouched) and ignores changes of focal length. TAA still reprojects
+ * with the camera's true motion.
+ */
+export const STEADY_TAU = 0.06
 
 // ------------------------------------------------------------------------------------------ wheels
 
@@ -141,6 +160,10 @@ export const wheelUniforms = {
 export const motionCamera = {
   projX: uniform(1),
   projY: uniform(1),
+  /** current view space -> previous clip space, with the camera that drew the velocity target */
+  toPrevTrue: uniform(new THREE.Matrix4()),
+  /** current view space -> previous clip space, with the stabilised camera and today's lens */
+  toPrevSteady: uniform(new THREE.Matrix4()),
 }
 
 /** Clock for vertex animation (wind): materials that move vertices must also move positionPrevious. */
@@ -239,9 +262,11 @@ export function beginMotionFrame(scene: THREE.Object3D, camera: THREE.Camera, op
   })
 
   // camera: unjittered (TAA jitters the projection only while the scene pass renders)
-  if (cam.obj !== camera || cam.f !== frame - 1 || opts.cut) {
+  const jump = cam.obj !== camera || cam.f !== frame - 1 || opts.cut
+  if (jump) {
     cam.prevView.copy(camera.matrixWorldInverse)
     cam.prevProj.copy(camera.projectionMatrix)
+    cam.prevWorld.copy(camera.matrixWorld)
   } else {
     cam.prevView.copy(cam.curView)
     cam.prevProj.copy(cam.curProj)
@@ -250,11 +275,54 @@ export function beginMotionFrame(scene: THREE.Object3D, camera: THREE.Camera, op
   cam.f = frame
   cam.curView.copy(camera.matrixWorldInverse)
   cam.curProj.copy(camera.projectionMatrix)
+  steadyCamera(camera, opts.dt, jump)
+  cam.prevWorld.copy(camera.matrixWorld)
   const P = camera.projectionMatrix.elements
   motionCamera.projX.value = P[0]
   motionCamera.projY.value = P[5]
 
   updateWheels(camera, opts.exposure)
+}
+
+const _rel = new THREE.Matrix4()
+const _t = new THREE.Vector3()
+const _rq = new THREE.Quaternion()
+const _sc = new THREE.Vector3()
+const _w = new THREE.Vector3()
+const _sq = new THREE.Quaternion()
+
+/** Low-pass the camera's own motion (see STEADY_TAU) and derive the blur's reprojection. */
+function steadyCamera(camera: THREE.Camera, dt: number, jump: boolean) {
+  if (jump) {
+    cam.vel.set(0, 0, 0)
+    cam.spin.set(0, 0, 0)
+    cam.fresh = true
+  } else {
+    // where the camera was a frame ago, seen from where it is now
+    _rel.copy(camera.matrixWorld).invert().multiply(cam.prevWorld)
+    _rel.decompose(_t, _rq, _sc)
+    // as velocities (frame-rate independent smoothing), rotation as a rotation vector
+    const ang = 2 * Math.acos(Math.min(1, Math.abs(_rq.w)))
+    const sn = Math.sqrt(Math.max(1e-12, 1 - _rq.w * _rq.w))
+    _w.set(_rq.x, _rq.y, _rq.z).multiplyScalar((ang / sn) * Math.sign(_rq.w || 1))
+    const k = cam.fresh ? 1 : 1 - Math.exp(-dt / STEADY_TAU)
+    cam.fresh = false
+    cam.vel.lerp(_t.divideScalar(dt), k)
+    cam.spin.lerp(_w.divideScalar(dt), k)
+  }
+  // the steady camera one frame ago, in world space
+  _t.copy(cam.vel).multiplyScalar(dt)
+  _w.copy(cam.spin).multiplyScalar(dt)
+  const a = _w.length()
+  if (a > 1e-9) _sq.setFromAxisAngle(_w.divideScalar(a), a)
+  else _sq.identity()
+  _rel.compose(_t, _sq, _sc.set(1, 1, 1))
+  cam.steadyPrevWorld.multiplyMatrices(camera.matrixWorld, _rel)
+  // current view -> previous clip: true (as the velocity target was drawn) and steady (same lens)
+  const toPrevTrue = motionCamera.toPrevTrue.value as THREE.Matrix4
+  toPrevTrue.multiplyMatrices(cam.prevProj, cam.prevView).multiply(camera.matrixWorld)
+  const toPrevSteady = motionCamera.toPrevSteady.value as THREE.Matrix4
+  toPrevSteady.copy(cam.steadyPrevWorld).invert().premultiply(camera.projectionMatrix).multiply(camera.matrixWorld)
 }
 
 function updateWheels(camera: THREE.Camera, exposure: number) {
