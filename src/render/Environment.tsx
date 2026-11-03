@@ -8,6 +8,7 @@ import { cameraPosition, dot, exp, float, Fn, length, max, mix, output, position
 import { useSettings } from '../state/settings'
 import { debugFlag } from '../util/debug'
 import { setTrackTemp } from '../physics/tyre'
+import { postUniforms } from './PostFX'
 
 export interface SunState {
   dir: THREE.Vector3
@@ -118,6 +119,10 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
 
   // apply sun + environment (PMREM of the sky)
   useEffect(() => {
+    // base exposure follows the light on the ground, like a camera operator: a high sun puts about
+    // twice the light on the track of an evening sun. Calibrated to leave 18:18 (24 degrees) as is;
+    // the auto exposure only adapts relative to this.
+    postUniforms.exposure.value = THREE.MathUtils.clamp((Math.sin(0.42) + 0.15) / (Math.sin(Math.max(sun.elevation, 0)) + 0.15), 0.5, 1.35)
     const sunPos = sun.dir.clone().multiplyScalar(1000)
     sky.sunPosition.value.copy(sun.dir)
     light.color.copy(sun.color)

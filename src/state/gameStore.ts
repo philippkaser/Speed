@@ -25,6 +25,8 @@ interface GameUIState {
   opponents: number
   aiSkill: number
   timeOfDay: number
+  /** time of day imposed by the current session (team round, online room); not saved */
+  sessionHour: number | null
   sessionKind: 'practice' | 'race' | 'online' | 'team'
   sceneReady: boolean
   rendererInfo: string
@@ -57,6 +59,7 @@ export const useGameStore = create<GameUIState>()(
       opponents: 7,
       aiSkill: 0.95,
       timeOfDay: 18.3,
+      sessionHour: null,
       sessionKind: 'practice',
       sceneReady: false,
       rendererInfo: '',
@@ -70,7 +73,14 @@ export const useGameStore = create<GameUIState>()(
     }),
     {
       name: 'speed-career-v1',
-      version: 1,
+      version: 2,
+      // v1 saved the hour of team rounds as the player's own time of day (midday and morning
+      // rounds left every mode in flat, washed-out light): back to the default golden hour
+      migrate: (persisted, version) => {
+        const st = (persisted ?? {}) as { timeOfDay?: number }
+        if (version < 2 && st.timeOfDay !== undefined && [14.5, 9.8, 13, 16.2].includes(st.timeOfDay)) st.timeOfDay = 18.3
+        return st as never
+      },
       partialize: (s) => ({ career: s.career, camera: s.camera, raceLaps: s.raceLaps, opponents: s.opponents, aiSkill: s.aiSkill, timeOfDay: s.timeOfDay }),
     },
   ),

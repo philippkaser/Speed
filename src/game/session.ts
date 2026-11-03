@@ -8,17 +8,20 @@ import { startTeamRace } from '../team/session'
 
 export function startAttract() {
   const g = useGameStore.getState()
+  if (g.sessionHour !== null) g.set({ sessionHour: null })
   game.start({ mode: 'attract', trackId: 'valle-alta', carId: g.career.carId, color: '#fff', opponents: 9, laps: 999, aiSkill: 0.97, playerName: '' })
 }
 
 export function startShowroom() {
   const g = useGameStore.getState()
+  if (g.sessionHour !== null) g.set({ sessionHour: null })
   const c = g.career
   game.start({ gt3Model: c.gt3Model, mode: 'showroom', trackId: 'valle-alta', carId: c.carId, color: c.colors[c.carId], setup: c.setups[c.carId], opponents: 0, laps: 1, aiSkill: 1, playerName: useSettings.getState().playerName })
 }
 
 export function startDriving(kind: 'practice' | 'race') {
   const g = useGameStore.getState()
+  if (g.sessionHour !== null) g.set({ sessionHour: null })
   const c = g.career
   audio.resume()
   game.start({

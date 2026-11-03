@@ -152,7 +152,7 @@ function useSessionVersion() {
 
 function World() {
   const version = useSessionVersion()
-  const hour = useGameStore((s) => s.timeOfDay)
+  const hour = useGameStore((s) => s.sessionHour ?? s.timeOfDay)
   const track = game.track
   const cars = game.cars
   void version

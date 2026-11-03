@@ -295,7 +295,7 @@ export function UIRoot() {
     if (!room) return
     if (room.phase === 'countdown' && (game.mode !== 'online' || game.onlineStartAt !== room.startAt)) {
       const g = useGameStore.getState()
-      g.set({ timeOfDay: room.timeOfDay, sessionKind: 'online', paused: false })
+      g.set({ sessionHour: room.timeOfDay, sessionKind: 'online', paused: false })
       useNet.setState({ results: null })
       game.startOnline(room, net.myId, g.career.setups[g.career.carId])
       g.setScreen('driving')

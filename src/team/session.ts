@@ -66,7 +66,7 @@ export function startTeamRace() {
   slots.sort((a, b) => a.qualy - b.qualy)
   lastGrid.slots = slots.map(({ id, team, driverIndex, qualy }) => ({ id, team, driverIndex, qualy }))
 
-  useGameStore.getState().set({ timeOfDay: round.hour, sessionKind: 'team', paused: false })
+  useGameStore.getState().set({ sessionHour: round.hour, sessionKind: 'team', paused: false })
   game.startTeam('valle-alta', laps, slots.map((s) => s.cfg))
   const tr = new TeamRace(game, laps)
   game.teamRace = tr

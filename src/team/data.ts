@@ -108,13 +108,14 @@ export interface Round {
   hour: number
 }
 
+// low sun for every round: warm light, long shadows and lens flares on the broadcast
 export const SEASON: Round[] = [
-  { name: 'Valle Alta 300', laps: 10, hour: 14.5 },
-  { name: 'Morning Sprint', laps: 8, hour: 9.8 },
+  { name: 'Valle Alta 300', laps: 10, hour: 17.7 },
+  { name: 'Morning Sprint', laps: 8, hour: 7.9 },
   { name: 'Golden Hour Trophy', laps: 12, hour: 18.6 },
-  { name: 'Grand Prix of the Valley', laps: 14, hour: 13 },
-  { name: 'Dusk Classic', laps: 10, hour: 19.4 },
-  { name: 'Season Finale', laps: 16, hour: 16.2 },
+  { name: 'Grand Prix of the Valley', laps: 14, hour: 17.1 },
+  { name: 'Dusk Classic', laps: 10, hour: 19.3 },
+  { name: 'Season Finale', laps: 16, hour: 18.2 },
 ]
 
 export const POINTS = [25, 18, 15, 12, 10, 8, 6, 4, 2, 1]
