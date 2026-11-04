@@ -60,7 +60,19 @@ export function SettingsPanel({ onClose, inGame = false }: { onClose: () => void
             </FieldRow>
             <Toggle label="Global illumination (SSGI)" sub="Screen-space indirect light bounce and occlusion · WebGPU" value={gfx.ssgi} onChange={(v) => s.setGraphics({ ssgi: v })} />
             <Toggle label="Ambient occlusion" sub="Used when SSGI is off" value={gfx.ao} onChange={(v) => s.setGraphics({ ao: v })} />
-            <Toggle label="Screen-space reflections" sub="Car paint, glass and track sheen" value={gfx.ssr} onChange={(v) => s.setGraphics({ ssr: v })} />
+            <FieldRow label="Car reflections" sub="Cubemaps rendered around the cars: the car in focus sharpest, the next most visible ones their own, the rest share. Medium 256 px · High 512 px · Ultra 1024 px">
+              <Segmented
+                options={[
+                  { value: 0, label: 'Sky only' },
+                  { value: 1, label: 'Medium' },
+                  { value: 2, label: 'High' },
+                  { value: 3, label: 'Ultra' },
+                ]}
+                value={gfx.reflections ?? 2}
+                onChange={(v) => s.setGraphics({ reflections: v as 0 | 1 | 2 | 3 })}
+              />
+            </FieldRow>
+            <Toggle label="Screen-space reflections" sub="Extra on-screen detail on top of the cubemaps (costly, can flicker at the screen edges)" value={gfx.ssr} onChange={(v) => s.setGraphics({ ssr: v })} />
             <FieldRow label="Shadows">
               <Segmented
                 options={[

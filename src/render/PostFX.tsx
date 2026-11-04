@@ -106,6 +106,12 @@ export const gtToneMap = Fn(([c]: [any]) => {
   return T.mul(w0).add(L.mul(w1)).add(S.mul(w2))
 })
 
+/**
+ * How much screen-space AO / GI an object takes (0 for objects flagged `userData.noAO`: the cars, whose
+ * clear coat would show the passes' noise over its reflections; their contact shading is the shadows').
+ */
+const aoWeight = uniform(1).onObjectUpdate(({ object }) => (object?.userData.noAO ? 0 : 1))
+
 /** Eye adaptation: fast adaptation relative to a slowly drifting reference (partial, like an eye). */
 const eye = { fast: 0, slow: 0, ready: false, frame: 0, pending: false }
 
@@ -133,7 +139,8 @@ export function PostFX() {
     const outputs: Record<string, any> = { output }
     // velocity: NDC motion per frame, wheel slot, inverse depth of the surface that owns the motion
     if (useMB) outputs.velocity = motionVelocityOutput
-    if (useSSGI || useSSR || useAO) outputs.normal = vec4(packNormalToRGB(normalView), useSSR ? roughness : float(1))
+    // alpha: the SSR's roughness, or (without SSR) the object's weight for screen-space AO / GI
+    if (useSSGI || useSSR || useAO) outputs.normal = vec4(packNormalToRGB(normalView), useSSR ? roughness : aoWeight)
     if (useSSGI) outputs.diffuseColor = vec4(diffuseColor.rgb, useSSR ? metalness : float(0))
     else if (useSSR) outputs.metal = vec4(metalness, 0, 0, 1)
     // test switch: an over-budget G-buffer that WebGPU refuses, to exercise the WebGL2 fallback
@@ -170,12 +177,15 @@ export function PostFX() {
       gi.thickness.value = 0.8
       gi.useTemporalFiltering = false
       const diffuse = scenePass.getTextureNode('diffuseColor')
-      composite = vec4(color.rgb.mul(gi.getAONode()).add(diffuse.rgb.mul(gi.getGINode().rgb)), color.a)
+      // (cars excluded: the occlusion is noisy and would darken their mirror reflections)
+      const w = useSSR ? float(1) : normalTex!.a
+      composite = vec4(color.rgb.mul(mix(float(1), gi.getAONode(), w)).add(diffuse.rgb.mul(gi.getGINode().rgb).mul(w)), color.a)
     } else if (useAO && sceneNormal) {
       const a = gtao(depth, sceneNormal, camera)
       a.radius.value = 1.2
       a.resolutionScale = 0.5
-      composite = vec4(color.rgb.mul(a.getTextureNode().r), color.a)
+      const w = useSSR ? float(1) : normalTex!.a
+      composite = vec4(color.rgb.mul(mix(float(1), a.getTextureNode().r, w)), color.a)
     }
     if (useSSR && sceneNormal) {
       const metalNode = useSSGI ? scenePass.getTextureNode('diffuseColor').a : scenePass.getTextureNode('metal').r

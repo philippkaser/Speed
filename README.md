@@ -128,7 +128,7 @@ The G-buffer fits WebGPU's default 32-byte colour-attachment budget, and the ren
 - **Post-processing** (`PostFX.tsx`), in order:
   - MRT scene pass (colour, normals, albedo, metal/rough, velocity)
   - **SSGI** for screen-space indirect light and AO (WebGPU) or GTAO (fallback)
-  - **SSR** for screen-space reflections, including dielectrics such as clear coat and asphalt sheen
+  - **SSR** (optional, off by default): screen-space reflections on top of the cars' cubemaps
   - **SMAA** anti-aliasing (FXAA on Low). There is no temporal AA: TAA reuses earlier frames, and in tracking shots (a car still on screen, the track sliding past) it smeared and ghosted the cars, worst in helicopter and long-lens TV shots. Every frame stands on its own
   - **per-object motion blur as a camera shutter** (`motionBlur.ts`, `motionHistory.ts`), a tile-based reconstruction filter (McGuire 2012, with Guertin 2014 and Jimenez 2014 refinements):
     - *shutter*: the setting is a shutter angle, the share of each frame's own interval the shutter is open. The default is 360°: every streak ends where the next frame's begins, so motion is continuous from frame to frame at any frame rate. Shorter shutters (180° is the film look) leave gaps that the eye sees as separate copies in fast pans, the strobing that makes helicopter shots look like a row of doppelgängers
@@ -147,6 +147,13 @@ The G-buffer fits WebGPU's default 32-byte colour-attachment budget, and the ren
   Every preset renders at native resolution (the adaptive resolution scale steps in when the frame rate drops). Auto exposure (eye adaptation) uses a GPU luminance meter read back asynchronously.
 
   Quality presets are Low, Medium, High and Ultra. drei's `PerformanceMonitor` adapts the render resolution when the frame rate drops.
+- **Car reflections** (`Reflections.tsx`): dynamic cubemaps rendered around the cars, as the best-looking racing games do it (Gran Turismo gives every car one detailed shared cubemap, Forza Horizon renders dynamic car cubemaps and adds ray-traced detail, Assetto Corsa renders a few of a car's six cube faces per frame).
+  - The car in focus (the player in the chase and cockpit views, the framed car in TV shots: the biggest on screen) gets a high-resolution probe: 256, 512 or 1024 px per face (Medium, High, Ultra), 1–3 faces rendered per frame, then GGX-prefiltered in place, so the clear coat reflects like a mirror and rougher surfaces blur correctly.
+  - The next most visible cars get probes from a small pool (128–256 px, refreshed in turn); every other car shares the hero's probe. Other cars are in the probes, so the cars reflect each other.
+  - Cheap probes: no shadow-map re-render for the probe cameras (three renders shadows once per camera per frame: every probe update used to cost 24 shadow passes), cars at their simplest level of detail, grass and small props left out, the sky dome following the probe camera.
+  - The models' paint is a dielectric base coat under a glossy, mirror-smooth clear coat (roughness 0.03; the Ferrari's livery came as metallic with almost no clear coat). Physically a clear coat reflects 4% head-on, which over a bright base in full sun all but hides the mirrored sky and horizon; like real multi-layer finishes and every racing game, it reflects ~2.2x that head-on and the exact Fresnel towards grazing angles. The base coat's flake normal map is turned down (at 1K it became grain).
+  - Glass is a smooth dielectric (it came metallic), its reflection compensated for the alpha blending (real glass reflects the same however clear it is); exterior carbon is clear-coated. Every car has its own materials, so each carries its own probe.
+  - No screen-space AO or GI on the cars: those passes run without temporal filtering and their noise sat on top of the clear coat's reflections as grain (a per-object weight in the G-buffer's normal target; the cars' contact shading comes from the shadow maps).
 - **GT3 cars** (`src/car/gltfCars.ts`): detailed Ferrari 296 GT3, Mercedes-AMG GT3 and Ford Mustang GT3 models.
   - `bun scripts/build-car-models.ts` turns the source GLBs in `src/car/*/source` and `new assets/` into `public/models/*.glb` (12, 15 and 15 MB from 68, 55 and 122 MB). A source may be a zipped GLB (the Mustang's is 122 MB unpacked, over GitHub's 100 MB file limit). It normalises each model to the physics wheelbase, splits the wheels into four pivoted corners, separates the steering wheel (its axis is found from the rim geometry), merges draw calls by material, builds two simplified levels of detail, converts textures to WebP and compresses the geometry with meshopt.
   - **Team liveries:** each car recolours the model's livery texture in the shader, mapping the navy base to the team colour and the red accents to the team accent, so logos and decals stay intact. The Mustang's lighter blue stripes become a lighter shade of the team colour.
@@ -241,6 +248,7 @@ The clock offset comes from the lowest-RTT ping samples. Positions are derived f
 
 ## Notes
 - WebGPU gives the full pipeline (SSGI). On the WebGL2 fallback, SSGI is replaced by GTAO and everything else stays.
+- `?noprobe` turns the car reflection probes off (the cars reflect the sky only); `?chromecars` (mirror-chrome cars) and `?blackpaint` (gloss black under the same clear coat) show what the probes and the clear coat reflect; `?refldebug` exposes the probes as `window.__refl`.
 - Browsers expose no force feedback for steering wheels, so wheels get no FFB. Gamepads get rumble.
 - Set `VITE_SPEED_SERVER=wss://host/ws` at build time to point the client at a separately hosted server.
 

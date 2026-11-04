@@ -195,6 +195,7 @@ export function Scenery({ track, heights }: { track: Track; heights: TerrainHeig
       cm.rotation.copy(stand.rotation)
       cm.receiveShadow = true
       cm.castShadow = false
+      cm.userData.noProbe = true // small: not in the reflection probes
       g.add(cm)
     }
 
@@ -262,6 +263,7 @@ export function Scenery({ track, heights }: { track: Track; heights: TerrainHeig
         const m = new THREE.Matrix4().compose(new THREE.Vector3(mid.x + local.x, mid.y + local.y, mid.z + local.z).addScaledVector(new THREE.Vector3(-track.tx[i], 0, -track.tz[i]), 0.22), q, new THREE.Vector3(1, 1, 1))
         lamps.setMatrixAt(k, m)
       }
+      lamps.userData.noProbe = true // small: not in the reflection probes
       g.add(lamps)
     }
 
@@ -349,6 +351,7 @@ export function Scenery({ track, heights }: { track: Track; heights: TerrainHeig
         brd.position.set(p.x, p.y + 1.15, p.z)
         brd.rotation.y = yawAt(s) + Math.PI
         brd.castShadow = true
+        brd.userData.noProbe = true // small: not in the reflection probes
         g.add(brd)
       }
       i += 200
@@ -366,10 +369,12 @@ export function Scenery({ track, heights }: { track: Track; heights: TerrainHeig
       hut.position.set(p.x, p.y + 1.15, p.z)
       hut.rotation.y = yawAt(s)
       hut.castShadow = true
+      hut.userData.noProbe = true // small: not in the reflection probes
       g.add(hut)
       const roof = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.18, 2.4), roofMat)
       roof.position.set(p.x, p.y + 2.4, p.z)
       roof.rotation.y = yawAt(s)
+      roof.userData.noProbe = true // small: not in the reflection probes
       g.add(roof)
     }
     g.traverse((o) => {

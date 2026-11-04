@@ -16,7 +16,9 @@ export interface GraphicsSettings {
   bloom: boolean
   shadows: 0 | 1 | 2 | 3 // off, low, high, ultra
   trees: number // density multiplier
-  envProbe: boolean // dynamic reflection probe on the car
+  envProbe: boolean // (superseded by reflections)
+  /** car reflections (Reflections.tsx): 0 off (sky only), 1 medium, 2 high, 3 ultra */
+  reflections?: 0 | 1 | 2 | 3
   fov: number // base FOV for chase camera
   cameraShake: number // 0..1
   showFps: boolean
@@ -68,10 +70,10 @@ export interface SettingsState {
 }
 
 export const PRESETS: Record<QualityPreset, Omit<GraphicsSettings, 'fov' | 'cameraShake' | 'showFps' | 'preset' | 'backend' | 'backendNote' | 'sky'>> = {
-  low: { resolutionScale: 0.7, autoExposure: false, ssgi: false, ssr: false, ao: false, motionBlur: 0, bloom: true, shadows: 1, trees: 0.35, envProbe: false },
-  medium: { resolutionScale: 1, autoExposure: true, ssgi: false, ssr: false, ao: true, motionBlur: 1, bloom: true, shadows: 2, trees: 0.7, envProbe: true },
-  high: { resolutionScale: 1, autoExposure: true, ssgi: true, ssr: true, ao: true, motionBlur: 1, bloom: true, shadows: 2, trees: 1, envProbe: true },
-  ultra: { resolutionScale: 1, autoExposure: true, ssgi: true, ssr: true, ao: true, motionBlur: 1, bloom: true, shadows: 3, trees: 1.4, envProbe: true },
+  low: { resolutionScale: 0.7, autoExposure: false, ssgi: false, ssr: false, ao: false, motionBlur: 0, bloom: true, shadows: 1, trees: 0.35, envProbe: false, reflections: 1 },
+  medium: { resolutionScale: 1, autoExposure: true, ssgi: false, ssr: false, ao: true, motionBlur: 1, bloom: true, shadows: 2, trees: 0.7, envProbe: true, reflections: 1 },
+  high: { resolutionScale: 1, autoExposure: true, ssgi: true, ssr: false, ao: true, motionBlur: 1, bloom: true, shadows: 2, trees: 1, envProbe: true, reflections: 2 },
+  ultra: { resolutionScale: 1, autoExposure: true, ssgi: true, ssr: false, ao: true, motionBlur: 1, bloom: true, shadows: 3, trees: 1.4, envProbe: true, reflections: 3 },
 }
 
 function defaultPreset(): QualityPreset {
@@ -116,7 +118,7 @@ export const useSettings = create<SettingsState>()(
     }),
     {
       name: 'speed-settings-v1',
-      version: 3,
+      version: 4,
       // v3: motion blur is a shutter angle relative to each frame, 360 degrees by default (streaks
       // join from frame to frame). Earlier preset defaults move to it; custom values stay.
       migrate: (persisted, version) => {
@@ -124,6 +126,11 @@ export const useSettings = create<SettingsState>()(
         const mb = p.graphics?.motionBlur
         const oldDefaults = version < 2 ? [0.5, 0.7, 0.8] : version < 3 ? [0.5] : []
         if (p.graphics && mb !== undefined && oldDefaults.includes(mb)) p.graphics = { ...p.graphics, motionBlur: 1 }
+        // v4: car reflections are cubemap probes; screen-space reflections are off by default
+        if (version < 4 && p.graphics) {
+          const pr = (p.graphics.preset ?? 'high') as QualityPreset
+          p.graphics = { ...p.graphics, ssr: false, reflections: PRESETS[pr]?.reflections ?? 2 }
+        }
         return p as SettingsState
       },
       // nested merge so settings added in later versions get their defaults

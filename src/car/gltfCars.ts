@@ -8,7 +8,7 @@
 import * as THREE from 'three/webgpu'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
-import { abs, float, Fn, min, mix, pow, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
+import { abs, float, Fn, min, mix, normalViewGeometry, positionViewDirection, pow, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
 import type { CarSpec } from '../physics/spec'
 import type { Vehicle } from '../physics/vehicle'
 import type { CarModel } from './carModel'
@@ -60,6 +60,12 @@ class ScreenLOD extends THREE.LOD {
   update(camera: THREE.Camera) {
     const levels = this.levels
     if (levels.length < 2) return
+    // reflection probes see cars at their simplest level of detail
+    if (camera.userData.probe) {
+      for (let k = 0; k < levels.length; k++) levels[k].object.visible = k === levels.length - 1
+      ;(this as unknown as { _currentLevel: number })._currentLevel = levels.length - 1
+      return
+    }
     this._camPos.setFromMatrixPosition(camera.matrixWorld)
     this._objPos.setFromMatrixPosition(this.matrixWorld)
     let d = this._camPos.distanceTo(this._objPos)
@@ -133,6 +139,9 @@ export function hasGltfCar(id: GltfCarId | undefined): id is GltfCarId {
 
 // ------------------------------------------------------------------------------------------------ livery
 
+/** clear-coat reflectance over the physical 4% at normal incidence (see liveryMaterial) */
+const CLEARCOAT_BOOST = 2.2
+
 const rgb2hsv = Fn(([c]: [any]) => {
   const K = vec4(0, -1 / 3, 2 / 3, -1)
   const p = mix(vec4(c.b, c.g, K.w, K.z), vec4(c.g, c.b, K.x, K.y), step(c.b, c.g))
@@ -159,6 +168,35 @@ function liveryMaterial(src: THREE.MeshPhysicalMaterial, paint: Meta['paint'], p
     const cur = (m as unknown as Record<string, unknown>)[k]
     if (cur && typeof (cur as { copy?: unknown }).copy === 'function' && v && typeof v === 'object' && !(v as THREE.Texture).isTexture) (cur as { copy: (x: unknown) => void }).copy(v)
     else (m as unknown as Record<string, unknown>)[k] = v
+  }
+  // Race paint: a dielectric base coat (a touch of metallic flake) under a glossy clear coat. The
+  // models came with metallic or barely clear-coated liveries (Ferrari: metalness 0.97, clear coat
+  // 0.04), which read as blurry tinted metal; the clear coat is what makes reflections crisp.
+  m.metalness = 0.12
+  m.roughness = 0.42
+  m.clearcoat = 1
+  m.clearcoatRoughness = 0.03
+  // the base coat's flake normal map (4K in the source, 1K here) turns into grain at a distance:
+  // a hint of it under the smooth clear coat
+  m.normalScale.set(0.12, 0.12)
+  // Clear-coat reflectance: physically 4% head-on (IOR 1.5), which over a bright base coat in full sun
+  // all but hides the mirrored sky and horizon. Real automotive finishes (thick, multi-layer clear coats
+  // over flake) and every racing game read glossier: ~2.2x head-on, easing to the exact Fresnel towards
+  // grazing angles (where the base is also attenuated correctly, so silhouettes never go dark).
+  const nv = normalViewGeometry.dot(positionViewDirection).abs().clamp(0, 1)
+  m.clearcoatNode = mix(float(CLEARCOAT_BOOST), float(1), pow(float(1).sub(nv), 5))
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('blackpaint')) {
+    // ?blackpaint: gloss black under the same clear coat, to look at the clear coat's reflections alone
+    m.colorNode = vec3(0.01, 0.01, 0.01)
+    return { material: m, teamA: uniform(primary.clone()), teamB: uniform(accent.clone()) }
+  }
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('chromecars')) {
+    // ?chromecars: mirror-chrome paint, to look at what the reflection probes hold
+    m.metalness = 1
+    m.roughness = 0.02
+    m.clearcoat = 0
+    m.colorNode = vec3(0.95, 0.95, 0.95)
+    return { material: m, teamA: uniform(primary.clone()), teamB: uniform(accent.clone()) }
   }
   const map = src.map
   const base = uniform(src.color.clone())
@@ -200,6 +238,29 @@ function liveryMaterial(src: THREE.MeshPhysicalMaterial, paint: Meta['paint'], p
   return { material: m, teamA, teamB }
 }
 
+/**
+ * Physically plausible glass and carbon. The source models' glass is metallic (metalness ~1) and on
+ * one car rough (0.39): real glass is a smooth dielectric whose reflection rises with the angle.
+ * Exterior carbon fibre is clear-coated.
+ */
+function normaliseMaterial(mat: THREE.Material) {
+  const m = mat as THREE.MeshPhysicalMaterial
+  const name = mat.name ?? ''
+  if (!m.isMeshStandardMaterial) return mat
+  if (/glass|window/i.test(name) && m.transparent) {
+    m.metalness = 0
+    m.roughness = Math.min(m.roughness, 0.03)
+    // alpha blending scales the reflection by the opacity; real glass reflects the same however clear
+    // it is: compensate, so the windscreen mirrors the sky as it should
+    m.envMapIntensity = 1 / Math.max(0.25, m.opacity)
+  }
+  if (/carbon/i.test(name) && m.isMeshPhysicalMaterial && m.clearcoat > 0) {
+    m.clearcoat = 1
+    m.clearcoatRoughness = Math.min(m.clearcoatRoughness, 0.06)
+  }
+  return mat
+}
+
 // ------------------------------------------------------------------------------------------------ cars
 
 const heat = new THREE.Color()
@@ -214,7 +275,7 @@ function brakeGlow(t: number, out: THREE.Color) {
 export interface GltfCarOptions {
   color: string
   accent: string
-  /** this car gets its own copies of all materials (the player's car takes the reflection probe) */
+  /** this car gets its own copies of all materials (default: every car does, each carries its own reflection probe) */
   uniqueMaterials?: boolean
   driverColor?: string
 }
@@ -243,8 +304,9 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
     if (name === meta.livery && (mat as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial) {
       livery = liveryMaterial(mat as THREE.MeshPhysicalMaterial, meta.paint, primary, accent)
       out = livery.material
-    } else if (/Light_Rear|Lights$/i.test(name) || /Disc/i.test(name) || opts.uniqueMaterials) {
-      out = mat.clone()
+    } else if (/Light_Rear|Lights$/i.test(name) || /Disc/i.test(name) || opts.uniqueMaterials !== false) {
+      // every car its own materials: each car carries its own reflection probe
+      out = normaliseMaterial(mat.clone())
       if (/Light_Rear|Lights$/i.test(name)) rearLights.push(out as THREE.MeshStandardMaterial)
       if (/Disc/i.test(name)) discs.push(out as THREE.MeshStandardMaterial)
     }

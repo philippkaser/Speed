@@ -16,7 +16,7 @@ import { TrackScene } from './TrackScene'
 import { PitLaneScene } from './PitLaneScene'
 import { RacingLine } from './RacingLine'
 import { Ghost } from './Ghost'
-import { ReflectionProbe } from './ReflectionProbe'
+import { Reflections } from './Reflections'
 import { debugFlag } from '../util/debug'
 import { loadCarModels } from '../car/gltfCars'
 import { loadWorldAssets } from './worldAssets'
@@ -288,7 +288,7 @@ export function GameCanvas() {
       <GameLoop />
       <World />
       <CameraRig />
-      {!debugFlag('noprobe') && <ReflectionProbe />}
+      {!debugFlag('noprobe') && <Reflections />}
       {debugFlag('simonly') ? null : !debugFlag('nopost') ? <PostFX /> : <PlainRender />}
       <SceneReady />
       <CaptureHook />

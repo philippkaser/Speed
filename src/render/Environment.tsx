@@ -241,12 +241,14 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
     }
   }, [sun, sky, light, renderer, scene, fogU, photo, skyIn])
 
-  // the photographic dome rides with the camera (after the camera rigs, before the frame is drawn)
+  // the photographic dome rides with the camera: after the camera rigs and the reflection probes (which
+  // move it to their own cameras), before the frame and its motion history
   useFrame(() => {
     if (!photo) return
     dome.position.copy(camera.position)
+    dome.scale.setScalar(8000)
     dome.updateMatrixWorld()
-  }, 0.5)
+  }, 0.8)
 
   const target = useRef(new THREE.Vector3())
   useFrame(() => {

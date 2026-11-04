@@ -1,7 +1,7 @@
 // Assembles a complete car: SDF-sculpted body, wheels, aero parts, cockpit and driver.
 import * as THREE from 'three/webgpu'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { abs, color, float, fract, max, mix, mx_noise_vec3, normalize, normalView, positionLocal, smoothstep, step, texture, uniform, uv, vec2, vec3 } from 'three/tsl'
+import { abs, color, float, fract, max, mix, mx_noise_vec3, normalize, normalView, normalViewGeometry, positionLocal, positionViewDirection, pow, smoothstep, step, texture, uniform, uv, vec2, vec3 } from 'three/tsl'
 import { getCar, type CarSpec } from '../physics/spec'
 import type { Vehicle } from '../physics/vehicle'
 import { canvasTexture } from '../render/textures'
@@ -143,6 +143,11 @@ export function paintMaterial(base: string, body: BodyDef, num: number, accentCo
   // metallic flakes: high frequency normal perturbation under the clear coat
   const flake = mx_noise_vec3(p.mul(700)).mul(0.055)
   m.normalNode = normalize(normalView.add(flake.mul(metallic)))
+  // the clear coat itself is smooth (a mirror over the flakes), and reflects like the GT3 models'
+  // (gltfCars.ts): ~2.2x the physical 4% head-on, the exact Fresnel towards grazing angles
+  m.clearcoatNormalNode = normalViewGeometry
+  const nvc = normalViewGeometry.dot(positionViewDirection).abs().clamp(0, 1)
+  m.clearcoatNode = mix(float(2.2), float(1), pow(float(1).sub(nvc), 5))
   return m
 }
 

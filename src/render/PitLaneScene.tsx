@@ -165,6 +165,8 @@ export function PitLaneScene({ track }: { track: Track }) {
       }
     })
     bodies.castShadow = heads.castShadow = true
+    // too small for the cars' reflection probes
+    bodies.userData.noProbe = heads.userData.noProbe = true
     return { bodies, heads, teams, t: new Float32Array(n), m: new THREE.Matrix4(), q: new THREE.Quaternion(), sc: new THREE.Vector3(), v: new THREE.Vector3() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamKey])

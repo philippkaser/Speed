@@ -68,6 +68,13 @@ export function makeSkyDome(radius = 8000) {
   // after the opaque scene: only pixels nothing else covered pay for the sky
   dome.renderOrder = 10
   dome.name = 'sky'
+  // centred on whichever camera draws it, inside its far plane (reflection probes see 2.6 km)
+  dome.onBeforeRender = (_r, _s, camera) => {
+    const cam = camera as THREE.PerspectiveCamera
+    dome.position.setFromMatrixPosition(cam.matrixWorld)
+    dome.scale.setScalar(Math.min(radius, (cam.far || radius) * 0.9))
+    dome.updateMatrixWorld()
+  }
   return dome
 }
 

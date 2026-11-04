@@ -40,7 +40,10 @@ export function TrackScene({ track }: { track: Track }) {
     g.add(mesh(buildKerbs(track), kerbMaterial(), { name: 'kerbs' }))
     g.add(mesh(buildRunoff(track), runoffMaterial(), { name: 'runoff' }))
     g.add(mesh(buildVerge(track), vergeMaterial(), { name: 'verge' }))
-    g.add(mesh(buildMarkings(track, 20), markingMaterial(), { name: 'markings' }))
+    const markings = mesh(buildMarkings(track, 20), markingMaterial(), { name: 'markings' })
+    // details the cars' reflection probes leave out
+    markings.userData.noProbe = true
+    g.add(markings)
     const terrain = buildTerrain(track)
     g.add(mesh(terrain.geometry, terrainMaterial(), { name: 'terrain' }))
     const center = new THREE.Vector3((track.minX + track.maxX) / 2, 0, (track.minZ + track.maxZ) / 2)
@@ -53,14 +56,19 @@ export function TrackScene({ track }: { track: Track }) {
     g.add(mesh(b.fence, fenceMaterial('frame'), { name: 'fence-frame' }))
     const fence = mesh(b.fence, fenceMaterial('wire'), { name: 'fence' })
     fence.renderOrder = 2
+    fence.userData.noProbe = true
     g.add(fence)
     const postGeo = new THREE.BoxGeometry(0.08, 1.0, 0.12)
     postGeo.translate(0, 0.45, 0)
     const postMat = new THREE.MeshStandardNodeMaterial({ color: 0x8a8d90, metalness: 0.8, roughness: 0.4 })
-    g.add(instanced(postGeo, postMat, b.posts, false))
+    const posts = instanced(postGeo, postMat, b.posts, false)
+    posts.userData.noProbe = true
+    g.add(posts)
     const tyreGeo = new THREE.TorusGeometry(0.24, 0.1, 8, 16)
     tyreGeo.rotateX(Math.PI / 2)
-    g.add(instanced(tyreGeo, tyreWallMaterial(), b.tyres))
+    const tyres = instanced(tyreGeo, tyreWallMaterial(), b.tyres)
+    tyres.userData.noProbe = true
+    g.add(tyres)
     g.userData.terrain = terrain
     console.info(`[track] geometry built in ${(performance.now() - t0).toFixed(0)} ms`)
     return g
