@@ -67,7 +67,7 @@ export function SettingsPanel({ onClose, inGame = false }: { onClose: () => void
             <Slider label="Temporal upscaling" sub="Internal render resolution reconstructed to full resolution (100% = native)" value={gfx.upscale ?? 1} min={0.5} max={1} step={0.05} unit="%" format={(v) => Math.round(v * 100) + ''} onChange={(v) => s.setGraphics({ upscale: v })} />
             <Toggle label="Auto exposure" sub="Eye adaptation (cockpit, looking into the sun)" value={gfx.autoExposure ?? false} onChange={(v) => s.setGraphics({ autoExposure: v })} />
             <Toggle label="Bloom" value={gfx.bloom} onChange={(v) => s.setGraphics({ bloom: v })} />
-            <Slider label="Motion blur (shutter)" sub="Exposure per frame like a camera: 180° = 1/120 s, the film and broadcast norm. 0 = off" value={gfx.motionBlur} min={0} max={1} step={1 / 24} unit="°" format={(v) => Math.round(v * 360) + ''} onChange={(v) => s.setGraphics({ motionBlur: v })} />
+            <Slider label="Motion blur (shutter)" sub="How much of each frame the shutter is open. 360° = motion is continuous from frame to frame (smooth pans, no double images); 180° = the film look. 0 = off" value={gfx.motionBlur} min={0} max={1} step={1 / 24} unit="°" format={(v) => Math.round(v * 360) + ''} onChange={(v) => s.setGraphics({ motionBlur: v })} />
             <Slider label="Vegetation density" value={gfx.trees} min={0.2} max={1.6} step={0.1} format={(v) => v.toFixed(1)} unit="×" onChange={(v) => s.setGraphics({ trees: v })} />
             <div className="section-title">Camera</div>
             <Slider label="Field of view" value={gfx.fov} min={45} max={80} step={1} unit="°" onChange={(v) => s.setGraphics({ fov: v })} />

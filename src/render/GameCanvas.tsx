@@ -201,18 +201,33 @@ function PlainRender() {
   return null
 }
 
-/** Test hook: headless WebGPU canvases can only be read back right after a frame. */
+/**
+ * Test hook: headless WebGPU canvases can only be read back right after a frame. `__wantShot`
+ * captures the next frame into `__shot`; `__seq = n` captures the next n consecutive frames into
+ * `__shots` (to look at motion across frames, e.g. whether streaks join up).
+ */
 function CaptureHook() {
   const { gl } = useThree()
   useFrame((state) => {
-    const w = window as unknown as { __wantShot?: boolean; __shot?: string; __frames?: number; __onFrame?: (s: unknown) => void }
+    const w = window as unknown as { __wantShot?: boolean; __shot?: string; __frames?: number; __onFrame?: (s: unknown) => void; __seq?: number; __shots?: string[] }
     w.__frames = (w.__frames ?? 0) + 1
     w.__onFrame?.(state)
-    if (!w.__wantShot) return
+    const one = !!w.__wantShot
+    const seq = (w.__seq ?? 0) > 0
+    if (!one && !seq) return
     w.__wantShot = false
+    if (seq) {
+      w.__seq!--
+      w.__shots ??= []
+    }
+    const slot = seq ? w.__shots!.push('') - 1 : -1
+    const done = (url: string) => {
+      if (slot >= 0) w.__shots![slot] = url
+      if (one) w.__shot = url
+    }
     const rt = offscreen.rt
     if (!rt) {
-      w.__shot = (gl.domElement as HTMLCanvasElement).toDataURL('image/png')
+      done((gl.domElement as HTMLCanvasElement).toDataURL('image/png'))
       return
     }
     const r = gl as unknown as THREE.WebGPURenderer
@@ -233,7 +248,7 @@ function CaptureHook() {
       let sum = 0
       for (let i = 0; i < img.data.length; i += 4) sum += img.data[i] * 0.2126 + img.data[i + 1] * 0.7152 + img.data[i + 2] * 0.0722
       ;(w as { __shotMean?: number }).__shotMean = sum / (W * H)
-      w.__shot = c.toDataURL('image/png')
+      done(c.toDataURL('image/png'))
     }, (e) => console.error('[capture]', e))
   }, 2)
   return null

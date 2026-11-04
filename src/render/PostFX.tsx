@@ -207,10 +207,12 @@ export function PostFX() {
   useFrame((_, dt) => {
     const cut = cameraCut.frames > 0
     if (cut) cameraCut.frames--
-    // constant exposure: the setting is the shutter time as a fraction of 1/60 s, whatever the frame
-    // rate (motion vectors span one frame, so they are scaled by exposure / frame time)
+    // shutter angle: the share of each frame's own interval the shutter is open (motion vectors span
+    // one frame). At 360 degrees every streak ends where the next frame's begins, so motion is
+    // continuous from frame to frame at any frame rate; anything shorter leaves gaps that the eye
+    // sees as separate copies (strobing) in fast pans.
     const frameDt = Math.max(dt, 1e-3)
-    const shutter = gfx.motionBlur * Math.min(3, 1 / 60 / frameDt)
+    const shutter = Math.min(1, Math.max(0, gfx.motionBlur))
     postUniforms.motionBlur.value = shutter
     const mb = motionBlurUniforms
     mb.shutter.value = shutter
