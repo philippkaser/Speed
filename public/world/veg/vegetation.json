@@ -1,0 +1,173 @@
+{
+  "pine": {
+    "id": "pine",
+    "bin": "pine.bin",
+    "atlas": "pine.webp",
+    "layout": {
+      "position": {
+        "offset": 0,
+        "count": 4636,
+        "itemSize": 3,
+        "type": "f32"
+      },
+      "normal": {
+        "offset": 55632,
+        "count": 4636,
+        "itemSize": 3,
+        "type": "f32"
+      },
+      "uv": {
+        "offset": 111264,
+        "count": 4636,
+        "itemSize": 2,
+        "type": "f32"
+      },
+      "wind": {
+        "offset": 148352,
+        "count": 4636,
+        "itemSize": 2,
+        "type": "f32"
+      },
+      "index": {
+        "offset": 185440,
+        "count": 6519,
+        "itemSize": 1,
+        "type": "u16"
+      }
+    },
+    "bounds": {
+      "min": [
+        -5.17437402928431,
+        -5.014834028788585e-8,
+        -5.1392942018820165
+      ],
+      "max": [
+        5.404483435885545,
+        15,
+        5.442223386213837
+      ]
+    },
+    "vertices": 4636,
+    "triangles": 2173,
+    "credit": {
+      "title": "Pine tree",
+      "author": "Andriy Shekh",
+      "license": "CC BY 4.0",
+      "source": "https://sketchfab.com/3d-models/pine-tree-e52769d653cd4e52a4acff3041961e65"
+    }
+  },
+  "broadleaf": {
+    "id": "broadleaf",
+    "bin": "broadleaf.bin",
+    "atlas": "broadleaf.webp",
+    "layout": {
+      "position": {
+        "offset": 0,
+        "count": 9795,
+        "itemSize": 3,
+        "type": "f32"
+      },
+      "normal": {
+        "offset": 117540,
+        "count": 9795,
+        "itemSize": 3,
+        "type": "f32"
+      },
+      "uv": {
+        "offset": 235080,
+        "count": 9795,
+        "itemSize": 2,
+        "type": "f32"
+      },
+      "wind": {
+        "offset": 313440,
+        "count": 9795,
+        "itemSize": 2,
+        "type": "f32"
+      },
+      "index": {
+        "offset": 391800,
+        "count": 18243,
+        "itemSize": 1,
+        "type": "u16"
+      }
+    },
+    "bounds": {
+      "min": [
+        -7.523711751452824,
+        -0.309974576160297,
+        -5.927514983560643
+      ],
+      "max": [
+        6.968141223332103,
+        15.805730010715898,
+        5.956779052496827
+      ]
+    },
+    "vertices": 9795,
+    "triangles": 6081,
+    "credit": {
+      "title": "Realistic Tree",
+      "author": "Daniel",
+      "license": "CC BY 4.0",
+      "source": "https://sketchfab.com/3d-models/realistic-tree-d989c0f801d847b9a74992ec4ddcfdfc"
+    }
+  },
+  "grass": {
+    "id": "grass",
+    "bin": "grass.bin",
+    "atlas": "grass.webp",
+    "layout": {
+      "position": {
+        "offset": 0,
+        "count": 3234,
+        "itemSize": 3,
+        "type": "f32"
+      },
+      "normal": {
+        "offset": 38808,
+        "count": 3234,
+        "itemSize": 3,
+        "type": "f32"
+      },
+      "uv": {
+        "offset": 77616,
+        "count": 3234,
+        "itemSize": 2,
+        "type": "f32"
+      },
+      "wind": {
+        "offset": 103488,
+        "count": 3234,
+        "itemSize": 2,
+        "type": "f32"
+      },
+      "index": {
+        "offset": 129360,
+        "count": 5400,
+        "itemSize": 1,
+        "type": "u16"
+      }
+    },
+    "bounds": {
+      "min": [
+        -0.7377321072287673,
+        -0.030168176834431047,
+        -0.7741000350084997
+      ],
+      "max": [
+        0.634209217296414,
+        0.36610776085913105,
+        0.4658225371712291
+      ]
+    },
+    "vertices": 3234,
+    "triangles": 1800,
+    "credit": {
+      "title": "Grass Medium 01",
+      "author": "Poly Haven",
+      "license": "CC0",
+      "source": "https://polyhaven.com/a/grass_medium_01"
+    }
+  }
+}

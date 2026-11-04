@@ -20,6 +20,8 @@ export interface GraphicsSettings {
   fov: number // base FOV for chase camera
   cameraShake: number // 0..1
   showFps: boolean
+  /** 'photo': the HDRI sky (its sun, fixed at 48 degrees); 'dynamic': procedural sky following the time of day */
+  sky?: 'photo' | 'dynamic'
   /** renderer backend: 'auto' = WebGPU where available, else WebGL2 */
   backend?: 'auto' | 'webgl'
   /** why the game switched itself to WebGL2 (shown in Settings) */
@@ -65,7 +67,7 @@ export interface SettingsState {
   set: (s: Partial<Pick<SettingsState, 'units' | 'playerName' | 'hudVisible' | 'racingLine'>>) => void
 }
 
-export const PRESETS: Record<QualityPreset, Omit<GraphicsSettings, 'fov' | 'cameraShake' | 'showFps' | 'preset' | 'backend' | 'backendNote'>> = {
+export const PRESETS: Record<QualityPreset, Omit<GraphicsSettings, 'fov' | 'cameraShake' | 'showFps' | 'preset' | 'backend' | 'backendNote' | 'sky'>> = {
   low: { resolutionScale: 0.7, autoExposure: false, ssgi: false, ssr: false, ao: false, motionBlur: 0, bloom: true, shadows: 1, trees: 0.35, envProbe: false },
   medium: { resolutionScale: 1, autoExposure: true, ssgi: false, ssr: false, ao: true, motionBlur: 1, bloom: true, shadows: 2, trees: 0.7, envProbe: true },
   high: { resolutionScale: 1, autoExposure: true, ssgi: true, ssr: true, ao: true, motionBlur: 1, bloom: true, shadows: 2, trees: 1, envProbe: true },

@@ -1,0 +1,29 @@
+{
+  "source": {
+    "title": "Kloofendal 48d Partly Cloudy (Pure Sky)",
+    "author": "Poly Haven",
+    "license": "CC0",
+    "url": "https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky"
+  },
+  "width": 4096,
+  "height": 1152,
+  "elevMin": -11.25,
+  "elevMax": 90,
+  "logMin": -6,
+  "logMax": 16,
+  "sunDir": [
+    0.55428,
+    0.7418,
+    0.37749
+  ],
+  "sunIrradiance": [
+    4.3051,
+    4.3431,
+    3.9483
+  ],
+  "skyIrradiance": [
+    1.4026,
+    1.6019,
+    2.2702
+  ]
+}

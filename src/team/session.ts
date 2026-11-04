@@ -59,7 +59,7 @@ export function startTeamRace() {
         strategy,
         mode: mine ? ts.modes[idx] : 'race',
         mine,
-        cfg: { model: team.model ?? (k % 2 ? 'amg-gt3' : 'ferrari-296-gt3'), id: `${team.id}-${dr.id}`, name: `${dr.first[0]}. ${dr.last}`, code: dr.code, teamId: team.id, color: team.color, accent: team.accent, number: dr.number, carId: TEAM_CAR, setup, skill },
+        cfg: { model: team.model ?? (['ferrari-296-gt3', 'amg-gt3', 'mustang-gt3'] as const)[k % 3], id: `${team.id}-${dr.id}`, name: `${dr.first[0]}. ${dr.last}`, code: dr.code, teamId: team.id, color: team.color, accent: team.accent, number: dr.number, carId: TEAM_CAR, setup, skill },
       })
     })
   }

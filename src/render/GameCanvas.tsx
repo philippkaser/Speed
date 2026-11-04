@@ -19,6 +19,7 @@ import { Ghost } from './Ghost'
 import { ReflectionProbe } from './ReflectionProbe'
 import { debugFlag } from '../util/debug'
 import { loadCarModels } from '../car/gltfCars'
+import { loadWorldAssets } from './worldAssets'
 import { installGpuErrorHook, rendererStarted, switchToWebGL } from './gpuHealth'
 
 extend(THREE as any)
@@ -134,6 +135,9 @@ function GameLoop() {
       const s = state.gl.getDrawingBufferSize(new THREE.Vector2())
       if (rt.width !== s.x || rt.height !== s.y) rt.setSize(s.x, s.y)
     }
+    // frame statistics are counted per frame (shadow, probe and post passes included), see CaptureHook
+    ;(state.gl as unknown as { info: { autoReset: boolean; reset(): void } }).info.autoReset = false
+    ;(state.gl as unknown as { info: { reset(): void } }).info.reset()
     if (!paused) game.update(dt)
     else {
       game.world.alpha = 1
@@ -182,8 +186,9 @@ function SceneReady() {
       if (++frames > 3) useGameStore.getState().set({ sceneReady: true })
       else raf = requestAnimationFrame(tick)
     }
-    // the detailed car models are part of the first impression: wait for them (at most 25 s)
-    Promise.race([loadCarModels(), new Promise((r) => setTimeout(r, 25000))]).then(() => {
+    // the detailed car models, the sky, ground textures and vegetation are part of the first
+    // impression: wait for them (at most 25 s)
+    Promise.race([Promise.all([loadCarModels(), loadWorldAssets()]), new Promise((r) => setTimeout(r, 25000))]).then(() => {
       if (alive) raf = requestAnimationFrame(tick)
     })
     return () => {
@@ -209,8 +214,11 @@ function PlainRender() {
 function CaptureHook() {
   const { gl } = useThree()
   useFrame((state) => {
-    const w = window as unknown as { __wantShot?: boolean; __shot?: string; __frames?: number; __onFrame?: (s: unknown) => void; __seq?: number; __shots?: string[] }
+    const w = window as unknown as { __wantShot?: boolean; __shot?: string; __frames?: number; __onFrame?: (s: unknown) => void; __seq?: number; __shots?: string[]; __info?: object }
     w.__frames = (w.__frames ?? 0) + 1
+    // frame statistics for the tests (the whole frame: scene, shadows and post passes)
+    const ri = (gl as unknown as { info: { render: { drawCalls: number; triangles: number } } }).info.render
+    w.__info = { drawCalls: ri.drawCalls, triangles: ri.triangles, veg: (window as unknown as { __veg?: object }).__veg }
     w.__onFrame?.(state)
     const one = !!w.__wantShot
     const seq = (w.__seq ?? 0) > 0

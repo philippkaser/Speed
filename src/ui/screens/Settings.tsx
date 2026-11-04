@@ -5,6 +5,7 @@ import { type QualityPreset, useSettings } from '../../state/settings'
 import { Btn, FieldRow, Segmented, Slider, Toggle } from '../components'
 import { BottomBar, TopBar } from './Home'
 import { gltfCarCredits } from '../../car/gltfCars'
+import { worldCredits } from '../../render/worldAssets'
 
 type Tab = 'graphics' | 'controls' | 'assists' | 'audio' | 'game'
 
@@ -47,6 +48,16 @@ export function SettingsPanel({ onClose, inGame = false }: { onClose: () => void
             <RendererRow />
             <Slider label="Resolution scale" value={gfx.resolutionScale} min={0.5} max={1} step={0.05} unit="%" format={(v) => Math.round(v * 100) + ''} onChange={(v) => s.setGraphics({ resolutionScale: v })} />
             <div className="section-title">Lighting</div>
+            <FieldRow label="Sky" sub="Photographic: a real sky (HDRI) with its own sun, mid-afternoon. Dynamic: procedural sky that follows the time of day">
+              <Segmented
+                options={[
+                  { value: 'photo', label: 'Photographic' },
+                  { value: 'dynamic', label: 'Dynamic' },
+                ]}
+                value={gfx.sky ?? 'photo'}
+                onChange={(v) => s.setGraphics({ sky: v as 'photo' | 'dynamic' })}
+              />
+            </FieldRow>
             <Toggle label="Global illumination (SSGI)" sub="Screen-space indirect light bounce and occlusion · WebGPU" value={gfx.ssgi} onChange={(v) => s.setGraphics({ ssgi: v })} />
             <Toggle label="Ambient occlusion" sub="Used when SSGI is off" value={gfx.ao} onChange={(v) => s.setGraphics({ ao: v })} />
             <Toggle label="Screen-space reflections" sub="Car paint, glass and track sheen" value={gfx.ssr} onChange={(v) => s.setGraphics({ ssr: v })} />
@@ -66,7 +77,7 @@ export function SettingsPanel({ onClose, inGame = false }: { onClose: () => void
             <Toggle label="Auto exposure" sub="Eye adaptation (cockpit, looking into the sun)" value={gfx.autoExposure ?? false} onChange={(v) => s.setGraphics({ autoExposure: v })} />
             <Toggle label="Bloom" value={gfx.bloom} onChange={(v) => s.setGraphics({ bloom: v })} />
             <Slider label="Motion blur (shutter)" sub="How much of each frame the shutter is open. 360° = motion is continuous from frame to frame (smooth pans, no double images); 180° = the film look. 0 = off" value={gfx.motionBlur} min={0} max={1} step={1 / 24} unit="°" format={(v) => Math.round(v * 360) + ''} onChange={(v) => s.setGraphics({ motionBlur: v })} />
-            <Slider label="Vegetation density" value={gfx.trees} min={0.2} max={1.6} step={0.1} format={(v) => v.toFixed(1)} unit="×" onChange={(v) => s.setGraphics({ trees: v })} />
+            <Slider label="Vegetation density" sub="Trees and the 3D grass on the verges (grass from 0.5)" value={gfx.trees} min={0.2} max={1.6} step={0.1} format={(v) => v.toFixed(1)} unit="×" onChange={(v) => s.setGraphics({ trees: v })} />
             <div className="section-title">Camera</div>
             <Slider label="Field of view" value={gfx.fov} min={45} max={80} step={1} unit="°" onChange={(v) => s.setGraphics({ fov: v })} />
             <Slider label="Camera shake" value={gfx.cameraShake} min={0} max={1} step={0.05} unit="%" format={(v) => Math.round(v * 100) + ''} onChange={(v) => s.setGraphics({ cameraShake: v })} />
@@ -261,7 +272,7 @@ function RendererRow() {
 }
 
 function Credits() {
-  const credits = gltfCarCredits()
+  const credits = [...gltfCarCredits(), ...worldCredits()]
   if (!credits.length) return null
   return (
     <>

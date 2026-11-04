@@ -27,7 +27,66 @@ import {
   sin,
 } from 'three/tsl'
 import { getTextures } from './textures'
+import { groundSet, type GroundSet } from './worldAssets'
 import type { Track } from '../track/track'
+
+type N = any
+
+// ------------------------------------------------------------------------------ photo-scanned ground
+
+/**
+ * One photo-scanned set (colour + normal/roughness) without visible tiling: two decorrelated samples
+ * (the second rotated, scaled and shifted) blended by a slow noise, the blend variance-preserving so
+ * the mix regions keep the texture's contrast instead of turning into a smooth average.
+ */
+function scanned(set: GroundSet, p: N, maskScale = 0.07) {
+  const a = texture(set.colour, p)
+  const da = texture(set.data, p)
+  const c = Math.cos(0.83),
+    sn = Math.sin(0.83)
+  const q = vec2(p.x.mul(c).sub(p.y.mul(sn)), p.x.mul(sn).add(p.y.mul(c))).mul(0.773).add(vec2(0.37, 0.71))
+  const b = texture(set.colour, q)
+  const db = texture(set.data, q)
+  const w = smoothstep(-0.35, 0.35, mx_noise_float(vec3(positionWorld.x.mul(maskScale), 3.3, positionWorld.z.mul(maskScale))))
+  const mean = texture(set.colour, vec2(0.5, 0.5)).level(float(14)).rgb
+  const k = float(1).div(w.mul(w).add(w.oneMinus().mul(w.oneMinus())).sqrt())
+  const col = max(a.rgb.sub(mean).mul(w.oneMinus()).add(b.rgb.sub(mean).mul(w)).mul(k).add(mean), vec3(0))
+  const nxy = mix(da.xy, db.xy, w)
+  const rough = mix(da.z, db.z, w)
+  return { col, nxy, rough }
+}
+
+/** Tangent-space normal for normalMap() from a stored x/y pair (z rebuilt). */
+function normalFromXY(nxy: N) {
+  const xy = nxy.mul(2).sub(1)
+  const z = max(float(1).sub(xy.dot(xy)), 0).sqrt()
+  return vec3(nxy, z.mul(0.5).add(0.5))
+}
+
+/** Summer verge: the scan's straw shifted towards green. */
+const greenGrass = (c: N) => {
+  const lum = c.dot(vec3(0.2126, 0.7152, 0.0722))
+  return mix(c, vec3(lum.mul(0.66), lum.mul(1.2), lum.mul(0.4)), 0.7).mul(0.9)
+}
+
+/**
+ * The grass ground's colour around a point, averaged over about a metre (explicit mip level, so it
+ * also works in a vertex shader): the 3D grass takes its colour from the ground it stands on.
+ */
+export function grassGroundColour(xz: N) {
+  const t = groundSet('grass').colour
+  return greenGrass(texture(t, xz.div(2.6)).level(float(7)).rgb)
+}
+
+/** Grass ground (photo-scanned), a little greener than the dry scan, with patches of leafy ground. */
+export function scannedGrass(uvMetres: N, leafyAmount: N = float(0)) {
+  const g = scanned(groundSet('grass'), uvMetres.div(2.6))
+  const l = scanned(groundSet('leafy'), uvMetres.div(2.2), 0.05)
+  const green = greenGrass(g.col)
+  const leafy = l.col.mul(vec3(0.62, 0.66, 0.6))
+  const w = clamp(leafyAmount, 0, 1)
+  return { col: mix(green, leafy, w), nxy: mix(g.nxy, l.nxy, w), rough: mix(g.rough, l.rough, w) }
+}
 
 const aTrack = () => attribute('aTrack', 'vec4')
 
@@ -57,20 +116,29 @@ export function rubberTexture(track: Track) {
   return { tex, refresh, rows }
 }
 
+/** Photo-scanned race asphalt (Poly Haven asphalt_track, 3 m per tile), aged to a mid grey. */
+function trackAsphalt(uvMetres: N) {
+  const a = scanned(groundSet('asphalt'), uvMetres.div(3))
+  // the scan is fresh, near-black asphalt (albedo 0.013): weathered race tarmac is ~0.07 and greyer
+  const lum = a.col.dot(vec3(0.2126, 0.7152, 0.0722))
+  const col = mix(a.col, vec3(lum), 0.45).mul(5.2)
+  return { col, nxy: a.nxy, rough: a.rough }
+}
+
 export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }) {
-  const t = getTextures().asphalt
   const m = new THREE.MeshStandardNodeMaterial()
   const tr = aTrack()
   const d = tr.x,
     s = tr.y,
     racing = tr.z,
     hw = tr.w
-  const tex = texture(t.map, uv())
+  // the ribbon's uv is world x/z over 4
+  const asphalt = trackAsphalt(uv().mul(4))
   // macro variation: patches of fresh / older tarmac, breaks visible tiling
   const macro = mx_noise_float(vec3(positionWorld.x.mul(0.018), 0, positionWorld.z.mul(0.018))).mul(0.5).add(0.5)
   const macro2 = mx_noise_float(vec3(positionWorld.x.mul(0.11), 1.7, positionWorld.z.mul(0.11))).mul(0.5).add(0.5)
-  let albedo = tex.rgb.mul(mix(float(0.82), float(1.18), macro)).mul(mix(float(0.94), float(1.06), macro2))
-  let rough = tex.a.mul(mix(float(0.94), float(1.04), macro2))
+  let albedo = asphalt.col.mul(mix(float(0.84), float(1.14), macro)).mul(mix(float(0.95), float(1.05), macro2))
+  let rough = asphalt.rough.mul(mix(float(0.94), float(1.03), macro2))
   // rubbered-in racing line: darker and a touch smoother
   // dynamic rubber map from the simulation (falls back to the static racing line)
   const rl = rubber
@@ -95,18 +163,24 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }) {
   m.colorNode = albedo
   m.roughnessNode = clamp(rough, 0.3, 1)
   m.metalnessNode = float(0)
-  m.normalNode = normalMap(texture(t.normal, uv()), vec2(mix(float(0.7), float(0.3), paint)))
+  m.normalNode = normalMap(normalFromXY(asphalt.nxy), vec2(mix(float(0.9), float(0.3), paint)))
   return m
 }
 
+/** Older, lighter asphalt with coarser aggregate (Poly Haven asphalt_pit_lane): runoff and pit lane. */
+export function pitAsphaltSample(uvMetres: N) {
+  const a = scanned(groundSet('pitlane'), uvMetres.div(2.5), 0.05)
+  const lum = a.col.dot(vec3(0.2126, 0.7152, 0.0722))
+  return { col: mix(a.col, vec3(lum), 0.4).mul(1.55), nxy: a.nxy, rough: a.rough }
+}
+
 export function runoffMaterial() {
-  const t = getTextures().asphalt
   const m = new THREE.MeshStandardNodeMaterial()
-  const tex = texture(t.map, uv())
+  const a = pitAsphaltSample(uv().mul(4))
   const macro = mx_noise_float(vec3(positionWorld.x.mul(0.03), 2.3, positionWorld.z.mul(0.03))).mul(0.5).add(0.5)
-  m.colorNode = tex.rgb.mul(1.35).add(vec3(0.02, 0.019, 0.016)).mul(mix(float(0.85), float(1.1), macro))
-  m.roughnessNode = clamp(tex.a.add(0.08), 0, 1)
-  m.normalNode = normalMap(texture(t.normal, uv()), vec2(0.7))
+  m.colorNode = a.col.mul(mix(float(0.88), float(1.1), macro))
+  m.roughnessNode = clamp(a.rough.add(0.04), 0, 1)
+  m.normalNode = normalMap(normalFromXY(a.nxy), vec2(0.9))
   return m
 }
 
@@ -138,45 +212,48 @@ export function vergeMaterial() {
   const m = new THREE.MeshStandardNodeMaterial()
   const tr = aTrack()
   const gravelW = tr.x
-  const grass = grassColor()
+  const grass = grassColor(tr.z)
   const gtex = texture(tex.gravel.map, uv().mul(8 / 3))
   const w = smoothstep(0.3, 0.7, gravelW)
   m.colorNode = mix(grass.color, gtex.rgb, w)
   m.roughnessNode = mix(grass.rough, float(0.95), w)
-  m.normalNode = normalMap(mix(texture(tex.grass.normal, uv()), texture(tex.gravel.normal, uv().mul(8 / 3)), w), vec2(0.8))
+  m.normalNode = normalMap(mix(normalFromXY(grass.nxy), texture(tex.gravel.normal, uv().mul(8 / 3)).rgb, w), vec2(0.8))
   return m
 }
 
-function grassColor() {
-  const tex = getTextures().grass
-  const t1 = texture(tex.map, uv())
-  const t2 = texture(tex.map, uv().mul(0.137).add(vec2(0.31, 0.77)))
+/**
+ * Grass ground with the photo scan up close; far away it settles to its mean colour (a tiled scan
+ * shimmers and repeats at a distance), with slow colour variation and faint mowing stripes.
+ */
+function grassColor(leafy: N = float(0)) {
+  const g = scannedGrass(positionWorld.xz, leafy)
   const n = mx_noise_float(vec3(positionWorld.x.mul(0.006), 0.5, positionWorld.z.mul(0.006))).mul(0.5).add(0.5)
   const n2 = mx_noise_float(vec3(positionWorld.x.mul(0.035), 4.5, positionWorld.z.mul(0.035))).mul(0.5).add(0.5)
   // mowing stripes (subtle) near the track
   const stripes = sin(positionWorld.x.add(positionWorld.z.mul(0.3)).mul(0.35)).mul(0.5).add(0.5)
-  let col = mix(t1.rgb, t2.rgb, 0.35)
-  col = col.mul(mix(vec3(0.85, 0.95, 0.8), vec3(1.15, 1.05, 0.85), n))
-  col = col.mul(mix(float(0.9), float(1.1), n2)).mul(mix(float(0.95), float(1.05), stripes))
-  // reduce visible tiling far away
+  let col = g.col.mul(mix(vec3(0.88, 0.96, 0.84), vec3(1.1, 1.04, 0.88), n))
+  col = col.mul(mix(float(0.9), float(1.1), n2)).mul(mix(float(0.96), float(1.04), stripes))
   const dist = length(positionWorld.sub(cameraPosition))
-  const far = smoothstep(60, 600, dist)
-  col = mix(col, vec3(0.055, 0.08, 0.03).mul(mix(float(0.9), float(1.15), n)), far.mul(0.55))
-  return { color: col, rough: t1.a }
+  const far = smoothstep(120, 900, dist)
+  col = mix(col, col.mul(0.25).add(vec3(0.05, 0.065, 0.026).mul(mix(float(0.85), float(1.15), n))), far.mul(0.6))
+  return { color: col, rough: g.rough, nxy: mix(g.nxy, vec2(0.5, 0.5), far) }
 }
 
 export function terrainMaterial() {
-  const tex = getTextures().grass
   const m = new THREE.MeshStandardNodeMaterial()
-  const g = grassColor()
-  // rocky slopes on steep terrain far from the track
+  // forest floor (leaves) away from the track, where the forests grow
   const tr = aTrack()
-  const farFromTrack = smoothstep(80, 400, tr.x)
+  const farFromTrack = smoothstep(20, 120, tr.x)
+  const forest = mx_noise_float(vec3(positionWorld.x.mul(0.006).add(3.1), 1.9, positionWorld.z.mul(0.006).sub(7.7))).mul(0.5).add(0.5)
+  const leafy = smoothstep(0.45, 0.62, forest).mul(farFromTrack).mul(0.8)
+  const g = grassColor(leafy)
+  // rocky slopes on steep terrain far from the track
+  const farRock = smoothstep(80, 400, tr.x)
   const rock = mx_noise_float(vec3(positionWorld.x.mul(0.05), positionWorld.y.mul(0.05), positionWorld.z.mul(0.05))).mul(0.5).add(0.5)
-  const rockMask = smoothstep(0.62, 0.8, rock).mul(farFromTrack).mul(0.7)
+  const rockMask = smoothstep(0.62, 0.8, rock).mul(farRock).mul(0.7)
   m.colorNode = mix(g.color, vec3(0.16, 0.15, 0.13).mul(rock.add(0.5)), rockMask)
   m.roughnessNode = max(g.rough, 0.85)
-  m.normalNode = normalMap(texture(tex.normal, uv()), vec2(0.6))
+  m.normalNode = normalMap(normalFromXY(g.nxy), vec2(0.7))
   return m
 }
 
@@ -187,9 +264,9 @@ export function mountainMaterial() {
   const n2 = mx_noise_float(positionWorld.mul(0.02)).mul(0.5).add(0.5)
   const forest = vec3(0.03, 0.05, 0.025).mul(n2.add(0.6))
   const rock = vec3(0.2, 0.19, 0.18).mul(n.add(0.5))
-  const snow = vec3(0.85, 0.87, 0.9)
-  let col = mix(forest, rock, smoothstep(120, 260, h.add(n.mul(80))))
-  col = mix(col, snow, smoothstep(330, 420, h.add(n2.mul(60))))
+  const snow = vec3(0.55, 0.57, 0.61)
+  let col = mix(forest, rock, smoothstep(140, 300, h.add(n.mul(80))))
+  col = mix(col, snow, smoothstep(420, 500, h.add(n2.mul(60))))
   m.colorNode = col
   m.roughnessNode = float(0.9)
   return m

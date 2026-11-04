@@ -3,12 +3,13 @@
 import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo } from 'react'
 import * as THREE from 'three/webgpu'
-import { float, mix, mx_noise_float, positionWorld, texture, uv, vec3 } from 'three/tsl'
+import { float, max, mix, mx_noise_float, normalMap, positionWorld, uv, vec2, vec3 } from 'three/tsl'
 import { game } from '../game/game'
 import { teamRace } from '../team/session'
 import { pitLane } from '../track/pitlane'
 import type { Track } from '../track/track'
-import { canvasTexture, getTextures } from './textures'
+import { canvasTexture } from './textures'
+import { pitAsphaltSample } from './materials'
 
 const _p = { x: 0, y: 0, z: 0 }
 
@@ -47,13 +48,19 @@ function ribbon(track: Track, s0: number, s1: number, edges: (s: number) => [num
 }
 
 function pitAsphalt() {
-  const t = getTextures().asphalt
   const m = new THREE.MeshStandardNodeMaterial({ polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })
-  const tex = texture(t.map, uv())
+  // photo-scanned pit lane asphalt (uv is world x/z over 4)
+  const a = pitAsphaltSample(uv().mul(4))
   const macro = mx_noise_float(vec3(positionWorld.x.mul(0.05), 0, positionWorld.z.mul(0.05))).mul(0.5).add(0.5)
-  m.colorNode = tex.rgb.mul(mix(float(0.62), float(0.78), macro))
-  m.roughnessNode = tex.a.mul(0.95)
+  m.colorNode = a.col.mul(mix(float(0.8), float(0.95), macro))
+  m.roughnessNode = a.rough.mul(0.95)
+  m.normalNode = normalMap(pitNormal(a.nxy), vec2(0.8))
   return m
+}
+
+function pitNormal(nxy: any) {
+  const xy = nxy.mul(2).sub(1)
+  return vec3(nxy, max(float(1).sub(xy.dot(xy)), 0).sqrt().mul(0.5).add(0.5))
 }
 
 function boardTexture(name: string, color: string, accent: string) {

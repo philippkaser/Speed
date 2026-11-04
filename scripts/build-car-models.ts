@@ -1,6 +1,10 @@
-// Builds the game's car models from the source GLBs in src/car/*/source.
+// Builds the game's car models from the source GLBs in src/car/*/source (and "new assets/").
 //
 //   bun scripts/build-car-models.ts            -> public/models/<id>.glb
+//   bun scripts/build-car-models.ts mustang-gt3 (one model)
+//
+// A source can also be a .zip holding the GLB (GitHub refuses files over 100 MB; the Mustang's GLB is
+// 122 MB unpacked, 86 MB zipped).
 //
 // For each model:
 //  - bakes every node transform and normalises the car: metres, facing +z, +x to the left, ground at
@@ -17,9 +21,10 @@
 import { Document, type Material, NodeIO, type Primitive } from '@gltf-transform/core'
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions'
 import { meshopt, prune, textureCompress } from '@gltf-transform/functions'
-import { mkdirSync, statSync } from 'fs'
+import { mkdirSync, readFileSync, statSync } from 'fs'
 import { MeshoptEncoder, MeshoptSimplifier } from 'meshoptimizer'
 import sharp from 'sharp'
+import { unzipSync } from 'three/examples/jsm/libs/fflate.module.js'
 
 /** physics wheelbase of the GT3 class (src/physics/spec.ts, vanta-gt3) */
 const TARGET_WHEELBASE = 2.72
@@ -41,8 +46,11 @@ interface ModelDef {
   steer: RegExp
   /** the steering wheel as a separately turning part (by node path or material) */
   steeringWheel: RegExp
-  /** livery colours the recolouring maps from (sRGB hue 0..1, value) */
-  paint: { baseHue: number; baseV: number; accentHue: number; accentV: number }
+  /**
+   * livery colours the recolouring maps from (sRGB hue 0..1, value); `hiHue`/`hiV`: lighter stripes
+   * of the base colour, recoloured to a lighter shade of the team colour
+   */
+  paint: { baseHue: number; baseV: number; accentHue: number; accentV: number; hiHue?: number; hiV?: number }
 }
 
 const MODELS: ModelDef[] = [
@@ -73,6 +81,21 @@ const MODELS: ModelDef[] = [
     steer: /Steering_Wheel_Inst$/,
     steeringWheel: /Steering_Wheel/,
     paint: { baseHue: 0.635, baseV: 0.28, accentHue: 0.967, accentV: 0.8 },
+  },
+  {
+    id: 'mustang-gt3',
+    name: 'Ford Mustang GT3',
+    src: 'new assets/ford-mustang-gt3-2024/source/ford_mustang_gt3_2024__www_vecarz_com.zip',
+    yaw: 0,
+    livery: /^EXT_Carpaint_Inst$/,
+    spin: /^(MI_Tyre_Flex_Dry_L|EXT_RIM|EXT_Disc)$/,
+    fixed: /Caliper/i,
+    // motion-blurred rim cards, the low-detail steering wheel and the unbuckled belts (a driver sits in)
+    drop: /RIM_BLUR|STEER_LR|belt_off|^WorldGridMaterial$/i,
+    seat: /^INT_ALCANTARA$/,
+    steer: /^INT_Steer$/,
+    steeringWheel: /STEER_HR/,
+    paint: { baseHue: 0.625, baseV: 0.27, accentHue: 0.0, accentV: 0.54, hiHue: 0.59, hiV: 0.68 },
   },
 ]
 
@@ -208,7 +231,13 @@ function simplifyPart(p: Part, ratio: number, error: number, lockBorder = true):
 async function build(def: ModelDef) {
   const t0 = performance.now()
   const io = new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({ 'meshopt.encoder': MeshoptEncoder })
-  const doc = await io.read(def.src)
+  let doc: Document
+  if (def.src.endsWith('.zip')) {
+    const files = unzipSync(new Uint8Array(readFileSync(def.src)))
+    const glb = Object.keys(files).find((f) => f.toLowerCase().endsWith('.glb'))
+    if (!glb) throw new Error(`${def.src}: no .glb inside`)
+    doc = await io.readBinary(files[glb])
+  } else doc = await io.read(def.src)
   const prims = listPrims(doc)
   const Y = yawMat(def.yaw)
 

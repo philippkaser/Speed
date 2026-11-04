@@ -3,12 +3,13 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { DriveCam } from '../render/CameraRig'
 import { CARS, type CarSetup } from '../physics/spec'
+import type { GltfCarId } from '../car/gltfCars'
 
 export type Screen = 'boot' | 'title' | 'home' | 'garage' | 'tuning' | 'raceSetup' | 'settings' | 'lobby' | 'loading' | 'driving' | 'results' | 'teamHQ'
 
 export interface Career {
   /** bodywork of the GT3 car */
-  gt3Model?: 'ferrari-296-gt3' | 'amg-gt3'
+  gt3Model?: GltfCarId
   carId: string
   colors: Record<string, string>
   setups: Record<string, CarSetup>

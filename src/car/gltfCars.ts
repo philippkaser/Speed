@@ -16,6 +16,7 @@ import type { CarModel } from './carModel'
 export const GLTF_CARS = [
   { id: 'ferrari-296-gt3', name: 'Ferrari 296 GT3' },
   { id: 'amg-gt3', name: 'Mercedes-AMG GT3' },
+  { id: 'mustang-gt3', name: 'Ford Mustang GT3' },
 ] as const
 export type GltfCarId = (typeof GLTF_CARS)[number]['id']
 
@@ -23,7 +24,8 @@ interface Meta {
   id: string
   name: string
   livery: string
-  paint: { baseHue: number; baseV: number; accentHue: number; accentV: number }
+  /** hiHue/hiV: lighter stripes of the base colour (they become a lighter shade of the team colour) */
+  paint: { baseHue: number; baseV: number; accentHue: number; accentV: number; hiHue?: number; hiV?: number }
   wheels: Record<'FL' | 'FR' | 'RL' | 'RR', { centre: [number, number, number]; radius: number }>
   seat: [number, number, number] | null
   steeringWheel: [number, number, number] | null
@@ -183,6 +185,15 @@ function liveryMaterial(src: THREE.MeshPhysicalMaterial, paint: Meta['paint'], p
     const shadeB = pow(v.div(paint.accentV).clamp(0.35, 1.15), float(2.2))
     let col: any = lin.mul(base)
     col = mix(col, (teamA as any).mul(shadeA), baseW)
+    if (paint.hiHue !== undefined && paint.hiV !== undefined) {
+      // lighter stripes of the base colour: a lifted shade of the team colour
+      const hiW = float(1)
+        .sub(smoothstep(0.02, 0.045, hueDist(h, paint.hiHue)))
+        .mul(smoothstep(0.42, 0.62, s))
+        .mul(smoothstep(0.45, 0.58, v))
+      const shadeH = pow(v.div(paint.hiV).clamp(0.4, 1.2), float(2.2))
+      col = mix(col, mix(teamA as any, vec3(1), 0.32).mul(shadeH), hiW)
+    }
     col = mix(col, (teamB as any).mul(shadeB), accW)
     m.colorNode = col
   } else m.color.copy(src.color)

@@ -271,8 +271,9 @@ export function canvasTexture(w: number, h: number, draw: (ctx: CanvasRenderingC
   return t
 }
 
-let cache: { asphalt: PBRSet; grass: PBRSet; gravel: PBRSet; concrete: PBRSet } | null = null
-export function getTextures() {
-  if (!cache) cache = { asphalt: makeAsphalt(), grass: makeGrass(), gravel: makeGravel(), concrete: makeConcrete() }
-  return cache
+const makers = { asphalt: () => makeAsphalt(), grass: () => makeGrass(), gravel: () => makeGravel(), concrete: () => makeConcrete() }
+const cache: Partial<Record<keyof typeof makers, PBRSet>> = {}
+/** Procedural sets, each generated on first use (asphalt and grass are photo-scanned now: src/render/worldAssets.ts). */
+export function getTextures(): Record<keyof typeof makers, PBRSet> {
+  return new Proxy({} as Record<keyof typeof makers, PBRSet>, { get: (_, k: keyof typeof makers) => (cache[k] ??= makers[k]()) })
 }

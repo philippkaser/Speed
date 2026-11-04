@@ -13,6 +13,10 @@ import type { RoomInfo } from '../net/protocol'
 import { useSettings } from '../state/settings'
 import { Track } from '../track/track'
 import { getTrackDef } from '../track/trackDef'
+import type { GltfCarId } from '../car/gltfCars'
+
+/** bodywork of the GT3 field, in turn */
+const GT3_FIELD: GltfCarId[] = ['amg-gt3', 'ferrari-296-gt3', 'mustang-gt3']
 
 /** What the game loop needs from the team race engine (src/team/teamRace.ts). */
 export interface TeamRaceHooks {
@@ -62,7 +66,7 @@ export interface CarEntry {
   timing: LapTiming
   sample: ReturnType<typeof makeSample>
   /** detailed body for GT3 cars (src/car/gltfCars.ts) */
-  model?: 'ferrari-296-gt3' | 'amg-gt3'
+  model?: GltfCarId
   /** team race: livery and timing-screen identity */
   teamId?: string
   accent?: string
@@ -72,7 +76,7 @@ export interface CarEntry {
 
 /** One car of a team race (pit wall mode). */
 export interface TeamEntryConfig {
-  model?: 'ferrari-296-gt3' | 'amg-gt3'
+  model?: GltfCarId
   id: string
   name: string
   code: string
@@ -87,7 +91,7 @@ export interface TeamEntryConfig {
 
 export interface SessionConfig {
   /** bodywork of the player's GT3 car */
-  gt3Model?: 'ferrari-296-gt3' | 'amg-gt3'
+  gt3Model?: GltfCarId
   mode: Mode
   trackId: string
   carId: string
@@ -244,8 +248,8 @@ export class Game {
 
   private addEntry(id: string, name: string, carId: string, color: string, sim: SimCar, isPlayer: boolean): CarEntry {
     const e: CarEntry = { id, name, carId, color, sim, isPlayer, isRemote: false, timing: new LapTiming(), sample: makeSample() }
-    // GT3 class: the player's chosen bodywork, the field alternates between the two
-    if (carId === 'vanta-gt3') e.model = isPlayer ? (this.config?.gt3Model ?? 'ferrari-296-gt3') : this.cars.length % 2 === 0 ? 'amg-gt3' : 'ferrari-296-gt3'
+    // GT3 class: the player's chosen bodywork, the field takes turns with the three models
+    if (carId === 'vanta-gt3') e.model = isPlayer ? (this.config?.gt3Model ?? 'ferrari-296-gt3') : GT3_FIELD[this.cars.length % GT3_FIELD.length]
     this.cars.push(e)
     return e
   }

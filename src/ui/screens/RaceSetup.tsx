@@ -3,6 +3,7 @@ import { game } from '../../game/game'
 import { startDriving } from '../../game/session'
 import { getCar } from '../../physics/spec'
 import { useGameStore } from '../../state/gameStore'
+import { useSettings } from '../../state/settings'
 import { Btn, Segmented, Slider } from '../components'
 import { BottomBar, TopBar } from './Home'
 
@@ -25,6 +26,7 @@ export function TrackMapSVG({ stroke = '#fff', width = 3, pad = 40 }: { stroke?:
 
 export function RaceSetup() {
   const g = useGameStore()
+  const photoSky = useSettings((s) => (s.graphics.sky ?? 'photo') === 'photo')
   const race = g.sessionKind === 'race'
   const tr = game.track
   const spec = getCar(g.career.carId)
@@ -89,7 +91,7 @@ export function RaceSetup() {
                 <Slider label="AI strength" value={g.aiSkill} min={0.8} max={1.02} step={0.01} unit="%" format={(v) => Math.round(v * 100) + ''} onChange={(v) => g.set({ aiSkill: v })} />
               </>
             )}
-            <Slider label="Time of day" sub="Sun position, light colour and shadows" value={g.timeOfDay} min={6.5} max={20.2} step={0.1} format={hourLabel} onChange={(v) => g.set({ timeOfDay: v })} />
+            <Slider label="Time of day" sub={photoSky ? 'Used with the dynamic sky (Settings → Graphics → Sky); the photographic sky keeps its own afternoon sun' : 'Sun position, light colour and shadows'} value={g.timeOfDay} min={6.5} max={20.2} step={0.1} format={hourLabel} onChange={(v) => g.set({ timeOfDay: v })} />
             <div className="section-title" style={{ marginTop: 20 }}>
               Your car
             </div>

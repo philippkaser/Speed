@@ -1,4 +1,5 @@
 // Teams, drivers, the season calendar and points for the team (pit wall) mode. All fictional.
+import type { GltfCarId } from '../car/gltfCars'
 
 export interface Driver {
   id: string
@@ -20,7 +21,7 @@ export interface Driver {
 
 export interface Team {
   /** detailed car model (src/car/gltfCars.ts) */
-  model?: 'ferrari-296-gt3' | 'amg-gt3'
+  model?: GltfCarId
   id: string
   name: string
   short: string
@@ -36,7 +37,7 @@ const d = (id: string, first: string, last: string, code: string, number: number
 export const RIVAL_TEAMS: Team[] = [
   {
     id: 'nordkap',
-    model: 'amg-gt3',
+    model: 'mustang-gt3',
     name: 'Nordkap Racing',
     short: 'NKR',
     color: '#0b3d91',
@@ -76,7 +77,7 @@ export const RIVAL_TEAMS: Team[] = [
   },
   {
     id: 'solano',
-    model: 'amg-gt3',
+    model: 'mustang-gt3',
     name: 'Solano Works',
     short: 'SOL',
     color: '#f2f2ef',

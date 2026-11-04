@@ -1,6 +1,9 @@
 // Sky, sun, image based lighting and aerial perspective.
+//
+// Two skies: the photographic one (default; an HDRI, src/render/photoSky.ts) whose sun, light colour
+// and strength come from the photograph, and the procedural one (SkyMesh) that follows the time of day.
 import { useFrame, useThree } from '@react-three/fiber'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three/webgpu'
 import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js'
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js'
@@ -9,6 +12,8 @@ import { useSettings } from '../state/settings'
 import { debugFlag } from '../util/debug'
 import { setTrackTemp } from '../physics/tyre'
 import { postUniforms } from './PostFX'
+import { makeEnvScene, makeSkyDome, photoRotationFor, photoSkyHorizon, photoSkyU, photoSunDir } from './photoSky'
+import { skyMeta, skyReady } from './worldAssets'
 
 export interface SunState {
   dir: THREE.Vector3
@@ -16,6 +21,9 @@ export interface SunState {
   intensity: number
   elevation: number
 }
+
+/** The cascaded shadow maps of the sun (vegetation sizes its shadow draws by the cascades' ranges). */
+export const csmState: { csm: CSMShadowNode | null } = { csm: null }
 
 export const sunState: SunState = { dir: new THREE.Vector3(0.3, 0.4, 0.2).normalize(), color: new THREE.Color(1, 0.9, 0.8), intensity: 3, elevation: 0.3 }
 
@@ -32,11 +40,44 @@ export function computeSun(hour: number): SunState {
   return { dir, color, intensity, elevation }
 }
 
+/** Sun light strength (scene units) for a high sun; the photographic sky is scaled to match it. */
+const SUN_INTENSITY = 6.5
+
+/** Whether the photographic sky is in use (Settings, `?procsky` forces the procedural one). */
+export function usePhotoSky() {
+  const mode = useSettings((s) => s.graphics.sky ?? 'photo')
+  return mode === 'photo' && !debugFlag('procsky')
+}
+
+/**
+ * The photographic sky's sun. The photograph fixes its elevation (48 degrees); it is turned so the sun
+ * stands where the clock would put a sun that high in the afternoon, and its light is measured from the
+ * disc in the HDRI (colour and irradiance), the sky's brightness scaled to keep the same ratio.
+ */
+export function photoSun(): SunState & { rot: number; scale: number } {
+  const elevation = Math.asin(skyMeta.sunDir[1])
+  // the afternoon hour with this elevation
+  let hour = 16
+  for (let h = 13; h <= 20; h += 0.01) {
+    if (computeSun(h).elevation <= elevation) {
+      hour = h
+      break
+    }
+  }
+  const ref = computeSun(hour).dir
+  const rot = photoRotationFor(Math.atan2(ref.z, ref.x))
+  const [r, g, b] = skyMeta.sunIrradiance
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+  const scale = SUN_INTENSITY / lum
+  return { dir: photoSunDir(rot), color: new THREE.Color(r / lum, g / lum, b / lum), intensity: SUN_INTENSITY, elevation, rot, scale }
+}
+
 export function Environment({ hour, focus }: { hour: number; focus?: React.RefObject<THREE.Vector3> }) {
   const { scene, gl, camera } = useThree()
   const renderer = gl as unknown as THREE.WebGPURenderer
   const shadowsQ = useSettings((s) => s.graphics.shadows)
-  const sun = useMemo(() => computeSun(hour), [hour])
+  const photo = usePhotoSky()
+  const sun = useMemo(() => (photo ? photoSun() : computeSun(hour)), [hour, photo])
   Object.assign(sunState, sun)
   // asphalt temperature follows the sun (feeds the tyre thermal model)
   useEffect(() => setTrackTemp(24 + 26 * Math.max(0, Math.sin(sun.elevation))), [sun])
@@ -54,6 +95,18 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
     s.frustumCulled = false
     return s
   }, [])
+
+  const dome = useMemo(() => makeSkyDome(), [])
+  useEffect(() => () => dome.geometry.dispose(), [dome])
+  // the environment map is captured from the photograph: (re)capture once its images are in
+  const [skyIn, setSkyIn] = useState(false)
+  useEffect(() => {
+    let alive = true
+    if (photo) skyReady().then(() => alive && setSkyIn(true))
+    return () => {
+      alive = false
+    }
+  }, [photo])
 
   const light = useMemo(() => {
     const l = new THREE.DirectionalLight(0xffffff, 3)
@@ -79,10 +132,12 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
       // note: CSM picks up the camera itself on first build (setting it early skips its init)
       light.shadow.shadowNode = csm
       ;(light as any).__csm = csm
+      csmState.csm = csm
     }
     return () => {
       light.shadow.map?.dispose()
       ;(light.shadow as any).shadowNode = null
+      csmState.csm = null
     }
   }, [light, shadowsQ, camera])
 
@@ -104,7 +159,8 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
       const dist = length(toFrag)
       const dir = toFrag.div(max(dist, 0.001))
       const sunAmt = pow(max(dot(dir, fogU.sunDir), 0), float(7))
-      const col = mix(fogU.color, fogU.sunColor, sunAmt.mul(0.75))
+      // photographic sky: distant terrain fades into the sky's own horizon behind it
+      const col = photo ? photoSkyHorizon(dir).mul(0.85) : mix(fogU.color, fogU.sunColor, sunAmt.mul(0.75))
       // height attenuated exponential fog (denser in valleys)
       const h = max(positionWorld.y.add(20), 0)
       const dens = fogU.density.mul(exp(h.mul(fogU.heightFalloff).negate()).mul(0.7).add(0.3))
@@ -115,14 +171,15 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
     return () => {
       scene.fogNode = null
     }
-  }, [scene, fogU])
+  }, [scene, fogU, photo])
 
   // apply sun + environment (PMREM of the sky)
   useEffect(() => {
     // base exposure follows the light on the ground, like a camera operator: a high sun puts about
     // twice the light on the track of an evening sun. Calibrated to leave 18:18 (24 degrees) as is;
     // the auto exposure only adapts relative to this.
-    postUniforms.exposure.value = THREE.MathUtils.clamp((Math.sin(0.42) + 0.15) / (Math.sin(Math.max(sun.elevation, 0)) + 0.15), 0.5, 1.35)
+    // (the photographic sky's measured light is a little stronger than the procedural sky's)
+    postUniforms.exposure.value = THREE.MathUtils.clamp((Math.sin(0.42) + 0.15) / (Math.sin(Math.max(sun.elevation, 0)) + 0.15), 0.5, 1.35) * (photo ? 0.88 : 1)
     const sunPos = sun.dir.clone().multiplyScalar(1000)
     sky.sunPosition.value.copy(sun.dir)
     light.color.copy(sun.color)
@@ -134,6 +191,27 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
     fogU.color.value.copy(horizon)
     fogU.sunColor.value.copy(sun.color).multiplyScalar(1.1)
     light.position.copy(sunPos)
+
+    if (photo) {
+      const ps = sun as ReturnType<typeof photoSun>
+      photoSkyU.rot.value = ps.rot
+      photoSkyU.scale.value = ps.scale
+      // grass-green ground under the sun and sky (albedo ~0.13): what the lower half reflects
+      const [sr, sg, sb] = skyMeta.skyIrradiance
+      const e = (Math.sin(sun.elevation) * SUN_INTENSITY + ps.scale * (0.2126 * sr + 0.7152 * sg + 0.0722 * sb)) / Math.PI
+      photoSkyU.ground.value.setRGB(0.1 * e, 0.125 * e, 0.075 * e)
+      if (debugFlag('noenv') || !skyIn) return
+      const env = makeEnvScene()
+      const pmrem = new THREE.PMREMGenerator(renderer)
+      const rt = pmrem.fromScene(env.scene as any, 0, 0.1, 2000)
+      scene.environment = rt.texture
+      scene.environmentIntensity = 1
+      pmrem.dispose()
+      env.dispose()
+      return () => {
+        rt.dispose()
+      }
+    }
 
     // environment map from a dedicated sky scene
     const envScene = new THREE.Scene()
@@ -160,7 +238,14 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
     return () => {
       rt.dispose()
     }
-  }, [sun, sky, light, renderer, scene, fogU])
+  }, [sun, sky, light, renderer, scene, fogU, photo, skyIn])
+
+  // the photographic dome rides with the camera (after the camera rigs, before the frame is drawn)
+  useFrame(() => {
+    if (!photo) return
+    dome.position.copy(camera.position)
+    dome.updateMatrixWorld()
+  }, 0.5)
 
   const target = useRef(new THREE.Vector3())
   useFrame(() => {
@@ -178,7 +263,7 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
 
   return (
     <>
-      {!debugFlag('nosky') && <primitive object={sky} />}
+      {!debugFlag('nosky') && <primitive object={photo ? dome : sky} />}
       <primitive object={light} />
       <primitive object={light.target} />
     </>

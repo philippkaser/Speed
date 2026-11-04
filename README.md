@@ -1,7 +1,7 @@
 # SPEED
 
 A browser racing game built with **React 19, Bun, Vite, React Three Fiber, drei and three.js (WebGPU / TSL)**.
-Everything — car bodies, circuit, textures, scenery, engine sound — is generated procedurally at load time. There are no downloaded assets.
+The circuit, buildings and engine sound are generated procedurally at load time. The GT3 cars, the sky, the asphalt and grass surfaces, the trees and the grass are photographed or modelled assets (see Credits), prepared for the browser by the build scripts below.
 
 ```bash
 bun install
@@ -12,9 +12,11 @@ bun test         # physics, AI, multiplayer integration and motion-history tests
 bun run test:gpu # headless smoke test of the real WebGPU backend (needs Playwright + Chromium, dev server running)
 ```
 
+Asset builds (only needed when the source art in `new assets/` or `src/car/*/source` changes; the results in `public/` are committed): `bun scripts/build-car-models.ts [id]`, `bun scripts/build-world-assets.ts [sky] [ground] [trees] [grass]`.
+
 Useful URL switches: `?team` (straight into a team race), `?hq` (Team HQ), `?drive` (straight into a practice session), `?race`, `?showroom`, `?car=aurel-gt`, `?q=low|medium|high|ultra`, `?webgl` (force the WebGL2 backend), `?webgpu` (force WebGPU and never fall back), `?autopilot` (AI drives your car).
 
-Debug switches: `?showvel` (motion vectors as the blur sees them; spinning wheel parts in blue, calipers in magenta), `?showtiles` (the motion blur's neighbour-max tiles), `?sidecam` / `?sidecam=front|rear|post|heli` (tracking shot alongside the car, a fixed trackside camera placed ahead of the car when `window.__postcam = true` is set, or the broadcast helicopter), `?simonly` (run the game without rendering, for measuring camera and object motion), `?donut` (full lock and full throttle with traction control off, for tyre smoke), `?offscreen` (render into a render target, used by the headless tests).
+Debug switches: `?procsky` (the dynamic sky regardless of the setting), `?notrees`, `?noimpostors`, `?nograss`, `?showvel` (motion vectors as the blur sees them; spinning wheel parts in blue, calipers in magenta), `?showtiles` (the motion blur's neighbour-max tiles), `?sidecam` / `?sidecam=front|rear|post|heli` (tracking shot alongside the car, a fixed trackside camera placed ahead of the car when `window.__postcam = true` is set, or the broadcast helicopter), `?simonly` (run the game without rendering, for measuring camera and object motion), `?donut` (full lock and full throttle with traction control off, for tyre smoke), `?offscreen` (render into a render target, used by the headless tests).
 
 If the 3D view ever stays black, open Settings → Graphics → Renderer and pick WebGL2, or add `?webgl` to the URL. The game also switches itself: on a fatal WebGPU error (a pipeline or shader that fails to build, a validation error, device loss) it moves to WebGL2, either automatically or from a notice.
 
@@ -114,11 +116,15 @@ The G-buffer fits WebGPU's default 32-byte colour-attachment budget, and the ren
 `scripts/gpu-smoke.cjs` drives the real WebGPU backend in headless Chromium. It renders offscreen through the `?offscreen` test mode and reads the frames back. It fails on any renderer error or a black frame.
 
 - **Lighting**:
-  - physical sky with clouds (`SkyMesh`)
-  - sun direction and colour from the time of day
+  - **photographic sky** (default, `photoSky.ts`): Poly Haven's *Kloofendal 48d Partly Cloudy* HDRI.
+    - `bun scripts/build-world-assets.ts sky` stores it as an 8-bit colour image plus an 8-bit log2 gain map (radiance = colour × 2^gain, sun included), ~600 KB instead of 75 MB, decoded in the shader.
+    - The sun's direction, colour and irradiance are measured from the disc in the photograph. The directional light carries the sun; the sky is scaled to keep the photograph's sun-to-sky ratio. The environment map (PMREM) is captured from the sky without its sun disc, over a lit ground.
+    - The sky dome rides with the camera (no parallax, no motion from translation in the motion blur). Distant terrain fades into the sky's own horizon behind it.
+    - The photograph fixes the sun at 48° (mid-afternoon); Settings → Graphics → Sky → *Dynamic* switches to the procedural sky.
+  - **dynamic sky**: physical sky with clouds (`SkyMesh`), sun direction and colour from the time of day
   - cascaded shadow maps
   - image-based lighting from a PMREM of the sky
-  - height-attenuated aerial perspective that brightens towards the sun
+  - height-attenuated aerial perspective
 - **Post-processing** (`PostFX.tsx`), in order:
   - MRT scene pass (colour, normals, albedo, metal/rough, velocity)
   - **SSGI** for screen-space indirect light and AO (WebGPU) or GTAO (fallback)
@@ -141,9 +147,9 @@ The G-buffer fits WebGPU's default 32-byte colour-attachment budget, and the ren
   Every preset renders at native resolution (the adaptive resolution scale steps in when the frame rate drops). Auto exposure (eye adaptation) uses a GPU luminance meter read back asynchronously.
   
   Everything else is ACES filmic tone mapping. Quality presets are Low, Medium, High and Ultra. drei's `PerformanceMonitor` adapts the render resolution when the frame rate drops.
-- **GT3 cars** (`src/car/gltfCars.ts`): detailed Ferrari 296 GT3 and Mercedes-AMG GT3 models.
-  - `bun scripts/build-car-models.ts` turns the source GLBs in `src/car/*/source` into `public/models/*.glb` (12 and 15 MB from 68 and 55 MB). It normalises each model to the physics wheelbase, splits the wheels into four pivoted corners, separates the steering wheel (its axis is found from the rim geometry), merges draw calls by material, builds two simplified levels of detail, converts textures to WebP and compresses the geometry with meshopt.
-  - **Team liveries:** each car recolours the model's livery texture in the shader, mapping the navy base to the team colour and the red accents to the team accent, so logos and decals stay intact.
+- **GT3 cars** (`src/car/gltfCars.ts`): detailed Ferrari 296 GT3, Mercedes-AMG GT3 and Ford Mustang GT3 models.
+  - `bun scripts/build-car-models.ts` turns the source GLBs in `src/car/*/source` and `new assets/` into `public/models/*.glb` (12, 15 and 15 MB from 68, 55 and 122 MB). A source may be a zipped GLB (the Mustang's is 122 MB unpacked, over GitHub's 100 MB file limit). It normalises each model to the physics wheelbase, splits the wheels into four pivoted corners, separates the steering wheel (its axis is found from the rim geometry), merges draw calls by material, builds two simplified levels of detail, converts textures to WebP and compresses the geometry with meshopt.
+  - **Team liveries:** each car recolours the model's livery texture in the shader, mapping the navy base to the team colour and the red accents to the team accent, so logos and decals stay intact. The Mustang's lighter blue stripes become a lighter shade of the team colour.
   - **Level of detail** is chosen by on-screen size: the TV cameras' long lenses get the full model even from far away.
   - Wheels spin, steer and follow the suspension, discs glow with brake temperature, brake lights respond to the pedal, and there is a driver in team colours.
   - The other cars keep the procedural bodies below.
@@ -155,12 +161,21 @@ The G-buffer fits WebGPU's default 32-byte colour-attachment budget, and the ren
   - brake discs that glow with the simulated brake temperature
   - airfoil wing, cockpit with a driver and a steering wheel that turns
 - **World**:
-  - procedural tileable PBR textures: asphalt with real aggregate, grass, gravel, concrete
+  - **photo-scanned surfaces** (Poly Haven): race asphalt, older pit lane asphalt (runoff and pit lane), mown grass and leafy forest floor. `bun scripts/build-world-assets.ts ground` packs each set into a colour map (ambient occlusion baked in) and a data map (normal x/y + roughness). In the shaders:
+    - two decorrelated samples per surface (the second rotated, scaled and shifted), blended by slow noise with a variance-preserving blend, so the 2–3 m scans never visibly repeat
+    - the near-black fresh asphalt scan is weathered to a mid grey; the dry grass scan is shifted to summer green
+    - rubber, dust, paint lines and macro variation stay procedural on top
+  - procedural gravel and concrete
   - the racing line is rubbered into the road shader
   - terrain blended into hills and an alpine mountain ring
   - armco, painted concrete walls, tyre walls, catch fences
   - grandstands with crowds, pit building, start gantry with working lights, bridge, billboards, 300/200/100 m boards, marshal posts
-  - card-based foliage trees in chunked LODs with wind sway
+  - **vegetation** (`Vegetation.tsx`), every kind of it a single draw call however many plants there are:
+    - two tree models (a pine and a broadleaf tree, Sketchfab, CC BY 4.0), baked by `bun scripts/build-world-assets.ts trees` into one mesh with one material each: trunk and leaf textures packed into one atlas, leaf cards flattened to quads, branches simplified (pine 2.2k, broadleaf 6.1k triangles), canopy normals bent outwards for soft, volumetric shading
+    - each model is one instanced draw for every tree within ~220 m; beyond that every tree of every model is an **impostor**, one quad per tree in one more draw, baked at load time from the real meshes (16 directions, albedo and canopy normals) and lit like the meshes. Meshes and impostors cross-fade with a dither
+    - **3D grass** on the verges (Poly Haven *grass_medium_01*, its alpha mask derived from the texture's black background): clumps simplified and arranged into one 1.4 m patch mesh (1.8k triangles), instanced around the camera in one draw. The blades take their colour from the ground they stand on, so they fade into the ground texture
+    - instances live in a grid of cells; each frame the visible cells are packed into the instance buffer nearest first (only a change uploads anything), each shadow cascade draws the prefix of instances its range needs, and distances are judged by size on screen (the TV cameras' long lenses get the meshes further out)
+    - wind sway and leaf flutter; the previous position moves with last frame's clock, so the motion blur sees the wind's motion only
 - **Effects**: tyre smoke, dust on grass and gravel, skid marks and sparks.
   - Smoke comes from the contact patch in proportion to friction power above the vaporisation onset, and more from a hot tread.
   - Each puff rides the car's wake, rises with buoyancy while hot, wanders with turbulence, rolls along the road, and grows by turbulent diffusion while its optical depth falls as 1/r² (mass conserved).
@@ -235,4 +250,14 @@ Car models by **vecarz** ([Sketchfab](https://sketchfab.com/heynic)):
 - [Ferrari 296 GT3 VERSTAPPEN | www.vecarz.com](https://sketchfab.com/3d-models/ferrari-296-gt3-verstappen-wwwvecarzcom-cd9e1436a1a2471ea4106490f2ec8955), licensed [CC BY-NC 4.0](http://creativecommons.org/licenses/by-nc/4.0/). Non-commercial use only.
 - [Mercedes AMG GT3 Evo 2020 | www.vecarz.com](https://sketchfab.com/3d-models/mercedes-amg-gt3-evo-2020-wwwvecarzcom-39e77243109f4e5cb7134b6f31c8f619), licensed [CC BY 4.0](http://creativecommons.org/licenses/by/4.0/).
 
-Both are modified for the game (normalised, re-pivoted, simplified, recompressed, recoloured per team). The credits also appear in Settings → Gameplay.
+- [Ford Mustang® GT3 2024 | www.vecarz.com](https://sketchfab.com/3d-models/ford-mustang-gt3-2024-wwwvecarzcom-edc0d377ada74c8d8dcf12f719f81c65), licensed [CC BY 4.0](http://creativecommons.org/licenses/by/4.0/).
+
+All three are modified for the game (normalised, re-pivoted, simplified, recompressed, recoloured per team).
+
+Trees, both licensed [CC BY 4.0](http://creativecommons.org/licenses/by/4.0/) and modified for the game (merged, simplified, re-textured into one atlas):
+- [Pine tree](https://sketchfab.com/3d-models/pine-tree-e52769d653cd4e52a4acff3041961e65) by Andriy Shekh
+- [Realistic Tree](https://sketchfab.com/3d-models/realistic-tree-d989c0f801d847b9a74992ec4ddcfdfc) by Daniel
+
+From [Poly Haven](https://polyhaven.com) (CC0): the *Kloofendal 48d Partly Cloudy (Pure Sky)* HDRI, the *asphalt_track*, *asphalt_pit_lane*, *grass_ground* and *leafy_grass* textures and the *grass_medium_01* model.
+
+The credits also appear in Settings → Gameplay.
