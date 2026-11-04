@@ -50,8 +50,13 @@ import { motionBlur, motionBlurUniforms } from './motionBlur'
 import { beginMotionFrame, motionBlendMode, motionVelocityOutput } from './motionHistory'
 import { particleScene, particleU, sceneDepth } from './particles'
 
-/** Set frames > 0 when the camera jumps: no camera motion (blur, TAA reprojection) across the cut. */
+/**
+ * Set frames > 0 when the camera jumps (a cut). The frame it is set on carries no camera motion, and
+ * TAA starts its history afresh, so nothing of the previous shot lingers in the new one.
+ */
 export const cameraCut = { frames: 0 }
+/** cameraCut.frames after the previous frame's countdown: a larger value means a new cut */
+let lastCutFrames = 0
 
 export const postUniforms = {
   motionBlur: uniform(0.6),
@@ -157,7 +162,8 @@ export function PostFX() {
       // keep the meter in the graph (its contribution is scaled by a zero uniform)
       composite = vec4(composite.rgb.add(meter.sample(vec2(0.5, 0.5)).r.mul(postUniforms.meterTap)), composite.a)
     }
-    if (useTAA && vel) out = upscale < 0.999 ? taau(composite, depth, vel, camera) : traa(composite, depth, vel, camera)
+    let taaNode: any = null
+    if (useTAA && vel) out = taaNode = upscale < 0.999 ? taau(composite, depth, vel, camera) : traa(composite, depth, vel, camera)
     else out = fxaa(composite)
     if (useMB && vel) {
       const q = gfx.preset === 'ultra' ? { pairs: 16, denseTaps: 64 } : gfx.preset === 'high' ? { pairs: 12, denseTaps: 48 } : { pairs: 8, denseTaps: 32 }
@@ -199,20 +205,31 @@ export function PostFX() {
       rp.outputColorTransform = false
     }
     ;(rp as any).__meter = meter
+    ;(rp as any).__taa = taaNode
     return rp
   }, [renderer, scene, camera, useSSGI, useSSR, useAO, useTAA, useMB, useBloom, gfx.preset, upscale, useAE])
 
   useEffect(() => () => pipeline.dispose(), [pipeline])
 
   useFrame((_, dt) => {
-    const cut = cameraCut.frames > 0
-    if (cut) cameraCut.frames--
+    // a cut is the frame cameraCut was (re)armed on; the following frames are an ordinary shot
+    const cut = cameraCut.frames > lastCutFrames
+    if (cameraCut.frames > 0) cameraCut.frames--
+    lastCutFrames = cameraCut.frames
+    // TAA would otherwise blend ~95% of the previous shot into the first frames of the new one (with
+    // the camera's motion dropped, its history lines up pixel for pixel): ghost copies after every
+    // cut. three's TAA nodes rebuild their history from the current frame when its size changes.
+    const taa = (pipeline as any).__taa
+    if (cut && taa?._historyRenderTarget) taa._historyRenderTarget.setSize(1, 1)
     // shutter angle: the share of each frame's own interval the shutter is open (motion vectors span
     // one frame). At 360 degrees every streak ends where the next frame's begins, so motion is
     // continuous from frame to frame at any frame rate; anything shorter leaves gaps that the eye
     // sees as separate copies (strobing) in fast pans.
     const frameDt = Math.max(dt, 1e-3)
-    const shutter = Math.min(1, Math.max(0, gfx.motionBlur))
+    // a cut frame has no motion at all: nothing in the new shot has a previous frame to have moved
+    // from. (Keeping only the objects' motion would be wrong too: a car the camera follows moves
+    // fast through the world, so with the camera's motion gone it smeared into copies.)
+    const shutter = cut ? 0 : Math.min(1, Math.max(0, gfx.motionBlur))
     postUniforms.motionBlur.value = shutter
     const mb = motionBlurUniforms
     mb.shutter.value = shutter
