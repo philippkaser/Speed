@@ -59,7 +59,9 @@ export function photoRotationFor(azimuth: number) {
 export function makeSkyDome(radius = 8000) {
   const m = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide, depthWrite: false })
   m.fog = false
-  m.colorNode = photoSkyRadiance(normalize(positionLocal), 0)
+  // the sun disc stays far brighter than anything else (it blinds to white and glows through the
+  // bloom), capped so its glare does not wash out the whole frame
+  m.colorNode = photoSkyRadiance(normalize(positionLocal), 0, 8000)
   const dome = new THREE.Mesh(new THREE.SphereGeometry(1, 128, 64), m)
   dome.scale.setScalar(radius)
   dome.frustumCulled = false

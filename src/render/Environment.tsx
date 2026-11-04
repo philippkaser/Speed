@@ -178,8 +178,7 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
     // base exposure follows the light on the ground, like a camera operator: a high sun puts about
     // twice the light on the track of an evening sun. Calibrated to leave 18:18 (24 degrees) as is;
     // the auto exposure only adapts relative to this.
-    // (the photographic sky's measured light is a little stronger than the procedural sky's)
-    postUniforms.exposure.value = THREE.MathUtils.clamp((Math.sin(0.42) + 0.15) / (Math.sin(Math.max(sun.elevation, 0)) + 0.15), 0.5, 1.35) * (photo ? 0.88 : 1)
+    postUniforms.exposure.value = THREE.MathUtils.clamp((Math.sin(0.42) + 0.15) / (Math.sin(Math.max(sun.elevation, 0)) + 0.15), 0.5, 1.35)
     const sunPos = sun.dir.clone().multiplyScalar(1000)
     sky.sunPosition.value.copy(sun.dir)
     light.color.copy(sun.color)
@@ -192,6 +191,8 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
     fogU.sunColor.value.copy(sun.color).multiplyScalar(1.1)
     light.position.copy(sunPos)
 
+    // clear alpine air under the photographic sky (its bright, hazy horizon is the in-scatter colour)
+    fogU.density.value = photo ? 0.00012 : 0.00019
     if (photo) {
       const ps = sun as ReturnType<typeof photoSun>
       photoSkyU.rot.value = ps.rot

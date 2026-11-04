@@ -33,7 +33,6 @@ import {
   mod,
   normalLocal,
   normalViewGeometry,
-  positionLocal,
   positionPrevious,
   screenCoordinate,
   sin,
@@ -73,6 +72,13 @@ const lensOf = (camera: THREE.Camera) => {
   const pc = camera as THREE.PerspectiveCamera
   return pc.isPerspectiveCamera ? Math.min(1.5, Math.max(0.05, Math.tan((pc.fov * Math.PI) / 360) / REF_TAN / pc.zoom)) : 1
 }
+
+/**
+ * The geometry's own vertex position. (positionLocal is overwritten with a material's positionNode
+ * result, here the instance's world position: anything read per vertex after it, varyings included,
+ * must use the attribute.)
+ */
+const vertexPos = (): N => attribute('position', 'vec3')
 
 /** Interleaved gradient noise: the dither of the cross-fades (stable per pixel). */
 const ign = (p: N) => fract(float(52.9829189).mul(fract(p.x.mul(0.06711056).add(p.y.mul(0.00583715)))))
@@ -399,10 +405,10 @@ function instanceTransform(wind: WindOpts, shrink?: N) {
     const gust = sin(t.mul(0.31).add(phase.mul(0.7))).mul(0.35).add(0.75)
     const sx: N = sin(t.mul(wind.speed).add(phase)).mul(amp).mul(gust)
     const sz: N = cos(t.mul(wind.speed * 0.77).add(phase.mul(1.37))).mul(amp).mul(0.55).mul(gust)
-    const f: N = w.y.mul(wind.flutter).mul(sin(t.mul(5.3).add(positionLocal.x.mul(2.7)).add(positionLocal.y.mul(1.9)).add(phase)))
+    const f: N = w.y.mul(wind.flutter).mul(sin(t.mul(5.3).add(vertexPos().x.mul(2.7)).add(vertexPos().y.mul(1.9)).add(phase)))
     return vec3(sx.add(f), f.mul(0.4), sz.sub(f))
   }
-  const pl: N = positionLocal
+  const pl: N = vertexPos()
   const base: N = rot(vec3(pl.x.mul(sc), pl.y.mul(sy), pl.z.mul(sc))).add(iA.xyz)
   const node = Fn(() => {
     positionPrevious.assign(base.add(offset(motionTime.prev)))
@@ -457,7 +463,7 @@ function vegMaterial(o: VegMaterialOpts) {
   m.normalNode = normalViewGeometry
   if (o.crown > 0) {
     // ambient occlusion inside the crown: darker towards the trunk and the bottom of the canopy
-    const radial = positionLocal.xz.length().div(o.crown).clamp(0, 1)
+    const radial = vertexPos().xz.length().div(o.crown).clamp(0, 1)
     m.aoNode = mix(float(1), mix(float(0.45), float(1), radial).mul(mix(float(0.75), float(1), tf.w.x)), leaf)
   }
   const d = ign(screenCoordinate.xy)
@@ -477,7 +483,90 @@ interface Impostors {
   normal: THREE.Texture
   /** per species: half width, half height, centre height (m, at scale 1) */
   frames: THREE.Vector4[]
+  /** the bake's render targets (read back into the textures above, then released) */
+  targets: THREE.RenderTarget[]
+  /** resolves when the textures hold the bake */
+  ready: Promise<void>
   dispose: () => void
+}
+
+/**
+ * Mip chain of an RGBA8 image (rows bottom-up). Colour is averaged by coverage (no dark fringes). For
+ * the albedo, coverage is preserved: each level's alpha is scaled so as many texels pass the alpha
+ * test as at full size. Plain averaging thins alpha-tested trees out with distance until they vanish.
+ */
+function mipChain(src: Uint8Array, W: number, H: number, preserveCoverage: boolean, alphaTest: number) {
+  const levels: { data: Uint8Array; width: number; height: number }[] = [{ data: src, width: W, height: H }]
+  const t = alphaTest * 255
+  let covered = 0
+  for (let i = 3; i < src.length; i += 4) if (src[i] > t) covered++
+  const coverage0 = covered / (W * H)
+  let prev = levels[0]
+  while (prev.width > 1 || prev.height > 1) {
+    const w = Math.max(1, prev.width >> 1),
+      h = Math.max(1, prev.height >> 1)
+    const d = new Uint8Array(w * h * 4)
+    const alpha = new Float32Array(w * h)
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        let r = 0,
+          g = 0,
+          b = 0,
+          a = 0,
+          n = 0,
+          pr = 0,
+          pg = 0,
+          pb = 0
+        for (let dy = 0; dy < 2; dy++)
+          for (let dx = 0; dx < 2; dx++) {
+            const sx = Math.min(prev.width - 1, x * 2 + dx),
+              sy = Math.min(prev.height - 1, y * 2 + dy)
+            const k = (sy * prev.width + sx) * 4
+            const wa = prev.data[k + 3]
+            r += prev.data[k] * wa
+            g += prev.data[k + 1] * wa
+            b += prev.data[k + 2] * wa
+            pr += prev.data[k]
+            pg += prev.data[k + 1]
+            pb += prev.data[k + 2]
+            a += wa
+            n++
+          }
+        const o = (y * w + x) * 4
+        if (a > 0) {
+          d[o] = r / a
+          d[o + 1] = g / a
+          d[o + 2] = b / a
+        } else {
+          d[o] = pr / n
+          d[o + 1] = pg / n
+          d[o + 2] = pb / n
+        }
+        alpha[y * w + x] = a / n
+      }
+    let scale = 1
+    if (preserveCoverage && coverage0 > 0) {
+      // the smallest scale whose share of passing texels reaches the full-size coverage
+      let lo = 1,
+        hi = 16
+      const passing = (sc: number) => {
+        let c = 0
+        for (let i = 0; i < alpha.length; i++) if (alpha[i] * sc > t) c++
+        return c / alpha.length
+      }
+      for (let it = 0; it < 14; it++) {
+        const mid = (lo + hi) / 2
+        if (passing(mid) < coverage0) lo = mid
+        else hi = mid
+      }
+      scale = hi
+    }
+    for (let i = 0; i < alpha.length; i++) d[i * 4 + 3] = Math.min(255, Math.round(alpha[i] * scale))
+    const lvl = { data: d, width: w, height: h }
+    levels.push(lvl)
+    prev = lvl
+  }
+  return levels
 }
 
 /**
@@ -525,7 +614,7 @@ function bakeImpostors(renderer: THREE.WebGPURenderer, species: VegMesh[]): Impo
     // sqrt-encoded linear albedo (8-bit precision in the shadows)
     albedo.colorNode = vec4(tex.rgb.max(0).sqrt(), tex.a)
     const crown = halfW * 0.8
-    const ao = mix(float(1), mix(float(0.5), float(1), positionLocal.xz.length().div(crown).clamp(0, 1)), leaf)
+    const ao = mix(float(1), mix(float(0.5), float(1), vertexPos().xz.length().div(crown).clamp(0, 1)), leaf)
     albedo.colorNode = vec4(tex.rgb.mul(ao).max(0).sqrt(), tex.a)
     const normal = new THREE.MeshBasicNodeMaterial({ side: THREE.DoubleSide, alphaTest: 0.5 })
     // object-space normal of the (bent) canopy
@@ -568,7 +657,61 @@ function bakeImpostors(renderer: THREE.WebGPURenderer, species: VegMesh[]): Impo
     rt.viewport.set(0, 0, W, H)
     rt.scissor.set(0, 0, W, H)
   }
-  return { albedo: rtA.texture, normal: rtB.texture, frames, dispose: () => (rtA.dispose(), rtB.dispose()) }
+  // The bake is read back once and uploaded as ordinary textures with a coverage-preserving mip chain:
+  // sampling the render targets directly from a scene material came back empty, and their automatic
+  // mipmaps averaged the trees' coverage away at a distance.
+  const mkTex = () => {
+    const t = new THREE.DataTexture(new Uint8Array(4), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType)
+    t.colorSpace = THREE.NoColorSpace
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping
+    t.magFilter = THREE.LinearFilter
+    t.minFilter = THREE.LinearMipmapLinearFilter
+    t.generateMipmaps = false
+    t.flipY = false
+    // not uploaded until the bake is in (a texture first uploaded at 1 x 1 is never re-created larger)
+    return t
+  }
+  const albedo = mkTex(),
+    normal = mkTex()
+  const topDown = !!(renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend
+  const readBack = async (rt: THREE.RenderTarget, tex: THREE.DataTexture, preserve: boolean) => {
+    const px = new Uint8Array((await renderer.readRenderTargetPixelsAsync(rt, 0, 0, W, H)) as ArrayLike<number> as Uint8Array)
+    // rows bottom-up (uv v = 0 at the bottom) on both backends; WebGPU reads back top-down
+    if (topDown) {
+      const row = W * 4,
+        tmp = new Uint8Array(row)
+      for (let y = 0; y < H >> 1; y++) {
+        const a = y * row,
+          b = (H - 1 - y) * row
+        tmp.set(px.subarray(a, a + row))
+        px.copyWithin(a, b, b + row)
+        px.set(tmp, b)
+      }
+    }
+    const mips = mipChain(px, W, H, preserve, 0.4)
+    tex.image = { data: mips[0].data, width: W, height: H } as unknown as THREE.DataTexture['image']
+    tex.mipmaps = mips as unknown as THREE.DataTexture['mipmaps']
+    tex.needsUpdate = true
+  }
+  const ready = Promise.all([readBack(rtA, albedo, true), readBack(rtB, normal, false)])
+    .then(() => {
+      rtA.dispose()
+      rtB.dispose()
+    })
+    .catch((e) => console.warn('[veg] impostor read-back failed', e))
+  return {
+    albedo,
+    normal,
+    frames,
+    targets: [rtA, rtB],
+    ready,
+    dispose: () => {
+      rtA.dispose()
+      rtB.dispose()
+      albedo.dispose()
+      normal.dispose()
+    },
+  }
 }
 
 /** One quad per tree (all species), facing the camera about its vertical axis. */
@@ -587,7 +730,7 @@ function impostorMaterial(imp: Impostors, fadeIn: [number, number], maxDist: num
   const flat = vec2(toCam.x, toCam.z)
   const flatN = flat.div(max(flat.length(), 1e-4))
   const right = vec3(flatN.y, 0, flatN.x.negate())
-  const corner: N = positionLocal.xy // quad -1..1
+  const corner: N = vertexPos().xy // quad -1..1
   const world = iA.xyz.add(right.mul(corner.x.mul(fr.x).mul(sc))).add(vec3(0, fr.z.add(corner.y.mul(fr.y)).mul(sy), 0))
   m.positionNode = Fn(() => {
     positionPrevious.assign(world)
@@ -629,6 +772,12 @@ function impostorMaterial(imp: Impostors, fadeIn: [number, number], maxDist: num
   const vOut = varying(smoothstep(maxDist * 0.85, maxDist, dist), 'vImpOut')
   const d = ign(screenCoordinate.xy)
   m.maskNode = d.lessThan(vIn).and(d.greaterThanEqual(vOut))
+  if (debugFlag('impdebug')) {
+    // ?impdebug: every quad, atlas colour where the coverage passes, red where it fails
+    m.alphaTest = 0
+    m.maskNode = null
+    m.colorNode = vec4(mix(vec3(1, 0, 0), alb.mul(alb).mul(4), (alpha as N).greaterThan(0.4)), 1)
+  }
   return m
 }
 
@@ -666,7 +815,9 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
       [new THREE.Color(0.85, 0.9, 0.7), new THREE.Color(1.08, 1.05, 0.82)],
     ]
     const wind: WindOpts = { sway: 0.22, flutter: 0.035, speed: 0.9 }
-    if (pine && !debugFlag('notrees'))
+    // ?impostorsonly: no meshes, impostors at every distance (to look at them up close)
+    const withMeshes = !debugFlag('impostorsonly')
+    if (pine && withMeshes && !debugFlag('notrees'))
       layers.push(
         new VegLayer({
           name: 'pine',
@@ -681,7 +832,7 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
           probeRange: 90,
         }),
       )
-    if (broad && !debugFlag('notrees'))
+    if (broad && withMeshes && !debugFlag('notrees'))
       layers.push(
         new VegLayer({
           name: 'broadleaf',
@@ -700,6 +851,7 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
     let impostors: Impostors | null = null
     if (pine && broad && !debugFlag('notrees') && !debugFlag('noimpostors')) {
       impostors = bakeImpostors(renderer, [pine, broad])
+      if (debugFlag('vegdebug')) (window as unknown as { __vegDebug?: object }).__vegDebug = { renderer, impostors }
       const quad = new THREE.PlaneGeometry(2, 2)
       const all = new Float32Array(trees.conifers.length + trees.broad.length)
       all.set(trees.conifers)
@@ -707,20 +859,22 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
       // kind in the last slot (the impostor has no wind phase)
       for (let i = trees.conifers.length / STRIDE; i < all.length / STRIDE; i++) all[i * STRIDE + 7] = 1.5
       for (let i = 0; i < trees.conifers.length / STRIDE; i++) all[i * STRIDE + 7] = 0.5
-      layers.push(
-        new VegLayer({
+      const impostorLayer = new VegLayer({
           name: 'impostors',
           instances: all,
           geometry: quad,
-          material: impostorMaterial(impostors, FADE, FAR_TREES, tints),
+          material: impostorMaterial(impostors, withMeshes ? FADE : [-2, -1], FAR_TREES, tints),
           cell: 160,
           maxDist: FAR_TREES,
           height: 23,
           castShadow: true,
           shadowMargin: 30,
           probeRange: Infinity,
-        }),
-      )
+        })
+      // hidden until the bake has been read back into its textures
+      impostorLayer.mesh.visible = false
+      impostors.ready.then(() => (impostorLayer.mesh.visible = true))
+      layers.push(impostorLayer)
     }
     if (grass && !debugFlag('nograss') && density >= 0.5) {
       const g = placeGrass(track, density)

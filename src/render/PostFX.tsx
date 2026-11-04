@@ -2,7 +2,8 @@
 //   scene pass with MRT (colour, normals, diffuse albedo, metal/rough, velocity)
 //   -> SSGI (screen-space indirect diffuse + AO)  or  GTAO
 //   -> SSR (screen-space reflections, incl. dielectrics like clear coat & asphalt sheen)
-//   -> SMAA (or FXAA on low)  -> per-object motion blur  -> bloom -> lens effects -> tone mapping
+//   -> SMAA (or FXAA on low)  -> per-object motion blur  -> exposure -> bloom -> lens effects
+//   -> grading -> filmic tone mapping (Gran Turismo curve, see gtToneMap)
 // No temporal AA: TAA reuses earlier frames, and in tracking shots (a car still on screen, the track
 // sliding past) it smeared and ghosted the cars. Every frame here stands on its own.
 import { useFrame, useThree } from '@react-three/fiber'
@@ -43,6 +44,10 @@ import {
   luminance,
   max,
   screenSize,
+  Fn,
+  exp,
+  pow,
+  step,
 } from 'three/tsl'
 import { useSettings } from '../state/settings'
 import { reportGpuError } from './gpuHealth'
@@ -58,7 +63,7 @@ let lastCutFrames = 0
 
 export const postUniforms = {
   motionBlur: uniform(0.6),
-  vignette: uniform(0.32),
+  vignette: uniform(0.2),
   exposure: uniform(1),
   grain: uniform(0.012),
   saturation: uniform(1.06),
@@ -66,6 +71,40 @@ export const postUniforms = {
   adapt: uniform(1),
   meterTap: uniform(0),
 }
+
+/**
+ * Absolute exposure: an 18% grey surface in full sun lands at ~0.22 on the display (the base exposure
+ * in postUniforms.exposure follows the sun's height, see Environment.tsx).
+ */
+const EXPOSURE = 0.85
+
+/**
+ * Filmic tone curve of Gran Turismo Sport (H. Uchimura, "HDR theory and practice", 2017), per channel:
+ * a toe that keeps the shadows' contrast, an exactly linear mid section (colours and greys as lit) and
+ * a shoulder that runs into pure white. Per channel, bright colours lose their saturation on the way
+ * up as film does: the sun, its glints in the paint and sunlit cloud edges blind to white.
+ */
+export const gtToneMap = Fn(([c]: [any]) => {
+  const P = 1.0, // display white
+    a = 1.0, // contrast of the linear section
+    m = 0.22, // start of the linear section
+    l = 0.4, // its length
+    cc = 1.33, // toe tightness
+    b = 0.0 // black pedestal
+  const l0 = ((P - m) * l) / a
+  const S0 = m + l0,
+    S1 = m + a * l0
+  const C2 = (a * P) / (P - S1),
+    CP = -C2 / P
+  const x = max(c, vec3(0))
+  const w0 = float(1).sub(smoothstep(0, m, x))
+  const w2 = step(S0, x)
+  const w1 = float(1).sub(w0).sub(w2)
+  const T = pow(x.div(m), vec3(cc)).mul(m).add(b)
+  const S = float(P).sub(exp(x.sub(S0).mul(CP)).mul(P - S1))
+  const L = x.sub(m).mul(a).add(m)
+  return T.mul(w0).add(L.mul(w1)).add(S.mul(w2))
+})
 
 /** Eye adaptation: fast adaptation relative to a slowly drifting reference (partial, like an eye). */
 const eye = { fast: 0, slow: 0, ready: false, frame: 0, pending: false }
@@ -174,8 +213,11 @@ export function PostFX() {
     particlePass.setResolutionScale(gfx.preset === 'high' || gfx.preset === 'ultra' ? 0.75 : 0.5)
     const parts = particlePass.getTextureNode('output')
     out = vec4(out.rgb.mul(parts.a).add(parts.rgb), 1)
+    // exposure before the bloom: its threshold is in display terms (1 = the curve's white). Only what
+    // is several times brighter than white glows: the sun, its glints, sunlit cloud edges, lamps
+    out = vec4(out.rgb.mul(postUniforms.exposure).mul(postUniforms.adapt).mul(EXPOSURE), 1)
     if (useBloom) {
-      const b = bloom(out, 0.14, 0.4, 1.15)
+      const b = bloom(out, 0.2, 0.55, 1.6)
       out = vec4(out.rgb.add(b.rgb), 1)
       // anamorphic-free lens ghosts from the brightest highlights (low sun, headlights)
       if (gfx.preset === 'high' || gfx.preset === 'ultra') {
@@ -190,7 +232,7 @@ export function PostFX() {
     graded = graded.mul(float(1).sub(vig.mul(postUniforms.vignette)))
     const n = hash(screenUV.mul(vec2(1931.3, 2711.7)).add(time.mul(37.1)).x.add(screenUV.y.mul(911.1)))
     graded = graded.mul(float(1).add(n.sub(0.5).mul(postUniforms.grain)))
-    rp.outputNode = vec4(graded.mul(postUniforms.exposure).mul(postUniforms.adapt), 1)
+    rp.outputNode = vec4(gtToneMap(graded), 1)
     // debug views: ?showvel (the streaks the blur uses), ?showtiles (its neighbour-max tiles)
     if (blurDebug) {
       rp.outputNode = blurDebug

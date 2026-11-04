@@ -116,9 +116,10 @@ function installOffscreen(r: THREE.WebGPURenderer) {
 }
 
 function configureRenderer(r: THREE.WebGPURenderer) {
-  r.toneMapping = THREE.ACESFilmicToneMapping
-  // the physical sky outputs high radiance; exposure is balanced against it
-  r.toneMappingExposure = 0.58
+  // tone mapping happens in the post-processing chain (PostFX.tsx: exposure, bloom, Gran Turismo
+  // filmic curve); the renderer only converts to the display's colour space
+  r.toneMapping = THREE.NoToneMapping
+  r.toneMappingExposure = 1
   r.outputColorSpace = THREE.SRGBColorSpace
   r.shadowMap.enabled = true
   r.shadowMap.type = THREE.PCFShadowMap
