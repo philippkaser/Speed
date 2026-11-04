@@ -5,6 +5,7 @@
 import * as THREE from 'three/webgpu'
 import { game } from '../game/game'
 import { clamp, valueNoise2 } from '../physics/math'
+import { markCameraPath } from './motionHistory'
 import { teamRace } from '../team/session'
 import type { RaceCar } from '../team/teamRace'
 import { pitLane } from '../track/pitlane'
@@ -289,6 +290,8 @@ export function broadcastCamera(cam: THREE.PerspectiveCamera, dt: number, focusO
       cam.up.set(0, 1, 0).applyQuaternion(pose.quat)
       cam.lookAt(_v2)
       cam.up.set(0, 1, 0)
+      // the camera rides with the car (its path ends here); the mount vibration does not blur
+      markCameraPath(cam)
       // camera mount vibration
       st.shake += dt
       const sp = target.vehicle.speed

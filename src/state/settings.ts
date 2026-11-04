@@ -10,8 +10,6 @@ export interface GraphicsSettings {
   ssgi: boolean
   ssr: boolean
   ao: boolean
-  taa: boolean
-  upscale: number // internal render scale reconstructed by temporal upscaling (1 = native TRAA)
   autoExposure: boolean
   /** shutter angle / 360: the share of each frame the shutter is open (1 = 360 degrees: continuous motion) */
   motionBlur: number
@@ -68,10 +66,10 @@ export interface SettingsState {
 }
 
 export const PRESETS: Record<QualityPreset, Omit<GraphicsSettings, 'fov' | 'cameraShake' | 'showFps' | 'preset' | 'backend' | 'backendNote'>> = {
-  low: { resolutionScale: 0.7, upscale: 1, autoExposure: false, ssgi: false, ssr: false, ao: false, taa: false, motionBlur: 0, bloom: true, shadows: 1, trees: 0.35, envProbe: false },
-  medium: { resolutionScale: 1, upscale: 0.7, autoExposure: true, ssgi: false, ssr: false, ao: true, taa: true, motionBlur: 1, bloom: true, shadows: 2, trees: 0.7, envProbe: true },
-  high: { resolutionScale: 1, upscale: 0.8, autoExposure: true, ssgi: true, ssr: true, ao: true, taa: true, motionBlur: 1, bloom: true, shadows: 2, trees: 1, envProbe: true },
-  ultra: { resolutionScale: 1, upscale: 1, autoExposure: true, ssgi: true, ssr: true, ao: true, taa: true, motionBlur: 1, bloom: true, shadows: 3, trees: 1.4, envProbe: true },
+  low: { resolutionScale: 0.7, autoExposure: false, ssgi: false, ssr: false, ao: false, motionBlur: 0, bloom: true, shadows: 1, trees: 0.35, envProbe: false },
+  medium: { resolutionScale: 1, autoExposure: true, ssgi: false, ssr: false, ao: true, motionBlur: 1, bloom: true, shadows: 2, trees: 0.7, envProbe: true },
+  high: { resolutionScale: 1, autoExposure: true, ssgi: true, ssr: true, ao: true, motionBlur: 1, bloom: true, shadows: 2, trees: 1, envProbe: true },
+  ultra: { resolutionScale: 1, autoExposure: true, ssgi: true, ssr: true, ao: true, motionBlur: 1, bloom: true, shadows: 3, trees: 1.4, envProbe: true },
 }
 
 function defaultPreset(): QualityPreset {

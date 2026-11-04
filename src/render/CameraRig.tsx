@@ -12,6 +12,7 @@ import { carPoses } from './CarVisual'
 import { cameraPose } from '../audio/cameraPose'
 import { cameraCut } from './PostFX'
 import { broadcastCamera } from './broadcastCam'
+import { markCameraPath } from './motionHistory'
 
 export const CAMERA_MODES = ['chase', 'chaseNear', 'cockpit', 'hood', 'bumper'] as const
 export type DriveCam = (typeof CAMERA_MODES)[number]
@@ -23,7 +24,8 @@ const _v = new THREE.Vector3(),
   _up = new THREE.Vector3(),
   _q = new THREE.Quaternion(),
   _m = new THREE.Matrix4(),
-  _e = new THREE.Euler()
+  _e = new THREE.Euler(),
+  _sh = new THREE.Vector3()
 
 export const cameraFocus = new THREE.Vector3()
 
@@ -294,10 +296,13 @@ export function CameraRig() {
       const minY = carPos.y + 0.6
       if (_v.y < minY) _v.y = minY
       cam.position.copy(_v)
-      cam.position.x += shx
-      cam.position.y += shy
       _look.set(carPos.x + sy * 3.0, carPos.y + (near ? 0.75 : 0.95), carPos.z + cy * 3.0)
       cam.up.set(0, 1, 0)
+      cam.lookAt(_look)
+      // the camera's path ends here; the shake on top of it does not blur
+      markCameraPath(cam)
+      cam.position.x += shx
+      cam.position.y += shy
       cam.lookAt(_look)
       setFov(cam, gfx.fov + speedFov + s.fovKick, dt)
       cam.near = 0.1
@@ -323,14 +328,19 @@ export function CameraRig() {
     const k = camMode === 'cockpit' ? 1 : 0.15
     s.headX += (clamp(s.gLat, -2.5, 2.5) * 0.022 * k - s.headX) * clamp(dt * 8, 0, 1)
     s.headY += (clamp(-s.gLong, -2, 2) * 0.012 * k - s.headY) * clamp(dt * 8, 0, 1)
-    _v.set(lx + s.headX, ly + shy * 0.6, lz + s.headY)
+    _v.set(lx + s.headX, ly, lz + s.headY)
     _v.applyQuaternion(carQ).add(carPos)
     cam.position.copy(_v)
     cam.quaternion.copy(carQ)
     // three cameras look down -z; the car faces +z
     cam.rotateY(Math.PI + side * Math.PI * 0.5)
     cam.rotateZ(-s.headX * 0.8 * k)
-    cam.rotateX(-0.03 + shx * 0.5)
+    cam.rotateX(-0.03)
+    // the camera's path ends here (it rides with the chassis, so the cockpit stays sharp); the shake
+    // on top of it does not blur
+    markCameraPath(cam)
+    cam.position.add(_sh.set(0, shy * 0.6, 0).applyQuaternion(carQ))
+    cam.rotateX(shx * 0.5)
     setFov(cam, (camMode === 'cockpit' ? gfx.fov + 12 : gfx.fov + 4) + speedFov * 0.6, dt)
     cam.near = 0.04
     cam.updateProjectionMatrix()

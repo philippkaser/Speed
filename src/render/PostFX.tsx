@@ -2,7 +2,9 @@
 //   scene pass with MRT (colour, normals, diffuse albedo, metal/rough, velocity)
 //   -> SSGI (screen-space indirect diffuse + AO)  or  GTAO
 //   -> SSR (screen-space reflections, incl. dielectrics like clear coat & asphalt sheen)
-//   -> TRAA (temporal reprojection AA)  -> per-object motion blur  -> bloom -> lens effects -> tone mapping
+//   -> SMAA (or FXAA on low)  -> per-object motion blur  -> bloom -> lens effects -> tone mapping
+// No temporal AA: TAA reuses earlier frames, and in tracking shots (a car still on screen, the track
+// sliding past) it smeared and ghosted the cars. Every frame here stands on its own.
 import { useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo } from 'react'
 import * as THREE from 'three/webgpu'
@@ -10,8 +12,7 @@ import { bloom } from 'three/addons/tsl/display/BloomNode.js'
 import { ao as gtao } from 'three/addons/tsl/display/GTAONode.js'
 import { ssgi } from 'three/addons/tsl/display/SSGINode.js'
 import { ssr } from 'three/addons/tsl/display/SSRNode.js'
-import { traa } from 'three/addons/tsl/display/TRAANode.js'
-import { taau } from 'three/addons/tsl/display/TAAUNode.js'
+import { smaa } from 'three/addons/tsl/display/SMAANode.js'
 import { fxaa } from 'three/addons/tsl/display/FXAANode.js'
 import { lensflare } from 'three/addons/tsl/display/LensflareNode.js'
 import {
@@ -50,10 +51,7 @@ import { motionBlur, motionBlurUniforms } from './motionBlur'
 import { beginMotionFrame, motionBlendMode, motionVelocityOutput } from './motionHistory'
 import { particleScene, particleU, sceneDepth } from './particles'
 
-/**
- * Set frames > 0 when the camera jumps (a cut). The frame it is set on carries no camera motion, and
- * TAA starts its history afresh, so nothing of the previous shot lingers in the new one.
- */
+/** Set frames > 0 when the camera jumps (a cut): the frame it is set on is not motion blurred. */
 export const cameraCut = { frames: 0 }
 /** cameraCut.frames after the previous frame's countdown: a larger value means a new cut */
 let lastCutFrames = 0
@@ -82,24 +80,20 @@ export function PostFX() {
   const useSSGI = gfx.ssgi && !isWebGL
   const useSSR = gfx.ssr
   const useAO = gfx.ao && !useSSGI
-  const useTAA = gfx.taa
   const useMB = gfx.motionBlur > 0
   const useBloom = gfx.bloom
-  // temporal upscaling: render the scene (and SSGI/SSR) at a reduced internal resolution and let
-  // TAAU reconstruct the output resolution from jittered history (like DLSS/FSR2)
-  const upscale = useTAA ? Math.min(1, Math.max(0.5, gfx.upscale ?? 1)) : 1
+  const useSMAA = gfx.preset !== 'low'
   const useAE = gfx.autoExposure ?? false
 
   const pipeline = useMemo(() => {
     const rp = new THREE.RenderPipeline(renderer)
     const scenePass = pass(scene, camera)
-    if (upscale < 0.999) scenePass.setResolutionScale(upscale)
     // G-buffer layout. WebGPU's default limit is 32 bytes of colour attachments per sample and every
     // RGBA8 / RGBA16F target counts as 8, so at most four targets: roughness rides in the normal
     // target's alpha and metalness in the albedo target's alpha (or a target of its own without SSGI).
     const outputs: Record<string, any> = { output }
     // velocity: NDC motion per frame, wheel slot, inverse depth of the surface that owns the motion
-    if (useTAA || useMB) outputs.velocity = motionVelocityOutput
+    if (useMB) outputs.velocity = motionVelocityOutput
     if (useSSGI || useSSR || useAO) outputs.normal = vec4(packNormalToRGB(normalView), useSSR ? roughness : float(1))
     if (useSSGI) outputs.diffuseColor = vec4(diffuseColor.rgb, useSSR ? metalness : float(0))
     else if (useSSR) outputs.metal = vec4(metalness, 0, 0, 1)
@@ -128,20 +122,20 @@ export function PostFX() {
     let composite: any = color
     if (useSSGI && sceneNormal) {
       const gi = ssgi(color, depth, sceneNormal, camera)
-      gi.sliceCount.value = gfx.preset === 'ultra' ? 3 : 2
+      // three's presets for SSGI without temporal filtering (nothing accumulates its noise over frames)
+      gi.sliceCount.value = gfx.preset === 'ultra' ? 4 : 3
       gi.stepCount.value = gfx.preset === 'ultra' ? 12 : 8
       gi.radius.value = 6
       gi.giIntensity.value = 6
       gi.aoIntensity.value = 1.15
       gi.thickness.value = 0.8
-      gi.useTemporalFiltering = useTAA
-      gi.resolutionScale = upscale
+      gi.useTemporalFiltering = false
       const diffuse = scenePass.getTextureNode('diffuseColor')
       composite = vec4(color.rgb.mul(gi.getAONode()).add(diffuse.rgb.mul(gi.getGINode().rgb)), color.a)
     } else if (useAO && sceneNormal) {
       const a = gtao(depth, sceneNormal, camera)
       a.radius.value = 1.2
-      a.resolutionScale = 0.5 * upscale
+      a.resolutionScale = 0.5
       composite = vec4(color.rgb.mul(a.getTextureNode().r), color.a)
     }
     if (useSSR && sceneNormal) {
@@ -150,7 +144,7 @@ export function PostFX() {
       r.maxDistance.value = 60
       r.thickness.value = 0.35
       r.quality.value = gfx.preset === 'ultra' ? 0.6 : 0.4
-      r.resolutionScale = (gfx.preset === 'ultra' ? 1 : 0.5) * upscale
+      r.resolutionScale = gfx.preset === 'ultra' ? 1 : 0.5
       composite = vec4(composite.rgb.add(r.rgb), color.a)
     }
     let out: any = composite
@@ -162,9 +156,7 @@ export function PostFX() {
       // keep the meter in the graph (its contribution is scaled by a zero uniform)
       composite = vec4(composite.rgb.add(meter.sample(vec2(0.5, 0.5)).r.mul(postUniforms.meterTap)), composite.a)
     }
-    let taaNode: any = null
-    if (useTAA && vel) out = taaNode = upscale < 0.999 ? taau(composite, depth, vel, camera) : traa(composite, depth, vel, camera)
-    else out = fxaa(composite)
+    out = useSMAA ? smaa(composite) : fxaa(composite)
     if (useMB && vel) {
       const q = gfx.preset === 'ultra' ? { pairs: 16, denseTaps: 64 } : gfx.preset === 'high' ? { pairs: 12, denseTaps: 48 } : { pairs: 8, denseTaps: 32 }
       const src = typeof out.getTextureNode === 'function' ? out.getTextureNode() : convertToTexture(out)
@@ -174,7 +166,7 @@ export function PostFX() {
       else if (debugFlag('showvel')) blurDebug = node.getStreakDebugNode()
     }
     // particles (smoke, dust, sparks): own pass, soft against the scene depth, composited over the
-    // lit image (premultiplied colour, transmittance in alpha). After TAA and motion blur, so they
+    // lit image (premultiplied colour, transmittance in alpha). After anti-aliasing and motion blur, so they
     // neither ghost nor pick up the scene's motion vectors.
     sceneDepth.value = scenePass.getTexture('depth')
     particleU.soft.value = 1
@@ -205,9 +197,8 @@ export function PostFX() {
       rp.outputColorTransform = false
     }
     ;(rp as any).__meter = meter
-    ;(rp as any).__taa = taaNode
     return rp
-  }, [renderer, scene, camera, useSSGI, useSSR, useAO, useTAA, useMB, useBloom, gfx.preset, upscale, useAE])
+  }, [renderer, scene, camera, useSSGI, useSSR, useAO, useSMAA, useMB, useBloom, gfx.preset, useAE])
 
   useEffect(() => () => pipeline.dispose(), [pipeline])
 
@@ -216,11 +207,6 @@ export function PostFX() {
     const cut = cameraCut.frames > lastCutFrames
     if (cameraCut.frames > 0) cameraCut.frames--
     lastCutFrames = cameraCut.frames
-    // TAA would otherwise blend ~95% of the previous shot into the first frames of the new one (with
-    // the camera's motion dropped, its history lines up pixel for pixel): ghost copies after every
-    // cut. three's TAA nodes rebuild their history from the current frame when its size changes.
-    const taa = (pipeline as any).__taa
-    if (cut && taa?._historyRenderTarget) taa._historyRenderTarget.setSize(1, 1)
     // shutter angle: the share of each frame's own interval the shutter is open (motion vectors span
     // one frame). At 360 degrees every streak ends where the next frame's begins, so motion is
     // continuous from frame to frame at any frame rate; anything shorter leaves gaps that the eye

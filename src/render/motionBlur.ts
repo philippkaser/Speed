@@ -6,9 +6,9 @@
 // moved (see motionHistory.ts). From that the blur is rebuilt in five passes:
 //
 //  0. Prepare (velocity resolution): each pixel's streak, resolved once. The motion over the last
-//     frame is scaled to the exposure (a constant shutter time whatever the frame rate), the camera's
-//     part of it is swapped for a stabilised camera's (vibration, jolts and lens breathing do not
-//     blur, as with a camera on a gimbal), spinning wheel parts move with their hub (their rotation
+//     frame is scaled by the shutter angle (360 degrees: the streak spans exactly the way to the next
+//     frame), the camera rigs' deliberate shake is taken out (the camera's real path stays, so what it
+//     follows or is mounted on stays sharp), spinning wheel parts move with their hub (their rotation
 //     is reconstructed separately), and the result is clamped to the longest streak.
 //  1. Tile max: the longest streak in every tile (tile edge = longest half streak), separable.
 //  2. Neighbour max: the longest streak that can reach a tile from its 3x3 neighbourhood. A fast
@@ -80,8 +80,8 @@ export const motionBlurUniforms = {
   shutter: uniform(0.5),
   /** longest half streak as a fraction of the image height */
   maxRadius: uniform(0.08),
-  /** 1: blur with the stabilised camera, 0: with the camera's raw motion */
-  stabilize: uniform(1),
+  /** 1: camera shake does not blur (see markCameraPath), 0: it does */
+  ignoreShake: uniform(1),
   frame: uniform(0),
 }
 
@@ -221,12 +221,12 @@ class MotionBlurNode extends THREE.Node {
       const slot = round(raw.z)
       // spinning wheel parts move with their hub; their rotation is rebuilt in the gather
       const ndc = select(slot.greaterThan(0.5), wheelUniforms.motion.element(int(clamp(slot, 0, MAXS))).xy, raw.xy).toVar()
-      // swap the camera's raw reprojection for the stabilised camera's
+      // take the camera's shake out of the motion: reproject with the shake-free camera instead
       const X = vec4(viewPos(p.add(0.5).div(velSize), distOf(raw)), 1)
       const cT = C.toPrevTrue.mul(X)
-      const cS = C.toPrevSteady.mul(X)
-      const ok = cT.w.greaterThan(1e-4).and(cS.w.greaterThan(1e-4))
-      ndc.addAssign(select(ok, cT.xy.div(cT.w).sub(cS.xy.div(cS.w)).mul(U.stabilize), vec2(0)))
+      const cB = C.toPrevBlur.mul(X)
+      const ok = cT.w.greaterThan(1e-4).and(cB.w.greaterThan(1e-4))
+      ndc.addAssign(select(ok, cT.xy.div(cT.w).sub(cB.xy.div(cB.w)).mul(U.ignoreShake), vec2(0)))
       const v = toHalf(ndc)
       return vec4(v.mul(min(float(1), maxR.div(max(length(v), 1e-4)))), raw.z, raw.w)
     })
@@ -340,7 +340,7 @@ class MotionBlurNode extends THREE.Node {
             })
             result.assign(sum.div(float(n)))
           }).Else(() => {
-            // edge pixels: the velocity target can be coarser than the image (TAAU) and the image is
+            // edge pixels: the velocity target can be coarser than the image and the image is
             // antialiased, so a pixel on a moving object's outline can carry the object's colour with
             // the background's motion and would stay behind as a sharp contour. Take the motion of a
             // neighbouring texel that is nearer and faster (dilating moving objects, never sharp ones).
@@ -416,7 +416,7 @@ class MotionBlurNode extends THREE.Node {
           const spinning = slotC.greaterThan(0)
           const hubD = wheelUniforms.hub.element(s).toVar()
           const axis = wheelUniforms.axle.element(s).xyz.toVar()
-          // the hub's streak (prepared: stabilised and clamped); the swept angle is scaled by the
+          // the hub's streak (prepared: shake removed, clamped); the swept angle is scaled by the
           // same clamp so the contact patch stays put (rolling without slip) when the clamp bites
           const hubHalf = vec2(rC.xy).toVar()
           const hubRaw = length(toHalf(wheelUniforms.motion.element(s).xy))

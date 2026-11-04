@@ -63,8 +63,6 @@ export function SettingsPanel({ onClose, inGame = false }: { onClose: () => void
               />
             </FieldRow>
             <div className="section-title">Image</div>
-            <Toggle label="Temporal anti-aliasing" value={gfx.taa} onChange={(v) => s.setGraphics({ taa: v })} />
-            <Slider label="Temporal upscaling" sub="Internal render resolution reconstructed to full resolution (100% = native)" value={gfx.upscale ?? 1} min={0.5} max={1} step={0.05} unit="%" format={(v) => Math.round(v * 100) + ''} onChange={(v) => s.setGraphics({ upscale: v })} />
             <Toggle label="Auto exposure" sub="Eye adaptation (cockpit, looking into the sun)" value={gfx.autoExposure ?? false} onChange={(v) => s.setGraphics({ autoExposure: v })} />
             <Toggle label="Bloom" value={gfx.bloom} onChange={(v) => s.setGraphics({ bloom: v })} />
             <Slider label="Motion blur (shutter)" sub="How much of each frame the shutter is open. 360° = motion is continuous from frame to frame (smooth pans, no double images); 180° = the film look. 0 = off" value={gfx.motionBlur} min={0} max={1} step={1 / 24} unit="°" format={(v) => Math.round(v * 360) + ''} onChange={(v) => s.setGraphics({ motionBlur: v })} />
