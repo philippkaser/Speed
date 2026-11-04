@@ -86,7 +86,8 @@ export function SettingsPanel({ onClose, inGame = false }: { onClose: () => void
               />
             </FieldRow>
             <div className="section-title">Image</div>
-            <Toggle label="Auto exposure" sub="Eye adaptation (cockpit, looking into the sun)" value={gfx.autoExposure ?? false} onChange={(v) => s.setGraphics({ autoExposure: v })} />
+            <Toggle label="Auto exposure" sub="The camera meters the scene: opens up in the cockpit, shade and pit garage, stops down into the sun" value={gfx.autoExposure ?? false} onChange={(v) => s.setGraphics({ autoExposure: v })} />
+            <Slider label="Exposure compensation" sub="Brighter or darker than the camera's metering, in stops" value={gfx.exposureComp ?? 0} min={-1.5} max={1.5} step={0.1} unit=" EV" format={(v) => (v > 0.04 ? '+' : '') + v.toFixed(1)} onChange={(v) => s.setGraphics({ exposureComp: v })} />
             <Toggle label="Bloom" value={gfx.bloom} onChange={(v) => s.setGraphics({ bloom: v })} />
             <Slider label="Motion blur (shutter)" sub="How much of each frame the shutter is open. 360° = motion is continuous from frame to frame (smooth pans, no double images); 180° = the film look. 0 = off" value={gfx.motionBlur} min={0} max={1} step={1 / 24} unit="°" format={(v) => Math.round(v * 360) + ''} onChange={(v) => s.setGraphics({ motionBlur: v })} />
             <Slider label="Vegetation density" sub="Trees and the 3D grass on the verges (grass from 0.5)" value={gfx.trees} min={0.2} max={1.6} step={0.1} format={(v) => v.toFixed(1)} unit="×" onChange={(v) => s.setGraphics({ trees: v })} />

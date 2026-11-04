@@ -244,6 +244,11 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
   // the photographic dome rides with the camera: after the camera rigs and the reflection probes (which
   // move it to their own cameras), before the frame and its motion history
   useFrame(() => {
+    // debug (window.__lookSun = true): turn the camera to the sun, to look at the lens' glare
+    if ((window as unknown as { __lookSun?: boolean }).__lookSun) {
+      camera.lookAt(camera.position.clone().add(sunState.dir.clone().multiplyScalar(10)).add(new THREE.Vector3(0, -2.5, 0)))
+      camera.updateMatrixWorld()
+    }
     if (!photo) return
     dome.position.copy(camera.position)
     dome.scale.setScalar(8000)

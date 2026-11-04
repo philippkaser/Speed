@@ -233,6 +233,15 @@ class MotionBlurNode extends THREE.Node {
 
     const prepTex = texture(this._prep.texture)
     const texel = (p: N) => ivec2(clamp(p.mul(velSize), vec2(0), velSize.sub(1)))
+    /**
+     * 1 inside the image, 0 outside. Beyond the frame there is nothing to blur with: a clamped tap
+     * repeats the border pixel, and streaks near the edges came out as smeared bands of it. Off-screen
+     * taps are dropped and the streak is renormalised over the taps that land on the image.
+     */
+    const onScreen = (p: N) => {
+      const m = vec2(0.5).div(outSize)
+      return select(p.x.greaterThanEqual(m.x).and(p.x.lessThanEqual(float(1).sub(m.x))).and(p.y.greaterThanEqual(m.y)).and(p.y.lessThanEqual(float(1).sub(m.y))), float(1), float(0))
+    }
     const at = (p: N) => prepTex.load(texel(p))
     /** fraction of a pixel at distance d covered by a streak of half length len (box, 1 px edge) */
     const cover = (d: N, len: N) => clamp(len.sub(d).add(0.5), 0, 1)
@@ -334,11 +343,15 @@ class MotionBlurNode extends THREE.Node {
             // the neighbourhood moves as one: a dense box filter along the pixel's own streak
             const n = int(clamp(ceil(lenC.mul(2).div(1.25)), 4, DENSE)).toVar()
             const sum = vec4(0).toVar()
+            const cnt = float(0).toVar()
             Loop({ start: int(0), end: n, type: 'int', condition: '<' }, ({ i }: { i: N }) => {
               const t = float(i).add(noise).div(float(n)).mul(2).sub(1)
-              sum.addAssign(color.sample(uvC.add(vC.mul(t).mul(inv))))
+              const pt = uvC.add(vC.mul(t).mul(inv))
+              const on = onScreen(pt)
+              sum.addAssign(color.sample(pt).mul(on))
+              cnt.addAssign(on)
             })
-            result.assign(sum.div(float(n)))
+            result.assign(select(cnt.greaterThan(0.5), sum.div(max(cnt, 1)), c0))
           }).Else(() => {
             // edge pixels: the velocity target can be coarser than the image and the image is
             // antialiased, so a pixel on a moving object's outline can carry the object's colour with
@@ -396,8 +409,11 @@ class MotionBlurNode extends THREE.Node {
               const o2 = f2.mul(cover(d, l2).oneMinus())
               const m1 = o1.greaterThan(0.5).and(o2.lessThan(0.5))
               const m2 = o2.greaterThan(0.5).and(o1.lessThan(0.5))
-              const ww1 = select(m1, w2, w1),
-                ww2 = select(m2, w1, w2)
+              // taps off the image carry nothing (their share falls to the centre below)
+              const in1 = onScreen(p1),
+                in2 = onScreen(p2)
+              const ww1 = select(m1, w2.mul(in2), w1.mul(in1)),
+                ww2 = select(m2, w1.mul(in1), w2.mul(in2))
               sum.addAssign(select(m1, c2, c1).mul(ww1))
               sum.addAssign(select(m2, c1, c2).mul(ww2))
               wsum.addAssign(ww1.add(ww2))

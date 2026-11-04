@@ -11,6 +11,8 @@ export interface GraphicsSettings {
   ssr: boolean
   ao: boolean
   autoExposure: boolean
+  /** exposure compensation in stops (applies with and without auto exposure) */
+  exposureComp?: number
   /** shutter angle / 360: the share of each frame the shutter is open (1 = 360 degrees: continuous motion) */
   motionBlur: number
   bloom: boolean

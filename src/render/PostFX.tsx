@@ -2,8 +2,9 @@
 //   scene pass with MRT (colour, normals, diffuse albedo, metal/rough, velocity)
 //   -> SSGI (screen-space indirect diffuse + AO)  or  GTAO
 //   -> SSR (screen-space reflections, incl. dielectrics like clear coat & asphalt sheen)
-//   -> SMAA (or FXAA on low)  -> per-object motion blur  -> exposure -> bloom -> lens effects
-//   -> grading -> filmic tone mapping (Gran Turismo curve, see gtToneMap)
+//   -> SMAA (or FXAA on low)  -> per-object motion blur  -> the camera: exposure -> the lens (lens.ts:
+//   chromatic aberration, scatter/bloom, aperture starburst, flare ghosts, vignetting) -> grading
+//   -> filmic tone mapping (Gran Turismo curve, see gtToneMap)
 // No temporal AA: TAA reuses earlier frames, and in tracking shots (a car still on screen, the track
 // sliding past) it smeared and ghosted the cars. Every frame here stands on its own.
 import { useFrame, useThree } from '@react-three/fiber'
@@ -40,9 +41,8 @@ import {
   time,
   int,
   convertToTexture,
-  rtt,
-  luminance,
   max,
+  min,
   screenSize,
   Fn,
   exp,
@@ -52,9 +52,11 @@ import {
 import { useSettings } from '../state/settings'
 import { reportGpuError } from './gpuHealth'
 import { debugFlag } from '../util/debug'
+import { ae, exposureMeter, stepAutoExposure } from './autoExposure'
 import { motionBlur, motionBlurUniforms } from './motionBlur'
 import { beginMotionFrame, motionBlendMode, motionVelocityOutput } from './motionHistory'
 import { particleScene, particleU, sceneDepth } from './particles'
+import { brightPass, lateralCA, naturalVignette, SCATTER, starburst, updateLens } from './lens'
 
 /** Set frames > 0 when the camera jumps (a cut): the frame it is set on is not motion blurred. */
 export const cameraCut = { frames: 0 }
@@ -63,26 +65,40 @@ let lastCutFrames = 0
 
 export const postUniforms = {
   motionBlur: uniform(0.6),
-  vignette: uniform(0.2),
+  /** share of the natural (cos^4) vignetting the lens leaves uncorrected */
+  vignette: uniform(0.4),
   exposure: uniform(1),
   grain: uniform(0.012),
   saturation: uniform(1.06),
-  /** eye adaptation multiplier (auto exposure) */
+  /** auto exposure x exposure compensation (a multiplier: 2^stops) */
   adapt: uniform(1),
   meterTap: uniform(0),
 }
 
 /**
- * Absolute exposure: an 18% grey surface in full sun lands at ~0.22 on the display (the base exposure
- * in postUniforms.exposure follows the sun's height, see Environment.tsx).
+ * Base exposure, calibrated like a camera's meter on a sunny track: the asphalt and grass (albedo
+ * ~0.1) land near middle grey, an 18% grey card in full sun in the lower linear section (~0.4), sunlit
+ * cloud tops in the shoulder and the sun far beyond white. postUniforms.exposure follows the sun's
+ * height (Environment.tsx); auto exposure (autoExposure.ts) and the exposure compensation go on top.
  */
-const EXPOSURE = 0.85
+const EXPOSURE = 1.45
+
+/**
+ * The sensor's white: the exposed signal (before the curve) at which it saturates. A real sensor has a
+ * finite dynamic range: past its full well every channel clips, and a camera exposed for the track
+ * blows out what is much brighter. At 1.5 that is ~2 stops over an 18% grey card in full sun: white
+ * paint, kerbs and clouds in the sun, the sky through the windscreen and the sun burn out to pure
+ * white. (The original curve only approaches white and kept faint detail ~1.5 stops further up.)
+ */
+const SENSOR_WHITE = 1.5
 
 /**
  * Filmic tone curve of Gran Turismo Sport (H. Uchimura, "HDR theory and practice", 2017), per channel:
  * a toe that keeps the shadows' contrast, an exactly linear mid section (colours and greys as lit) and
- * a shoulder that runs into pure white. Per channel, bright colours lose their saturation on the way
- * up as film does: the sun, its glints in the paint and sunlit cloud edges blind to white.
+ * a shoulder that runs into pure white, here reaching it at the sensor's white (SENSOR_WHITE) instead
+ * of only approaching it. Per channel, bright colours lose their saturation on the way up as a sensor
+ * clips one channel after the other: the sun, its glints in the paint and sunlit cloud edges blind to
+ * white.
  */
 export const gtToneMap = Fn(([c]: [any]) => {
   const P = 1.0, // display white
@@ -94,14 +110,24 @@ export const gtToneMap = Fn(([c]: [any]) => {
   const l0 = ((P - m) * l) / a
   const S0 = m + l0,
     S1 = m + a * l0
-  const C2 = (a * P) / (P - S1),
-    CP = -C2 / P
+  // shoulder: exponential from the linear section (same slope) into exactly P at the sensor's white
+  const D = SENSOR_WHITE - S0
+  const f = (k: number) => (P - S1) * k - a * (1 - Math.exp(-k * D))
+  let lo = 1e-3,
+    hi = 50
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2
+    if (f(mid) < 0) lo = mid
+    else hi = mid
+  }
+  const k = lo,
+    norm = 1 - Math.exp(-k * D)
   const x = max(c, vec3(0))
   const w0 = float(1).sub(smoothstep(0, m, x))
   const w2 = step(S0, x)
   const w1 = float(1).sub(w0).sub(w2)
   const T = pow(x.div(m), vec3(cc)).mul(m).add(b)
-  const S = float(P).sub(exp(x.sub(S0).mul(CP)).mul(P - S1))
+  const S = min(float(S1).add(float(1).sub(exp(x.sub(S0).mul(-k))).mul((P - S1) / norm)), P)
   const L = x.sub(m).mul(a).add(m)
   return T.mul(w0).add(L.mul(w1)).add(S.mul(w2))
 })
@@ -112,8 +138,9 @@ export const gtToneMap = Fn(([c]: [any]) => {
  */
 const aoWeight = uniform(1).onObjectUpdate(({ object }) => (object?.userData.noAO ? 0 : 1))
 
-/** Eye adaptation: fast adaptation relative to a slowly drifting reference (partial, like an eye). */
-const eye = { fast: 0, slow: 0, ready: false, frame: 0, pending: false }
+const _size = new THREE.Vector2()
+
+const aeDebug = debugFlag('aedebug')
 
 export function PostFX() {
   const { gl, scene } = useThree()
@@ -198,13 +225,6 @@ export function PostFX() {
     }
     let out: any = composite
     let blurDebug: any = null
-    // luminance meter for auto exposure: tiny render target, read back asynchronously on the CPU
-    let meter: any = null
-    if (useAE) {
-      meter = rtt(vec4(luminance(composite.rgb).max(1e-4).log(), 0, 0, 1), 48, 27, { type: THREE.FloatType })
-      // keep the meter in the graph (its contribution is scaled by a zero uniform)
-      composite = vec4(composite.rgb.add(meter.sample(vec2(0.5, 0.5)).r.mul(postUniforms.meterTap)), composite.a)
-    }
     out = useSMAA ? smaa(composite) : fxaa(composite)
     if (useMB && vel) {
       const q = gfx.preset === 'ultra' ? { pairs: 16, denseTaps: 64 } : gfx.preset === 'high' ? { pairs: 12, denseTaps: 48 } : { pairs: 8, denseTaps: 32 }
@@ -223,26 +243,37 @@ export function PostFX() {
     particlePass.setResolutionScale(gfx.preset === 'high' || gfx.preset === 'ultra' ? 0.75 : 0.5)
     const parts = particlePass.getTextureNode('output')
     out = vec4(out.rgb.mul(parts.a).add(parts.rgb), 1)
-    // exposure before the bloom: its threshold is in display terms (1 = the curve's white). Only what
-    // is several times brighter than white glows: the sun, its glints, sunlit cloud edges, lamps
-    out = vec4(out.rgb.mul(postUniforms.exposure).mul(postUniforms.adapt).mul(EXPOSURE), 1)
+    // ---- the camera: exposure, then the lens (lens.ts), then the sensor's tone curve
+    const exposedTex = convertToTexture(vec4(out.rgb.mul(postUniforms.exposure).mul(postUniforms.adapt).mul(EXPOSURE), 1))
+    // the camera's light meter (autoExposure.ts), read back asynchronously
+    const meter = useAE ? exposureMeter(exposedTex, postUniforms.adapt) : null
+    // lateral chromatic aberration towards the corners
+    let img: any = lateralCA(exposedTex)
     if (useBloom) {
-      const b = bloom(out, 0.2, 0.55, 1.6)
-      out = vec4(out.rgb.add(b.rgb), 1)
-      // anamorphic-free lens ghosts from the brightest highlights (low sun, headlights)
+      // lens scatter: a few percent of all light into a wide, long-tailed halo (no threshold, energy
+      // conserving: the sun and its glints bloom into white, a sunlit wall barely changes)
+      const scatter = bloom(exposedTex, 1, 0.85, 0)
+      img = img.mul(1 - SCATTER).add(scatter.rgb.mul(SCATTER / 3))
+      // aperture glare: a six-pointed star around everything far beyond white
+      const bright = brightPass(exposedTex)
+      img = img.add(starburst(bright).rgb)
+      // ghosts between the lens elements, from the same bright pass (light sources only)
       if (gfx.preset === 'high' || gfx.preset === 'ultra') {
-        const flare = lensflare(b, { ghostTint: vec3(1.0, 0.93, 0.82), threshold: float(0.85), ghostSamples: float(4), ghostSpacing: float(0.28), ghostAttenuationFactor: float(22) })
-        out = vec4(out.rgb.add((flare as any).rgb.mul(0.35)), 1)
+        const flare = lensflare(bright, { ghostTint: vec3(1.0, 0.93, 0.82), threshold: float(0), ghostSamples: float(4), ghostSpacing: float(0.28), ghostAttenuationFactor: float(22) })
+        img = img.add((flare as any).rgb.mul(0.12))
       }
     }
-    // grading: saturation, vignette, fine grain (before tone mapping, applied in linear HDR)
-    const lum = out.rgb.dot(vec3(0.2126, 0.7152, 0.0722))
-    let graded = mix(vec3(lum), out.rgb, postUniforms.saturation)
-    const vig = smoothstep(0.35, 1.1, length(screenUV.sub(0.5)).mul(1.4))
-    graded = graded.mul(float(1).sub(vig.mul(postUniforms.vignette)))
+    // natural vignetting (cos^4 of the off-axis angle, partly corrected)
+    img = img.mul(naturalVignette(postUniforms.vignette))
+    // grading: saturation and fine sensor grain, then the tone curve
+    const lum = img.dot(vec3(0.2126, 0.7152, 0.0722))
+    let graded = mix(vec3(lum), img, postUniforms.saturation)
     const n = hash(screenUV.mul(vec2(1931.3, 2711.7)).add(time.mul(37.1)).x.add(screenUV.y.mul(911.1)))
     graded = graded.mul(float(1).add(n.sub(0.5).mul(postUniforms.grain)))
-    rp.outputNode = vec4(gtToneMap(graded), 1)
+    let toned: any = gtToneMap(graded)
+    // keep the meter in the graph (its contribution is scaled by a zero uniform)
+    if (meter) toned = toned.add(meter.sample(vec2(0.5, 0.5)).r.mul(postUniforms.meterTap))
+    rp.outputNode = vec4(toned, 1)
     // debug views: ?showvel (the streaks the blur uses), ?showtiles (its neighbour-max tiles)
     if (blurDebug) {
       rp.outputNode = blurDebug
@@ -274,6 +305,8 @@ export function PostFX() {
     mb.frame.value = (mb.frame.value + 1) % 1024
     particleU.near.value = camera.near
     particleU.far.value = camera.far
+    const size = renderer.getDrawingBufferSize(_size)
+    updateLens(camera, size.x, size.y)
     // a cut drops the camera's motion for that frame; objects keep theirs
     beginMotionFrame(scene, camera, { cut, exposure: shutter * frameDt, dt: frameDt })
     if ((pipeline as any).__broken) {
@@ -290,40 +323,10 @@ export function PostFX() {
       renderer.render(scene, camera)
       return
     }
-    const meter = (pipeline as any).__meter
-    if (meter && !eye.pending && eye.frame++ % 6 === 0) {
-      eye.pending = true
-      renderer
-        .readRenderTargetPixelsAsync(meter.renderTarget, 0, 0, 48, 27)
-        .then((px: ArrayLike<number>) => {
-          let sum = 0,
-            n = 0
-          for (let i = 0; i < px.length; i += 4) {
-            const v = px[i]
-            if (Number.isFinite(v)) {
-              sum += v
-              n++
-            }
-          }
-          if (n) {
-            const logAvg = sum / n
-            if (!eye.ready) {
-              eye.fast = eye.slow = logAvg
-              eye.ready = true
-            }
-            eye.fast = logAvg
-          }
-        })
-        .catch(() => {})
-        .finally(() => (eye.pending = false))
-    }
-    if (meter && eye.ready) {
-      // reference drifts over ~40 s; the eye opens faster (darker scene) than it closes
-      eye.slow += (eye.fast - eye.slow) * Math.min(1, dt / 40)
-      const target = Math.exp(Math.max(-0.55, Math.min(0.5, (eye.slow - eye.fast) * 0.6)))
-      const rate = target > postUniforms.adapt.value ? 1.4 : 3.5
-      postUniforms.adapt.value += (target - postUniforms.adapt.value) * Math.min(1, dt * rate)
-    } else postUniforms.adapt.value = 1
+    // auto exposure (stops from the base exposure) and the player's exposure compensation
+    const ev = stepAutoExposure(renderer, (pipeline as any).__meter, dt, cut)
+    postUniforms.adapt.value = Math.pow(2, ev + (gfx.exposureComp ?? 0))
+    if (aeDebug) (window as unknown as { __ae?: object }).__ae = { ev, target: ae.target, measured: ae.measured }
   }, 1)
   return null
 }
