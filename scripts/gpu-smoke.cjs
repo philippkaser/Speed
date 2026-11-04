@@ -9,7 +9,7 @@
 //   node scripts/gpu-smoke.cjs [http://localhost:5173] [extra query, e.g. &gpufail to check that it fails]
 //
 // Needs Playwright with Chromium (`npx playwright install chromium`). SwiftShader is slow: each case
-// takes one to two minutes.
+// takes two to five minutes (Ultra, with its denser vegetation, needs the longest to show a frame).
 const { chromium } = require('playwright')
 
 const base = (process.argv[2] || 'http://localhost:5173').replace(/\/$/, '')
@@ -34,7 +34,7 @@ async function run(name, query) {
   page.on('pageerror', (e) => problems.push('page error: ' + e.message.slice(0, 300)))
   try {
     await page.goto(base + '/' + query + extra, { waitUntil: 'domcontentloaded' })
-    await page.waitForFunction(() => window.speed?.store?.getState().sceneReady && (window.__frames ?? 0) > 8, null, { timeout: 240000, polling: 1000 })
+    await page.waitForFunction(() => window.speed?.store?.getState().sceneReady && (window.__frames ?? 0) > 8, null, { timeout: 420000, polling: 1000 })
     await page.evaluate(() => {
       window.__shot = null
       window.__wantShot = true
