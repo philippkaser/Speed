@@ -221,6 +221,7 @@ function CaptureHook() {
       w.__shots ??= []
     }
     const slot = seq ? w.__shots!.push('') - 1 : -1
+    if (seq) ((w as { __shotInfo?: object[] }).__shotInfo ??= []).push({ frame: w.__frames, elapsed: state.clock.elapsedTime })
     const done = (url: string) => {
       if (slot >= 0) w.__shots![slot] = url
       if (one) w.__shot = url
