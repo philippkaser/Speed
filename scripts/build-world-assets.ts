@@ -7,7 +7,7 @@
 //        colour image plus an 8-bit logarithmic gain map (radiance = colour * 2^gain, the sun included),
 //        and sky.json with the sun's direction and irradiance measured from the photograph
 // ground photo-scanned PBR sets (asphalt, pit lane asphalt, grass) -> public/world/ground/: per set
-//        a colour map (ambient occlusion baked in) and a data map (normal x/y + roughness)
+//        a colour map (ambient occlusion baked in, 1024 px) and a data map (normal x/y + roughness at the scan's full resolution)
 // trees  pine, broadleaf (Sketchfab, CC BY 4.0) -> public/world/veg/: one merged mesh per tree with a
 //        single material: trunk and leaf textures packed into one atlas, so a whole forest of one tree
 //        is a single instanced draw call. Leaf cards are flattened to quads, branches simplified
@@ -181,16 +181,20 @@ async function buildSky() {
 interface GroundDef {
   id: string
   dir: string
-  size: number
+  /** size of the colour map; the data map (normal + roughness) keeps the scan's full resolution */
+  colourSize: number
   /** strength of the baked ambient occlusion */
   ao: number
 }
 
+// The colour (albedo) can be smaller: what makes asphalt and grass read as real up close is the
+// fine relief and the play of roughness in the light, so the normal and roughness data stay at the
+// scan's native resolution and the colour is halved.
 const GROUND: GroundDef[] = [
-  { id: 'asphalt', dir: 'asphalt_track_2k.gltf/textures/asphalt_track', size: 2048, ao: 0.7 },
-  { id: 'pitlane', dir: 'asphalt_pit_lane_2k.gltf/textures/asphalt_pit_lane', size: 1024, ao: 0.7 },
-  { id: 'grass', dir: 'grass_ground_2k.gltf/textures/grass_ground', size: 2048, ao: 0.6 },
-  { id: 'leafy', dir: 'leafy_grass_2k.gltf/textures/leafy_grass', size: 1024, ao: 0.6 },
+  { id: 'asphalt', dir: 'asphalt_track_2k.gltf/textures/asphalt_track', colourSize: 1024, ao: 0.7 },
+  { id: 'pitlane', dir: 'asphalt_pit_lane_2k.gltf/textures/asphalt_pit_lane', colourSize: 1024, ao: 0.7 },
+  { id: 'grass', dir: 'grass_ground_2k.gltf/textures/grass_ground', colourSize: 1024, ao: 0.6 },
+  { id: 'leafy', dir: 'leafy_grass_2k.gltf/textures/leafy_grass', colourSize: 1024, ao: 0.6 },
 ]
 
 async function rawRGB(file: string, size: number) {
@@ -201,15 +205,19 @@ async function buildGround() {
   mkdirSync(`${OUT}/ground`, { recursive: true })
   for (const g of GROUND) {
     const base = `${SRC}/${g.dir}`
-    const S = g.size
-    const [diff, arm, nor] = await Promise.all([rawRGB(`${base}_diff_2k.jpg`, S), rawRGB(`${base}_arm_2k.jpg`, S), rawRGB(`${base}_nor_gl_2k.jpg`, S)])
-    const col = Buffer.alloc(S * S * 3)
+    // native size of the scan's normal map: the data map is never downscaled
+    const S = (await sharp(`${base}_nor_gl_2k.jpg`).metadata()).width ?? 2048
+    const C = Math.min(g.colourSize, S)
+    const [diff, armC, arm, nor] = await Promise.all([rawRGB(`${base}_diff_2k.jpg`, C), rawRGB(`${base}_arm_2k.jpg`, C), rawRGB(`${base}_arm_2k.jpg`, S), rawRGB(`${base}_nor_gl_2k.jpg`, S)])
+    const col = Buffer.alloc(C * C * 3)
     const dat = Buffer.alloc(S * S * 3)
     let roughSum = 0
-    for (let i = 0; i < S * S; i++) {
-      const ao = arm[i * 3] / 255
+    for (let i = 0; i < C * C; i++) {
+      const ao = armC[i * 3] / 255
       const k = 1 - g.ao * (1 - ao)
       for (let c = 0; c < 3; c++) col[i * 3 + c] = Math.round(srgbEncode(srgbDecode(diff[i * 3 + c] / 255) * k) * 255)
+    }
+    for (let i = 0; i < S * S; i++) {
       dat[i * 3] = nor[i * 3]
       dat[i * 3 + 1] = nor[i * 3 + 1]
       dat[i * 3 + 2] = arm[i * 3 + 1]
@@ -217,10 +225,10 @@ async function buildGround() {
     }
     const cf = `${OUT}/ground/${g.id}-colour.jpg`,
       df = `${OUT}/ground/${g.id}-data.jpg`
-    await sharp(col, { raw: { width: S, height: S, channels: 3 } }).jpeg({ quality: 88, mozjpeg: true }).toFile(cf)
+    await sharp(col, { raw: { width: C, height: C, channels: 3 } }).jpeg({ quality: 90, mozjpeg: true }).toFile(cf)
     // 4:4:4 so the normal's x and y keep their own detail
     await sharp(dat, { raw: { width: S, height: S, channels: 3 } }).jpeg({ quality: 92, chromaSubsampling: '4:4:4', mozjpeg: true }).toFile(df)
-    console.log(`ground ${g.id}: ${S}px, mean roughness ${(roughSum / (S * S)).toFixed(2)}, colour ${kb(cf)}, data ${kb(df)}`)
+    console.log(`ground ${g.id}: colour ${C}px, normal + roughness ${S}px, mean roughness ${(roughSum / (S * S)).toFixed(2)}, colour ${kb(cf)}, data ${kb(df)}`)
   }
 }
 

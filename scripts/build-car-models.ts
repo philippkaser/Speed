@@ -14,17 +14,22 @@
 //  - merges geometry by material (a few dozen draw calls instead of hundreds of nodes)
 //  - adds two simplified levels of detail (interior removed; ~20% and ~5% of the triangles) for cars
 //    that are small on screen and for the shadow passes
-//  - downsizes textures and stores them as WebP (livery 4K, everything else 1K) and compresses the
+//  - stores textures as WebP: the livery up to 4K, surface data (normal, roughness / metalness, clear
+//    coat) at the source's resolution (near-lossless, or lossy at high quality where the data is
+//    noise-like), colour maps at 1K; and compresses the
 //    geometry with meshopt
 // Per-model metadata (wheel centres and radii, steering wheel, seat, livery material, source credit)
 // goes into the root node's extras.
 import { Document, type Material, NodeIO, type Primitive } from '@gltf-transform/core'
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions'
-import { meshopt, prune, textureCompress } from '@gltf-transform/functions'
+import { listTextureSlots, meshopt, prune, textureCompress } from '@gltf-transform/functions'
 import { mkdirSync, readFileSync, statSync } from 'fs'
 import { MeshoptEncoder, MeshoptSimplifier } from 'meshoptimizer'
 import sharp from 'sharp'
 import { unzipSync } from 'three/examples/jsm/libs/fflate.module.js'
+
+/** Material slots holding surface data rather than colour: kept at the source's resolution. */
+const DATA_SLOTS = /^(normalTexture|metallicRoughnessTexture|clearcoatTexture|clearcoatRoughnessTexture|clearcoatNormalTexture|specularTexture|sheenRoughnessTexture|anisotropyTexture)$/
 
 /** physics wheelbase of the GT3 class (src/physics/spec.ts, vanta-gt3) */
 const TARGET_WHEELBASE = 2.72
@@ -540,12 +545,27 @@ async function build(def: ModelDef) {
   })
   await doc.transform(prune())
 
-  // ---- textures: name them by use, the livery stays sharp
+  // ---- textures: name them by use. The livery stays sharp; surface data (normals, roughness and
+  //      metalness, clear coat) keeps the source's resolution, in near-lossless WebP (lossy WebP
+  //      halves the chroma resolution, and a normal map's x and y are its colour); colour maps
+  //      (base colour, emissive, occlusion) can be smaller.
   const liveryTex = root.listMaterials().find((m) => m.getName() === liveryMat)?.getBaseColorTexture()
-  root.listTextures().forEach((t, i) => t.setName(t === liveryTex ? 'livery' : `tex${i}`))
+  root.listTextures().forEach((t, i) => t.setName(t === liveryTex ? 'livery' : listTextureSlots(t).some((slot) => DATA_SLOTS.test(slot)) ? `data${i}` : `tex${i}`))
   await doc.transform(
     textureCompress({ encoder: sharp, targetFormat: 'webp', resize: [4096, 4096], quality: 90, pattern: /^livery$/ }),
+    textureCompress({ encoder: sharp, targetFormat: 'webp', resize: [4096, 4096], nearLossless: true, quality: 80, pattern: /^data\d+$/ }),
     textureCompress({ encoder: sharp, targetFormat: 'webp', resize: [1024, 1024], quality: 85, pattern: /^tex\d+$/ }),
+  )
+  // noise-like data (metallic flake, orange peel) barely compresses without loss: above ~0.5 bytes per
+  // texel it is stored lossy instead (quality 82: the error is indistinguishable from the noise itself)
+  for (const t of root.listTextures()) {
+    const img = t.getImage()
+    if (!/^data\d+$/.test(t.getName()) || !img) continue
+    const meta = await sharp(Buffer.from(img)).metadata()
+    if (img.byteLength > 0.5 * (meta.width ?? 1) * (meta.height ?? 1)) t.setName(t.getName().replace('data', 'noisy'))
+  }
+  await doc.transform(
+    textureCompress({ encoder: sharp, targetFormat: 'webp', quality: 82, pattern: /^noisy\d+$/ }),
     meshopt({ encoder: MeshoptEncoder, level: 'medium' }),
   )
   mkdirSync('public/models', { recursive: true })

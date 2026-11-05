@@ -41,6 +41,7 @@ The four commercial titles don't publish their models. Statements about them are
 | Reflections | GT7 / Forza (RT reflections) | SSR (incl. dielectrics), plus a dynamic cube-map probe around the player car for off-screen reflections | Behind |
 | Upscaling / AA | GT7 / Forza (temporal reconstruction) | TRAA, TAAU temporal upscaling (70/80% internal on Medium/High), drei PerformanceMonitor dynamic resolution | On par in technique |
 | Lighting | GT7 (HDR, physical sky) | Preetham sky with clouds, sun from time of day, CSM shadows, IBL from the sky, aerial perspective, auto exposure (eye adaptation) | Behind (no volumetric clouds/weather) |
+| Camera & post-processing | GT7 (physically based camera and exposure; tone mapping in ICtCp that blends per-channel and hue-preserving results; HDR output) | Metered auto exposure; energy-conserving lens scatter with a power-law PSF (mip chain, Karis-filtered so glints cannot flicker); the sun's glare computed from its light: scatter halo, a spectral diffraction star from an FFT of a 7-bladed iris, aperture-shaped ghosts, occlusion measured on the GPU; filmic curve in an AgX-style inset gamut (hue-stable path to white); shot and read sensor noise; dithered sRGB | On par in technique. Behind in display output: SDR only, GT7 also renders HDR |
 | Assets | GT7 (500k-poly hand-built cars, scanned tracks) | Procedural SDF car bodies, procedural textures, card-based foliage | Far behind |
 | Platform | Consoles / PC installs | Runs in a browser, zero install, WebGPU with WebGL2 fallback | Unique |
 

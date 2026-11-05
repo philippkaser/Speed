@@ -227,8 +227,8 @@ function liveryMaterial(src: THREE.MeshPhysicalMaterial, paint: Meta['paint'], p
   m.roughness = 0.42
   m.clearcoat = 1
   m.clearcoatRoughness = 0.03
-  // the base coat's flake normal map (4K in the source, 1K here) turns into grain at a distance:
-  // a hint of it under the smooth clear coat
+  // the base coat's flake normal map (kept at the source's 4K) turns into grain at a distance: a hint
+  // of it under the smooth clear coat
   m.normalScale.set(0.12, 0.12)
   // Clear-coat reflectance: physically 4% head-on (IOR 1.5), which over a bright base coat in full sun
   // all but hides the mirrored sky and horizon. Real automotive finishes (thick, multi-layer clear coats
