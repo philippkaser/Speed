@@ -15,10 +15,12 @@ export function App() {
     input.attach()
     // small handle for automated tests / debugging from the console
     ;(window as unknown as { speed: object }).speed = { store: useGameStore, settings: useSettings, game, director, teamRace, setCamera: (c: string) => useGameStore.getState().set({ camera: c as never }) }
-    // URL shortcuts (handy for testing): ?drive, ?race, ?showroom, ?car=<id>
+    // URL shortcuts (handy for testing): ?drive, ?race, ?showroom, ?car=<id>, ?gt3=<model id> (the GT3's bodywork)
     const p = new URLSearchParams(location.search)
     const car = p.get('car')
     if (car) useGameStore.getState().updateCareer((c) => ({ ...c, carId: car }))
+    const gt3 = p.get('gt3')
+    if (gt3) useGameStore.getState().updateCareer((c) => ({ ...c, gt3Model: gt3 as never }))
     if (p.has('team')) {
       startTeamRace()
     } else if (p.has('hq')) {

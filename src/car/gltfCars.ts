@@ -105,6 +105,7 @@ export function loadCarModels(): Promise<void> {
         }
       })
       const box = new THREE.Box3().setFromObject(car.getObjectByName('body_lod0') ?? car)
+      splitLights(car, box)
       templates.set(id, { meta, car, zFront: box.max.z, zRear: box.min.z })
       console.info(`[car] ${meta.name} model loaded in ${(performance.now() - t0).toFixed(0)} ms`)
     }),
@@ -120,6 +121,56 @@ export function loadCarModels(): Promise<void> {
       for (const l of listeners) l()
     })
   return loading
+}
+
+/**
+ * Some models (the Mercedes) light the headlights and the tail lights with one material ("...Lights").
+ * The brake lights glow through the tail lights' material, so such a material is split where the
+ * model loads: triangles in the rear quarter of the car get a rear-light copy of it ("...:Light_Rear",
+ * which lights up with the brakes), the rest a plain copy (the headlights stay as modelled).
+ * Materials with nothing in the rear quarter (the cockpit's button lights) are left alone.
+ */
+function splitLights(car: THREE.Object3D, box: THREE.Box3) {
+  car.updateMatrixWorld(true)
+  const inv = new THREE.Matrix4().copy(car.matrixWorld).invert()
+  const carBox = box.clone().applyMatrix4(inv)
+  const zCut = carBox.min.z + (carBox.max.z - carBox.min.z) * 0.25
+  const copies = new Map<THREE.Material, [THREE.Material, THREE.Material]>()
+  const rel = new THREE.Matrix4()
+  const v = new THREE.Vector3()
+  car.traverse((o) => {
+    const m = o as THREE.Mesh
+    if (!m.isMesh || Array.isArray(m.material) || !/Lights$/i.test(m.material.name ?? '')) return
+    const g = m.geometry
+    const pos = g.getAttribute('position')
+    const index = g.getIndex()
+    const n = index ? index.count : pos.count
+    const at = (i: number) => (index ? index.getX(i) : i)
+    rel.multiplyMatrices(inv, m.matrixWorld)
+    const rear: number[] = []
+    const front: number[] = []
+    for (let t = 0; t + 2 < n; t += 3) {
+      let z = 0
+      for (let k = 0; k < 3; k++) z += v.fromBufferAttribute(pos, at(t + k)).applyMatrix4(rel).z
+      ;(z / 3 < zCut ? rear : front).push(at(t), at(t + 1), at(t + 2))
+    }
+    if (!rear.length) return
+    let pair = copies.get(m.material)
+    if (!pair) {
+      const f = m.material.clone()
+      f.name = m.material.name + ':front'
+      const r = m.material.clone()
+      r.name = m.material.name + ':Light_Rear'
+      pair = [f, r]
+      copies.set(m.material, pair)
+    }
+    const all = rear.concat(front)
+    g.setIndex(new THREE.BufferAttribute(pos.count > 65535 ? new Uint32Array(all) : new Uint16Array(all), 1))
+    g.clearGroups()
+    g.addGroup(0, rear.length, 1)
+    if (front.length) g.addGroup(rear.length, front.length, 0)
+    m.material = pair
+  })
 }
 
 export function onCarModels(fn: () => void) {
@@ -304,10 +355,11 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
     if (name === meta.livery && (mat as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial) {
       livery = liveryMaterial(mat as THREE.MeshPhysicalMaterial, meta.paint, primary, accent)
       out = livery.material
-    } else if (/Light_Rear|Lights$/i.test(name) || /Disc/i.test(name) || opts.uniqueMaterials !== false) {
+    } else if (/Light_Rear/i.test(name) || /Disc/i.test(name) || opts.uniqueMaterials !== false) {
       // every car its own materials: each car carries its own reflection probe
       out = normaliseMaterial(mat.clone())
-      if (/Light_Rear|Lights$/i.test(name)) rearLights.push(out as THREE.MeshStandardMaterial)
+      // the brake lights (rear lights only: see splitLights)
+      if (/Light_Rear/i.test(name)) rearLights.push(out as THREE.MeshStandardMaterial)
       if (/Disc/i.test(name)) discs.push(out as THREE.MeshStandardMaterial)
     }
     if (out !== mat) disposables.push(out)
