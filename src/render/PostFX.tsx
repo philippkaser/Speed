@@ -2,12 +2,12 @@
 //   scene pass with MRT (colour, normals, diffuse albedo, metal/rough, velocity)
 //   -> SSGI (screen-space indirect diffuse + AO)  or  GTAO
 //   -> SSR (screen-space reflections, incl. dielectrics like clear coat & asphalt sheen)
-//   -> SMAA (or FXAA on low)  -> per-object motion blur  -> particles
+//   -> temporal AA (taa.ts; SMAA without it, FXAA on low)  -> per-object motion blur  -> particles
 //   -> the camera: exposure -> the lens (lens.ts: chromatic aberration, lens scatter, the sun's glare,
 //      star and ghosts, vignetting) -> the sensor (sensor.ts: noise) -> the picture (sensor.ts: filmic
 //      display rendering in an inset gamut) -> sRGB with dither
-// No temporal AA: TAA reuses earlier frames, and in tracking shots (a car still on screen, the track
-// sliding past) it smeared and ghosted the cars. Every frame here stands on its own.
+// The temporal AA rejects history by motion, not by depth, so in tracking shots (a car still on
+// screen, the track sliding past) the road never takes the car's history (see taa.ts).
 import { useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo } from 'react'
 import * as THREE from 'three/webgpu'
@@ -39,6 +39,8 @@ import { reportGpuError } from './gpuHealth'
 import { debugFlag } from '../util/debug'
 import { ae, exposureMeter, stepAutoExposure } from './autoExposure'
 import { motionBlur, motionBlurUniforms } from './motionBlur'
+import { temporalAA } from './taa'
+import { contactShadows, contactShadowsOff, updateContactShadows } from './contactShadows'
 import { beginMotionFrame, motionBlendMode, motionVelocityOutput } from './motionHistory'
 import { particleScene, particleU, sceneDepth } from './particles'
 import { lateralCA, lensScatter, naturalVignette, SCATTER, scatterUpsample, sunGlare, sunVisibility, updateLens } from './lens'
@@ -70,10 +72,13 @@ export const postUniforms = {
 const EXPOSURE = 1.45
 
 /**
- * How much screen-space AO / GI an object takes (0 for objects flagged `userData.noAO`: the cars, whose
- * clear coat would show the passes' noise over its reflections; their contact shading is the shadows').
+ * How much screen-space AO / GI an object takes. Objects flagged `userData.noAO` (the cars) take none
+ * without TAA: the passes' noise would sit on their clear coat as grain. With TAA the noise converges
+ * in the history, and the cars get their contact shading (wheel arches, under the wing, the diffuser,
+ * panel gaps), the reflections in those cavities occluded too, as they really are.
  */
-const aoWeight = uniform(1).onObjectUpdate(({ object }) => (object?.userData.noAO ? 0 : 1))
+const aoForAll = { on: false }
+const aoWeight = uniform(1).onObjectUpdate(({ object }) => (object?.userData.noAO && !aoForAll.on ? 0 : 1))
 
 const _size = new THREE.Vector2()
 /** one output pixel in uv */
@@ -117,9 +122,14 @@ export function PostFX() {
   const useMB = gfx.motionBlur > 0
   const useBloom = gfx.bloom
   const useSMAA = gfx.preset !== 'low'
+  // temporal AA (taa.ts) where the preset allows it; SMAA / FXAA otherwise
+  const useTAA = (gfx.taa ?? gfx.preset !== 'low') && !debugFlag('notaa')
   const useAE = gfx.autoExposure ?? false
+  // screen-space contact shadows of the sun (contactShadows.ts), Medium and up, with shadows on
+  const useContact = (gfx.contactShadows ?? gfx.preset !== 'low') && gfx.shadows > 0 && !debugFlag('nocontact')
 
   const pipeline = useMemo(() => {
+    aoForAll.on = useTAA
     const rp = new THREE.RenderPipeline(renderer)
     const scenePass = pass(scene, camera)
     // G-buffer layout. WebGPU's default limit is 32 bytes of colour attachments per sample and every
@@ -127,7 +137,7 @@ export function PostFX() {
     // target's alpha and metalness in the albedo target's alpha (or a target of its own without SSGI).
     const outputs: Record<string, any> = { output }
     // velocity: NDC motion per frame, wheel slot, inverse depth of the surface that owns the motion
-    if (useMB) outputs.velocity = motionVelocityOutput
+    if (useMB || useTAA) outputs.velocity = motionVelocityOutput
     // alpha: the SSR's roughness, or (without SSR) the object's weight for screen-space AO / GI
     if (useSSGI || useSSR || useAO) outputs.normal = vec4(packNormalToRGB(normalView), useSSR ? roughness : aoWeight)
     if (useSSGI) outputs.diffuseColor = vec4(diffuseColor.rgb, useSSR ? metalness : float(0))
@@ -157,22 +167,24 @@ export function PostFX() {
     let composite: any = color
     if (useSSGI && sceneNormal) {
       const gi = ssgi(color, depth, sceneNormal, camera)
-      // three's presets for SSGI without temporal filtering (nothing accumulates its noise over frames)
-      gi.sliceCount.value = gfx.preset === 'ultra' ? 4 : 3
-      gi.stepCount.value = gfx.preset === 'ultra' ? 12 : 8
+      // three's presets: with TAA the noise is varied every frame and converges in the history, so
+      // fewer samples give a cleaner result; without it, more samples and the noise stays
+      gi.sliceCount.value = useTAA ? (gfx.preset === 'ultra' ? 3 : 2) : gfx.preset === 'ultra' ? 4 : 3
+      gi.stepCount.value = useTAA ? (gfx.preset === 'ultra' ? 16 : 10) : gfx.preset === 'ultra' ? 12 : 8
       gi.radius.value = 6
       gi.giIntensity.value = 6
       gi.aoIntensity.value = 1.15
       gi.thickness.value = 0.8
-      gi.useTemporalFiltering = false
+      gi.useTemporalFiltering = useTAA
       const diffuse = scenePass.getTextureNode('diffuseColor')
-      // (cars excluded: the occlusion is noisy and would darken their mirror reflections)
+      // (cars excluded without TAA, see aoWeight)
       const w = useSSR ? float(1) : normalTex!.a
       composite = vec4(color.rgb.mul(mix(float(1), gi.getAONode(), w)).add(diffuse.rgb.mul(gi.getGINode().rgb).mul(w)), color.a)
     } else if (useAO && sceneNormal) {
       const a = gtao(depth, sceneNormal, camera)
       a.radius.value = 1.2
       a.resolutionScale = 0.5
+      a.useTemporalFiltering = useTAA
       const w = useSSR ? float(1) : normalTex!.a
       composite = vec4(color.rgb.mul(mix(float(1), a.getTextureNode().r, w)), color.a)
     }
@@ -187,7 +199,9 @@ export function PostFX() {
     }
     let out: any = composite
     let blurDebug: any = null
-    out = useSMAA ? smaa(composite) : fxaa(composite)
+    let taaNode: any = null
+    if (useTAA && vel) out = taaNode = temporalAA(convertToTexture(composite), depth, vel, camera)
+    else out = useSMAA ? smaa(composite) : fxaa(composite)
     if (useMB && vel) {
       const q = gfx.preset === 'ultra' ? { pairs: 16, denseTaps: 64 } : gfx.preset === 'high' ? { pairs: 12, denseTaps: 48 } : { pairs: 8, denseTaps: 32 }
       const src = typeof out.getTextureNode === 'function' ? out.getTextureNode() : convertToTexture(out)
@@ -205,6 +219,8 @@ export function PostFX() {
     particlePass.setResolutionScale(gfx.preset === 'high' || gfx.preset === 'ultra' ? 0.75 : 0.5)
     const parts = particlePass.getTextureNode('output')
     out = vec4(out.rgb.mul(parts.a).add(parts.rgb), 1)
+    // the sun's contact shadows, from this frame's depth, for the materials of the next
+    const contact = useContact ? contactShadows(depth, camera, gfx.preset === 'ultra' ? 20 : gfx.preset === 'high' ? 16 : 12, gfx.preset === 'ultra' ? 1 : 0.5) : (contactShadowsOff(), null)
     // ---- the camera: exposure, then the lens (lens.ts), the sensor and the picture (sensor.ts)
     const exposedTex = convertToTexture(vec4(out.rgb.mul(postUniforms.exposure).mul(postUniforms.adapt).mul(EXPOSURE), 1))
     // the camera's light meter (autoExposure.ts), read back asynchronously
@@ -225,8 +241,10 @@ export function PostFX() {
     img = img.mul(naturalVignette(postUniforms.vignette))
     // the sensor's noise, the picture, the display's encoding (with dither)
     let toned: any = encodeDisplay(displayTransform(sensorNoise(img)))
-    // keep the meter in the graph (its contribution is scaled by a zero uniform)
+    // keep the meter and the contact shadows in the graph (their contribution is scaled by a zero
+    // uniform): they render every frame, but nothing in this image reads them
     if (meter) toned = toned.add(meter.sample(vec2(0.5, 0.5)).r.mul(postUniforms.meterTap))
+    if (contact) toned = toned.add(contact.getTextureNode().sample(vec2(0.5, 0.5)).r.mul(postUniforms.meterTap))
     rp.outputNode = vec4(toned, 1)
     // the output is already display encoded
     rp.outputColorTransform = false
@@ -236,9 +254,10 @@ export function PostFX() {
       rp.outputColorTransform = false
     }
     ;(rp as any).__meter = meter
+    ;(rp as any).__taa = taaNode
     ;(rp as any).__exposed = exposedTex
     return rp
-  }, [renderer, scene, camera, useSSGI, useSSR, useAO, useSMAA, useMB, useBloom, gfx.preset, useAE])
+  }, [renderer, scene, camera, useSSGI, useSSR, useAO, useSMAA, useTAA, useMB, useBloom, gfx.preset, useAE, useContact])
 
   useEffect(() => () => pipeline.dispose(), [pipeline])
 
@@ -265,10 +284,13 @@ export function PostFX() {
     const size = renderer.getDrawingBufferSize(_size)
     texelFull.value.set(1 / Math.max(1, size.x), 1 / Math.max(1, size.y))
     sensorU.frame.value = (sensorU.frame.value + 1) % 65536
+    updateContactShadows(camera, sunState.dir)
     // the lens sees the sun (its glare) at the camera's total exposure
     updateLens(camera, size.x, size.y, sunState, EXPOSURE * postUniforms.exposure.value * postUniforms.adapt.value, cut)
-    // a cut drops the camera's motion for that frame; objects keep theirs
+    // a cut drops the camera's motion for that frame; objects keep theirs, and nothing of the previous
+    // shot may linger in the temporal AA's history
     beginMotionFrame(scene, camera, { cut, exposure: shutter * frameDt, dt: frameDt })
+    if (cut) (pipeline as any).__taa?.restart()
     if ((pipeline as any).__broken) {
       renderer.render(scene, camera)
       return

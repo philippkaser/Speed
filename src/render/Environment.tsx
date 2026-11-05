@@ -5,7 +5,7 @@
 import { useFrame, useThree } from '@react-three/fiber'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three/webgpu'
-import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js'
+import type { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js'
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js'
 import { cameraPosition, dot, exp, float, Fn, length, max, mix, output, positionWorld, pow, uniform, vec3, vec4 } from 'three/tsl'
 import { useSettings } from '../state/settings'
@@ -14,6 +14,8 @@ import { setTrackTemp } from '../physics/tyre'
 import { postUniforms } from './PostFX'
 import { makeEnvScene, makeSkyDome, photoRotationFor, photoSkyHorizon, photoSkyU, photoSunDir } from './photoSky'
 import { skyMeta, skyReady } from './worldAssets'
+import { cascadesFar, cascadesWithoutHero, pickHero, seeHero, SunShadowNode, updateHeroShadow } from './sunShadow'
+import { carPoses } from './CarVisual'
 
 export interface SunState {
   dir: THREE.Vector3
@@ -24,6 +26,8 @@ export interface SunState {
 
 /** The cascaded shadow maps of the sun (vegetation sizes its shadow draws by the cascades' ranges). */
 export const csmState: { csm: CSMShadowNode | null } = { csm: null }
+
+const _heroCars: [string, { pos: THREE.Vector3; root?: THREE.Object3D }][] = []
 
 export const sunState: SunState = { dir: new THREE.Vector3(0.3, 0.4, 0.2).normalize(), color: new THREE.Color(1, 0.9, 0.8), intensity: 3, elevation: 0.3 }
 
@@ -128,7 +132,24 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
     light.shadow.bias = -0.0002
     light.shadow.normalBias = 0.02
     if (shadowsQ > 0 && !debugFlag('noshadow') && !debugFlag('nocsm')) {
-      const csm = new CSMShadowNode(light, { cascades: shadowsQ >= 2 ? 4 : 3, maxFar: shadowsQ >= 3 ? 650 : 400, mode: 'practical', lightMargin: 250 })
+      // Cascade breaks in metres, where the subjects are: the first ends at 12 m (the car in the chase
+      // and cockpit views, at ~1 cm per shadow texel on High, so mirrors, wing endplates and wheel
+      // arches shadow the car itself), then they grow geometrically. (three's 'practical' split put
+      // the first break at ~50 m: 3-5 cm texels, and the car lost its small self-shadows.)
+      const maxFar = cascadesFar(shadowsQ)
+      const metres = shadowsQ >= 2 ? [12, 38, 130] : [16, 70]
+      const csm = new SunShadowNode(light, {
+        cascades: metres.length + 1,
+        maxFar,
+        mode: 'custom',
+        customSplitsCallback: (_n: number, _near: number, far: number, target: number[]) => {
+          for (const m of metres) target.push(Math.min(m, far) / far)
+          target.push(1)
+        },
+        lightMargin: 250,
+      } as ConstructorParameters<typeof CSMShadowNode>[1])
+      // blend across cascade borders instead of a visible step in shadow detail
+      csm.fade = true
       // note: CSM picks up the camera itself on first build (setting it early skips its init)
       light.shadow.shadowNode = csm
       ;(light as any).__csm = csm
@@ -241,6 +262,23 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
     }
   }, [sun, sky, light, renderer, scene, fogU, photo, skyIn])
 
+  // debug camera overrides: after the camera rigs (0), before anything picks levels of detail or culls
+  // by the camera (vegetation at 0.6, reflection probes at 0.7)
+  useFrame(() => {
+    // debug (window.__camPose = { pos, look, fov? }): a fixed camera, for look development and A/B views
+    const pose = (window as unknown as { __camPose?: { pos: number[]; look: number[]; fov?: number } }).__camPose
+    if (pose) {
+      const pc = camera as THREE.PerspectiveCamera
+      pc.position.set(pose.pos[0], pose.pos[1], pose.pos[2])
+      pc.lookAt(pose.look[0], pose.look[1], pose.look[2])
+      if (pose.fov && pc.fov !== pose.fov) {
+        pc.fov = pose.fov
+        pc.updateProjectionMatrix()
+      }
+      pc.updateMatrixWorld()
+    }
+  }, 0.1)
+
   // the photographic dome rides with the camera: after the camera rigs and the reflection probes (which
   // move it to their own cameras), before the frame and its motion history
   useFrame(() => {
@@ -266,6 +304,15 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
     if (csm && csm.camera && csm.camera !== camera) {
       csm.camera = camera
       csm.updateFrustums()
+    }
+    // the car in focus gets its own detailed shadow map (sunShadow.ts)
+    if (csm) {
+      seeHero(camera)
+      cascadesWithoutHero(csm as never)
+      _heroCars.length = 0
+      for (const [id, pose] of carPoses) _heroCars.push([id, { pos: pose.pos, root: pose.model?.root }])
+      pickHero(_heroCars, camera as THREE.PerspectiveCamera)
+      updateHeroShadow(sun.dir, shadowsQ >= 2 ? 2048 : 1024)
     }
   }, -3)
 

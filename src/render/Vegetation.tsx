@@ -47,7 +47,8 @@ import {
   vec4,
 } from 'three/tsl'
 import { motionTime } from './motionHistory'
-import { csmState } from './Environment'
+import { csmState, sunState } from './Environment'
+import { cascadesFar, farTreeShadow, setSunShadowTerm, setTreeShadows, type TreeShadowCaster } from './sunShadow'
 import { valueNoise2 } from '../physics/math'
 import { Surface } from '../physics/ground'
 import { useSettings } from '../state/settings'
@@ -59,6 +60,8 @@ import { loadVegetation, vegState, type VegMesh } from './worldAssets'
 import { grassGroundColour } from './materials'
 
 type N = any
+
+const VEG_DEBUG = debugFlag('vegdebug')
 
 /** Main camera position (the shadow and probe passes fade and pick LODs by the player's view). */
 const vegCam = uniform(new THREE.Vector3())
@@ -285,6 +288,11 @@ class VegLayer {
       const shadowPass = !!(scene.overrideMaterial as { isShadowPassMaterial?: boolean } | null)?.isShadowPassMaterial
       if (camera === this.mainCamera && !shadowPass) g.instanceCount = this.total
       else g.instanceCount = this.countWithin((shadowPass ? shadowRange(camera) : this.o.probeRange) * vegLens.value)
+      if (VEG_DEBUG) {
+        const w = window as unknown as { __vegShadowAll?: boolean; __vegLog?: Record<string, string> }
+        if (w.__vegShadowAll && shadowPass) g.instanceCount = this.total
+        if (shadowPass) (w.__vegLog ??= {})[o.name + ':' + camera.uuid.slice(0, 6)] = `${g.instanceCount}/${this.total} range ${shadowRange(camera).toFixed(0)} override ${(scene.overrideMaterial as { type?: string } | null)?.type}`
+      }
     }
     this.mesh = mesh
   }
@@ -436,6 +444,13 @@ interface VegMaterialOpts {
   shrink?: boolean
   /** grass: colour from the ground under the patch, detail from the blades */
   groundColour?: (xz: N) => N
+  /**
+   * grass: a dense canopy shades itself. Towards the roots the blades see less of the sky (ambient
+   * occlusion, `root` at the ground) and less of the sun (`selfShadow` at the ground): the light that
+   * reaches the bottom of a lawn has passed between the blades above it. The height in the patch (0 at
+   * the ground, 1 at the tips) comes from the mesh.
+   */
+  canopy?: { root: number; selfShadow: number }
 }
 
 function vegMaterial(o: VegMaterialOpts) {
@@ -465,6 +480,11 @@ function vegMaterial(o: VegMaterialOpts) {
     // ambient occlusion inside the crown: darker towards the trunk and the bottom of the canopy
     const radial = vertexPos().xz.length().div(o.crown).clamp(0, 1)
     m.aoNode = mix(float(1), mix(float(0.45), float(1), radial).mul(mix(float(0.75), float(1), tf.w.x)), leaf)
+  }
+  if (o.canopy) {
+    const h = tf.w.x.clamp(0, 1)
+    m.aoNode = mix(float(o.canopy.root), float(1), smoothstep(0, 0.85, h))
+    setSunShadowTerm(m, mix(float(o.canopy.selfShadow), float(1), smoothstep(0.05, 0.9, h)))
   }
   const d = ign(screenCoordinate.xy)
   let keep: N = d.greaterThanEqual(vFade)
@@ -717,6 +737,8 @@ function bakeImpostors(renderer: THREE.WebGPURenderer, species: VegMesh[]): Impo
 /** One quad per tree (all species), facing the camera about its vertical axis. */
 function impostorMaterial(imp: Impostors, fadeIn: [number, number], maxDist: number, tints: THREE.Color[][]) {
   const m = new THREE.MeshStandardNodeMaterial({ side: THREE.DoubleSide, alphaTest: 0.4 })
+  // distant trees stand in each other's shadows (sunShadow.ts)
+  setSunShadowTerm(m, farTreeShadow())
   const iA: N = attribute('iA', 'vec4'),
     iB: N = attribute('iB', 'vec4')
   const species = iB.w.floor()
@@ -851,7 +873,7 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
     let impostors: Impostors | null = null
     if (pine && broad && !debugFlag('notrees') && !debugFlag('noimpostors')) {
       impostors = bakeImpostors(renderer, [pine, broad])
-      if (debugFlag('vegdebug')) (window as unknown as { __vegDebug?: object }).__vegDebug = { renderer, impostors }
+      if (debugFlag('vegdebug')) (window as unknown as { __vegDebug?: object }).__vegDebug = { renderer, impostors, csmState, trees: Array.from(trees.broad.slice(0, 8 * 400)).concat(Array.from(trees.conifers.slice(0, 8 * 400))) }
       const quad = new THREE.PlaneGeometry(2, 2)
       const all = new Float32Array(trees.conifers.length + trees.broad.length)
       all.set(trees.conifers)
@@ -895,6 +917,7 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
             roughTrunk: 0.85,
             roughLeaf: 0.85,
             crown: 0,
+            canopy: { root: 0.32, selfShadow: 0.28 },
             shrink: true,
           }),
           cell: 24,
@@ -909,10 +932,27 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
       )
       console.info(`[veg] ${g.length / STRIDE} grass patches`)
     }
+    // the distant trees' shadows on the ground (sunShadow.ts): crown size and height from each
+    // model's bounds, scaled per tree
+    const casters: TreeShadowCaster[] = []
+    const crown = (mesh: VegMesh | undefined, cy: number) => {
+      if (!mesh) return { r: 0, h: 0 }
+      const b = mesh.info.bounds
+      return { r: 0.42 * Math.max(b.max[0] - b.min[0], b.max[2] - b.min[2]), h: b.min[1] + cy * (b.max[1] - b.min[1]) }
+    }
+    for (const [arr, c] of [
+      [trees.conifers, crown(pine, 0.5)],
+      [trees.broad, crown(broad, 0.62)],
+    ] as const)
+      for (let i = 0; i + STRIDE <= arr.length; i += STRIDE) casters.push({ x: arr[i], y: arr[i + 1], z: arr[i + 2], radius: c.r * arr[i + 4], height: c.h * arr[i + 5] })
+    const margin = 600
+    const treeBounds: [number, number, number, number] = [track.minX - margin, track.minZ - margin, track.maxX + margin, track.maxZ + margin]
     for (const l of layers) group.add(l.mesh)
     console.info(`[veg] ${trees.conifers.length / STRIDE} pines, ${trees.broad.length / STRIDE} broadleaf trees, ${layers.length} draw calls, built in ${(performance.now() - t0).toFixed(0)} ms`)
-    return { group, layers, impostors }
+    return { group, layers, impostors, casters, treeBounds }
   }, [meshes, track, heights, density, renderer])
+  const shadowsQ = useSettings((st) => st.graphics.shadows)
+  const treeSun = useMemo(() => ({ dir: new THREE.Vector3(), built: null as unknown, q: -1 }), [])
 
   useEffect(
     () => () => {
@@ -926,6 +966,13 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
   // after the camera rigs (0) and before the frame is drawn (1)
   useFrame(({ camera }) => {
     if (!built) return
+    // (re)splat the trees' ground shadows when the sun has moved or the forest is new
+    if (treeSun.built !== built || treeSun.q !== shadowsQ || treeSun.dir.dot(sunState.dir) < 0.99998) {
+      treeSun.built = built
+      treeSun.q = shadowsQ
+      treeSun.dir.copy(sunState.dir)
+      setTreeShadows(built.casters, sunState.dir, built.treeBounds, cascadesFar(shadowsQ))
+    }
     camera.updateMatrixWorld()
     vegCam.value.setFromMatrixPosition(camera.matrixWorld)
     vegLens.value = lensOf(camera)

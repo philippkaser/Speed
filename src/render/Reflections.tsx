@@ -24,6 +24,7 @@ import { game } from '../game/game'
 import { useSettings } from '../state/settings'
 import { carPoses } from './CarVisual'
 import { csmState } from './Environment'
+import { heroShadow, seeHero } from './sunShadow'
 
 /** quality: hero face size, faces per frame, pool size, pool face size, pool faces per frame */
 const QUALITY = [
@@ -53,6 +54,8 @@ interface Probe {
 function makeProbe(size: number, generator: THREE.PMREMGenerator): Probe {
   const rt = new THREE.CubeRenderTarget(size, { type: THREE.HalfFloatType, generateMipmaps: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter })
   const cam = new THREE.CubeCamera(0.3, 2600, rt)
+  // the car in focus is drawn on its own layer (sunShadow.ts)
+  for (const c of cam.children) seeHero(c as THREE.Camera)
   for (const c of cam.children) c.userData.probe = true
   return { size, rt, cam, pmrem: null, generator, face: 0, pending: 0, owner: null, fresh: 0 }
 }
@@ -189,11 +192,14 @@ export function Reflections() {
     }
     const hiddenState = sys.hidden.map((o) => o.visible)
     for (const o of sys.hidden) o.visible = false
-    // the shadow maps stay as the main camera's pass left them
+    // the shadow maps stay as the main camera's pass left them. (Only the cascades' and the hero's
+    // shadows are paused, never the sun's own: the cascades are created by cloning it, on the first
+    // build of the materials, which can happen inside a probe render. Cloned while paused, they never
+    // updated again, and the game had no sun shadows at all.)
     const shadows: THREE.LightShadow[] = []
-    const csm = csmState.csm as unknown as { lights?: { shadow: THREE.LightShadow }[]; light?: THREE.DirectionalLight } | null
-    if (csm?.light) shadows.push(csm.light.shadow)
+    const csm = csmState.csm as unknown as { lights?: { shadow: THREE.LightShadow }[] } | null
     for (const l of csm?.lights ?? []) shadows.push(l.shadow)
+    shadows.push(heroShadow)
     const shadowState = shadows.map((s) => s.autoUpdate)
     for (const s of shadows) s.autoUpdate = false
     const prevTarget = renderer.getRenderTarget()
@@ -231,7 +237,9 @@ export function Reflections() {
     } finally {
       renderer.setRenderTarget(prevTarget, prevFace, prevMip)
       sys.hidden.forEach((o, i) => (o.visible = hiddenState[i]))
+      // back as they were; cascades created during the probes render in the main pass
       shadows.forEach((s, i) => (s.autoUpdate = shadowState[i]))
+      for (const l of csm?.lights ?? []) if (!shadows.includes(l.shadow)) l.shadow.autoUpdate = true
     }
   }
 

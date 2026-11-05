@@ -28,6 +28,7 @@ import {
 } from 'three/tsl'
 import { getTextures } from './textures'
 import { groundSet, type GroundSet } from './worldAssets'
+import { farTreeShadow, setSunShadowTerm } from './sunShadow'
 import type { Track } from '../track/track'
 
 type N = any
@@ -241,6 +242,8 @@ function grassColor(leafy: N = float(0)) {
 
 export function terrainMaterial() {
   const m = new THREE.MeshStandardNodeMaterial()
+  // beyond the shadow cascades, the distant forests' shadows on the ground (sunShadow.ts)
+  setSunShadowTerm(m, farTreeShadow())
   // forest floor (leaves) away from the track, where the forests grow
   const tr = aTrack()
   const farFromTrack = smoothstep(20, 120, tr.x)

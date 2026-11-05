@@ -301,6 +301,16 @@ function normaliseMaterial(mat: THREE.Material) {
   if (/glass|window/i.test(name) && m.transparent) {
     m.metalness = 0
     m.roughness = Math.min(m.roughness, 0.03)
+    // Window glass has no diffuse colour: it reflects (Fresnel) and transmits. The sources' colours
+    // were meant for metallic glass, where they only tint the reflection; on the dielectric they
+    // became a diffuse layer lit by the sun (the Ferrari's windows, base colour (0, 0.16, 0) at 50%,
+    // glowed green). Untextured window glass is black, so it only darkens what is behind it a little
+    // and reflects; GT3 side and rear windows are near-clear polycarbonate, at most 30% here.
+    // (Headlight glass and stickers keep their textures.)
+    if (!m.map && !/light|lamp|emissive|sticker/i.test(name)) {
+      m.color.setRGB(0, 0, 0)
+      m.opacity = Math.min(m.opacity, 0.3)
+    }
     // alpha blending scales the reflection by the opacity; real glass reflects the same however clear
     // it is: compensate, so the windscreen mirrors the sky as it should
     m.envMapIntensity = 1 / Math.max(0.25, m.opacity)

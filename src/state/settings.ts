@@ -16,6 +16,10 @@ export interface GraphicsSettings {
   /** shutter angle / 360: the share of each frame the shutter is open (1 = 360 degrees: continuous motion) */
   motionBlur: number
   bloom: boolean
+  /** temporal anti-aliasing (SMAA without it) */
+  taa: boolean
+  /** screen-space contact shadows of the sun (default: Medium and up) */
+  contactShadows?: boolean
   shadows: 0 | 1 | 2 | 3 // off, low, high, ultra
   trees: number // density multiplier
   envProbe: boolean // (superseded by reflections)
@@ -72,10 +76,10 @@ export interface SettingsState {
 }
 
 export const PRESETS: Record<QualityPreset, Omit<GraphicsSettings, 'fov' | 'cameraShake' | 'showFps' | 'preset' | 'backend' | 'backendNote' | 'sky'>> = {
-  low: { resolutionScale: 0.7, autoExposure: false, ssgi: false, ssr: false, ao: false, motionBlur: 0, bloom: true, shadows: 1, trees: 0.35, envProbe: false, reflections: 1 },
-  medium: { resolutionScale: 1, autoExposure: true, ssgi: false, ssr: false, ao: true, motionBlur: 1, bloom: true, shadows: 2, trees: 0.7, envProbe: true, reflections: 1 },
-  high: { resolutionScale: 1, autoExposure: true, ssgi: true, ssr: false, ao: true, motionBlur: 1, bloom: true, shadows: 2, trees: 1, envProbe: true, reflections: 2 },
-  ultra: { resolutionScale: 1, autoExposure: true, ssgi: true, ssr: false, ao: true, motionBlur: 1, bloom: true, shadows: 3, trees: 1.4, envProbe: true, reflections: 3 },
+  low: { resolutionScale: 0.7, autoExposure: false, ssgi: false, ssr: false, ao: false, motionBlur: 0, bloom: true, taa: false, shadows: 1, trees: 0.35, envProbe: false, reflections: 1 },
+  medium: { resolutionScale: 1, autoExposure: true, ssgi: false, ssr: false, ao: true, motionBlur: 1, bloom: true, taa: true, shadows: 2, trees: 0.7, envProbe: true, reflections: 1 },
+  high: { resolutionScale: 1, autoExposure: true, ssgi: true, ssr: false, ao: true, motionBlur: 1, bloom: true, taa: true, shadows: 2, trees: 1, envProbe: true, reflections: 2 },
+  ultra: { resolutionScale: 1, autoExposure: true, ssgi: true, ssr: false, ao: true, motionBlur: 1, bloom: true, taa: true, shadows: 3, trees: 1.4, envProbe: true, reflections: 3 },
 }
 
 function defaultPreset(): QualityPreset {

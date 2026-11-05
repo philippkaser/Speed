@@ -38,7 +38,9 @@ async function createRenderer(props: { canvas: HTMLCanvasElement | OffscreenCanv
       const gpu = (navigator as unknown as { gpu: { requestAdapter(o: object): Promise<any> } }).gpu
       const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' })
       if (!adapter) forceWebGL = true
-      else requiredLimits = { maxColorAttachmentBytesPerSample: adapter.limits.maxColorAttachmentBytesPerSample }
+      // and its full texture budget per shader stage (the default is 16; the sun's shadow alone binds
+      // six: four cascades, the car in focus and the contact shadows)
+      else requiredLimits = { maxColorAttachmentBytesPerSample: adapter.limits.maxColorAttachmentBytesPerSample, maxSampledTexturesPerShaderStage: adapter.limits.maxSampledTexturesPerShaderStage }
     } catch {
       forceWebGL = true
     }
