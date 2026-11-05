@@ -16,7 +16,7 @@ import * as tsl from 'three/tsl'
 
 type N = any
 
-const { Fn, abs, clamp, context, float, getScreenPosition, getViewPosition, interleavedGradientNoise, max, mix, passTexture, positionView, screenCoordinate, screenUV, select, texture, uniform, uv, vec2, vec4, velocity } = tsl as N
+const { Fn, abs, clamp, context, float, getScreenPosition, getViewPosition, interleavedGradientNoise, length, max, mix, passTexture, positionView, screenCoordinate, screenUV, select, texture, uniform, uv, vec2, vec4, velocity } = tsl as N
 
 let mainCamera: THREE.Camera | null = null
 
@@ -26,6 +26,8 @@ export const contactU = {
   proj: uniform(new THREE.Matrix4()),
   projInv: uniform(new THREE.Matrix4()),
   frame: uniform(0),
+  /** the depth buffer's size in pixels */
+  size: uniform(new THREE.Vector2(1920, 1080)),
   /** 1 while the main camera renders (the probes' cameras see the mask of another view) */
   active: uniform(0).onRenderUpdate(({ camera }: { camera: THREE.Camera }) => (contactOn && camera === mainCamera ? 1 : 0)),
 }
@@ -55,6 +57,7 @@ const _m = new THREE.Matrix4()
 
 class ContactShadowNode extends THREE.Node {
   depthNode: N
+  velocityNode: N
   camera: THREE.PerspectiveCamera
   steps: number
   scale: number
@@ -63,9 +66,10 @@ class ContactShadowNode extends THREE.Node {
   private _material: THREE.NodeMaterial | null = null
   private _out: N
 
-  constructor(depthNode: N, camera: THREE.PerspectiveCamera, steps: number, scale: number) {
+  constructor(depthNode: N, velocityNode: N, camera: THREE.PerspectiveCamera, steps: number, scale: number) {
     super('vec4')
     this.depthNode = depthNode
+    this.velocityNode = velocityNode
     this.camera = camera
     this.steps = steps
     this.scale = scale
@@ -90,6 +94,8 @@ class ContactShadowNode extends THREE.Node {
     contactU.proj.value.copy(this.camera.projectionMatrix)
     contactU.projInv.value.copy(this.camera.projectionMatrixInverse)
     contactU.frame.value = (contactU.frame.value + 1) % 64
+    const di = this.depthNode.value?.image as { width: number; height: number } | undefined
+    if (di) contactU.size.value.set(di.width, di.height)
     _state = THREE.RendererUtils.resetRendererState(renderer, _state)
     this._quad.material = this._material!
     this._quad.name = 'Contact Shadows'
@@ -103,7 +109,9 @@ class ContactShadowNode extends THREE.Node {
 
   setup(builder: N) {
     this.depthNode.build(builder)
+    this.velocityNode?.build(builder)
     const depth = this.depthNode
+    const vel = this.velocityNode
     const steps = this.steps
     const node = Fn(() => {
       const p = uv()
@@ -119,6 +127,12 @@ class ContactShadowNode extends THREE.Node {
         const thick = dist.mul(0.02).add(0.15)
         const bias = dist.mul(0.0015).add(0.01)
         const jitter = interleavedGradientNoise(screenCoordinate.xy.add(float(contactU.frame).mul(5.588238)))
+        // the receiver's motion (pixels per frame): only casters that move with it count. The mask is
+        // read next frame, reprojected with the receiver's motion, which is right for its own shadows
+        // but wrong for one cast by something moving across it (a car over the road): those jittered
+        // under the cars. The cars' own contact shadow comes from their dedicated map.
+        const half = vec2(contactU.size).mul(0.5)
+        const vRec = vel ? vel.sample(p).xy : null
         const occ = float(0).toVar()
         for (let i = 0; i < steps; i++) {
           const t = float(i).add(jitter).div(steps).mul(len)
@@ -129,7 +143,8 @@ class ContactShadowNode extends THREE.Node {
           const zs = getViewPosition(sp, ds, contactU.projInv).z
           // the depth buffer has something in front of the ray here, not too far in front
           const front = zs.sub(Q.z)
-          const hit = inside.and(front.greaterThan(bias)).and(front.lessThan(thick)).and(ds.lessThan(0.9999995))
+          let hit = inside.and(front.greaterThan(bias)).and(front.lessThan(thick)).and(ds.lessThan(0.9999995))
+          if (vel) hit = hit.and(length(vel.sample(sp).xy.sub(vRec).mul(half)).lessThan(0.75))
           // softer towards the end of the ray (penumbra)
           occ.assign(max(occ, select(hit, float(1).sub(t.div(len).mul(0.6)), float(0))))
         }
@@ -157,14 +172,15 @@ class ContactShadowNode extends THREE.Node {
 }
 
 /**
- * @param depth  the scene pass's depth texture node
- * @param steps  ray steps per pixel
+ * @param depth    the scene pass's depth texture node
+ * @param velocity the scene pass's velocity texture node (motionHistory.ts), if there is one
+ * @param steps    ray steps per pixel
  * @param scale  resolution of the mask relative to the depth buffer
  */
-export function contactShadows(depth: N, camera: THREE.PerspectiveCamera, steps = 16, scale = 0.5) {
+export function contactShadows(depth: N, velocity: N | null, camera: THREE.PerspectiveCamera, steps = 16, scale = 0.5) {
   mainCamera = camera
   contactOn = true
-  return new ContactShadowNode(depth, camera, steps, scale)
+  return new ContactShadowNode(depth, velocity, camera, steps, scale)
 }
 
 /** No contact shadows (the materials' term is 1). */

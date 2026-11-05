@@ -2,7 +2,8 @@
 //   scene pass with MRT (colour, normals, diffuse albedo, metal/rough, velocity)
 //   -> SSGI (screen-space indirect diffuse + AO)  or  GTAO
 //   -> SSR (screen-space reflections, incl. dielectrics like clear coat & asphalt sheen)
-//   -> temporal AA (taa.ts; SMAA without it, FXAA on low)  -> per-object motion blur  -> particles
+//   -> per-object motion blur -> temporal AA (taa.ts)   (without TAA: SMAA, FXAA on low, then the blur)
+//   -> particles
 //   -> the camera: exposure -> the lens (lens.ts: chromatic aberration, lens scatter, the sun's glare,
 //      star and ghosts, vignetting) -> the sensor (sensor.ts: noise) -> the picture (sensor.ts: filmic
 //      display rendering in an inset gamut) -> sRGB with dither
@@ -200,15 +201,24 @@ export function PostFX() {
     let out: any = composite
     let blurDebug: any = null
     let taaNode: any = null
-    if (useTAA && vel) out = taaNode = temporalAA(convertToTexture(composite), depth, vel, camera)
-    else out = useSMAA ? smaa(composite) : fxaa(composite)
-    if (useMB && vel) {
+    const blur = (src: any) => {
       const q = gfx.preset === 'ultra' ? { pairs: 16, denseTaps: 64 } : gfx.preset === 'high' ? { pairs: 12, denseTaps: 48 } : { pairs: 8, denseTaps: 32 }
-      const src = typeof out.getTextureNode === 'function' ? out.getTextureNode() : convertToTexture(out)
-      const node = motionBlur(src, vel, { ...q, wheels: true })
-      out = node.getTextureNode()
+      const node = motionBlur(typeof src.getTextureNode === 'function' ? src.getTextureNode() : convertToTexture(src), vel, { ...q, wheels: true })
       if (debugFlag('showtiles')) blurDebug = node.getTileDebugNode()
       else if (debugFlag('showvel')) blurDebug = node.getStreakDebugNode()
+      return node.getTextureNode()
+    }
+    if (useTAA && vel) {
+      // With TAA, the motion blur comes first: the velocity target is drawn with TAA's sub-pixel
+      // jitter, so where a car meets the road the blur's boundary moves by up to half a pixel every
+      // frame (and the blur's sampling noise changes every frame); TAA averages both away. (After TAA,
+      // nothing smoothed them: the bottoms of the cars shimmered.)
+      if (useMB) out = blur(composite)
+      out = taaNode = temporalAA(convertToTexture(out), depth, vel, camera)
+    } else {
+      // without it: spatial AA on the sharp image, then the blur
+      out = useSMAA ? smaa(composite) : fxaa(composite)
+      if (useMB && vel) out = blur(out)
     }
     // particles (smoke, dust, sparks): own pass, soft against the scene depth, composited over the
     // lit image (premultiplied colour, transmittance in alpha). After anti-aliasing and motion blur, so they
@@ -220,7 +230,7 @@ export function PostFX() {
     const parts = particlePass.getTextureNode('output')
     out = vec4(out.rgb.mul(parts.a).add(parts.rgb), 1)
     // the sun's contact shadows, from this frame's depth, for the materials of the next
-    const contact = useContact ? contactShadows(depth, camera, gfx.preset === 'ultra' ? 20 : gfx.preset === 'high' ? 16 : 12, gfx.preset === 'ultra' ? 1 : 0.5) : (contactShadowsOff(), null)
+    const contact = useContact ? contactShadows(depth, vel, camera, gfx.preset === 'ultra' ? 20 : gfx.preset === 'high' ? 16 : 12, gfx.preset === 'ultra' ? 1 : 0.5) : (contactShadowsOff(), null)
     // ---- the camera: exposure, then the lens (lens.ts), the sensor and the picture (sensor.ts)
     const exposedTex = convertToTexture(vec4(out.rgb.mul(postUniforms.exposure).mul(postUniforms.adapt).mul(EXPOSURE), 1))
     // the camera's light meter (autoExposure.ts), read back asynchronously

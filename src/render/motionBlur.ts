@@ -31,7 +31,7 @@
 // glass blurs with the world, not with the glass.
 import * as THREE from 'three/webgpu'
 import * as tsl from 'three/tsl'
-import { MAX_WHEEL_SLOTS, motionCamera, wheelUniforms as wheelArrays } from './motionHistory'
+import { isCarTag, MAX_WHEEL_SLOTS, motionCamera, wheelUniforms as wheelArrays } from './motionHistory'
 
 type N = any
 
@@ -360,12 +360,15 @@ class MotionBlurNode extends THREE.Node {
             const tc = texel(uvC)
             const maxTc = ivec2(velSize.sub(1))
             const own = vec4(rC).toVar()
+            // (a car's pixel never takes the ground's motion: the road just below a car's lip is
+            // nearer and faster, and the lip streaked with the road)
+            const carPx = isCarTag(rC.z)
             for (let dy = -1; dy <= 1; dy++)
               for (let dx = -1; dx <= 1; dx++) {
                 if (!dx && !dy) continue
                 const r = prepTex.load(clamp(tc.add(ivec2(dx, dy)), ivec2(0), maxTc))
                 const l = length(r.xy)
-                If(r.w.greaterThan(own.w.mul(1.03)).and(l.greaterThan(lenC.add(0.75))), () => {
+                If(r.w.greaterThan(own.w.mul(1.03)).and(l.greaterThan(lenC.add(0.75))).and(isCarTag(r.z).or(carPx.not())), () => {
                   own.assign(r)
                   lenC.assign(l)
                 })
@@ -373,6 +376,13 @@ class MotionBlurNode extends THREE.Node {
             vC.assign(own.xy)
             const zC = distOf(own).toVar()
             const ext = zC.mul(0.02).add(0.04)
+            const carC = isCarTag(own.z)
+            const band = zC.mul(0.02).add(0.3)
+            const carFront = (r: N, f: N) => {
+              const carT = isCarTag(r.z)
+              const near = abs(zC.sub(distOf(r))).lessThan(band)
+              return select(near.and(carT).and(carC.not()), float(1), select(near.and(carC).and(carT.not()), float(0), f))
+            }
             const dirN = vN.div(lenN)
             // the pixel's own direction (aligned with the dominant one: blur is symmetric)
             const ownDir = select(lenC.greaterThan(0.5), vC.div(max(lenC, 1e-4)), dirN)
@@ -396,9 +406,14 @@ class MotionBlurNode extends THREE.Node {
                 c2 = color.sample(p2)
               const l1 = length(r1.xy),
                 l2 = length(r2.xy)
-              // in front of the centre (1) or behind it (0); equal depths share both roles
-              const f1 = clamp(zC.sub(distOf(r1)).div(ext).add(0.5), 0, 1)
-              const f2 = clamp(zC.sub(distOf(r2)).div(ext).add(0.5), 0, 1)
+              // in front of the centre (1) or behind it (0); equal depths share both roles. Except
+              // where a car meets the ground: there the road just below the car's lip is a few cm
+              // nearer than the lip, and by depth alone the fast road streaked over the car (asphalt
+              // in the car) and the car was gathered into the road's streak (its lip on the asphalt).
+              // The ground never passes in front of a car, it slides under it: near equal depth, the
+              // car is in front.
+              const f1 = carFront(r1, clamp(zC.sub(distOf(r1)).div(ext).add(0.5), 0, 1))
+              const f2 = carFront(r2, clamp(zC.sub(distOf(r2)).div(ext).add(0.5), 0, 1))
               const cC = cover(d, lenC)
               // a tap contributes if its own streak reaches the centre (in front), or if the centre's
               // streak reaches it (behind: the background revealed by a moving pixel)

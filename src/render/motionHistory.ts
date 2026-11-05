@@ -20,7 +20,7 @@
 // wheel slot (z: +slot spinning, -slot steering-only parts such as calipers) and the inverse view
 // distance of the surface that owns the motion (w). Transparent surfaces leave it untouched.
 import * as THREE from 'three/webgpu'
-import { Fn, positionView, uniform, uniformArray, vec4, velocity } from 'three/tsl'
+import { abs, Fn, positionView, round, uniform, uniformArray, vec4, velocity } from 'three/tsl'
 
 type N = any
 
@@ -209,8 +209,17 @@ if (!proto.__speedMotion) {
   proto.updateAfter = function () {}
 }
 
-/** Wheel slot of the object being drawn (0: none). */
-const wheelSlot = uniform(0).onObjectUpdate(({ object }) => (object?.userData.mbSlot as number) ?? 0)
+/**
+ * Wheel slot of the object being drawn (0: none), plus CAR_TAG for the parts of a car (the motion
+ * blur keeps a car in front of the ground where both are at about the same depth). round() still
+ * gives the slot; isCarTag() tells cars apart.
+ */
+const wheelSlot = uniform(0).onObjectUpdate(({ object }) => ((object?.userData.mbSlot as number) ?? 0) + (object?.userData.mbCar ? CAR_TAG : 0))
+
+/** Fraction added to the velocity target's slot channel on cars. */
+export const CAR_TAG = 0.25
+/** Whether a velocity texel's slot channel carries the car tag. */
+export const isCarTag = (z: N) => abs(z.sub(round(z))).greaterThan(CAR_TAG * 0.5)
 
 /**
  * The scene pass's velocity output. Transparent materials write zeros, which their blending turns

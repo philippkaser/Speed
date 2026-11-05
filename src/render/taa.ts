@@ -215,8 +215,12 @@ class TemporalAANode extends THREE.Node {
       const closestAt = ivec2(ip).toVar()
       const center = vec3(0).toVar()
       // tent-filtered neighbourhood (tonemapped YCoCg): stands in for the raw sample where there is no
-      // usable history, so disoccluded edges are smoothed instead of showing one jittered sample
+      // usable history, so disoccluded edges are smoothed instead of showing one jittered sample. Only
+      // neighbours that move like this pixel count: never road into a car's outline, or car into road
       const tent = vec3(0).toVar()
+      const tentW = float(0).toVar()
+      const vOwn = vel.load(ip).xy
+      const pxs = size.mul(0.5)
       for (const [dx, dy] of [
         [0, 0],
         [-1, -1],
@@ -234,7 +238,10 @@ class TemporalAANode extends THREE.Node {
         const y = toYCoCg(compress(c))
         m1.addAssign(y)
         m2.addAssign(y.mul(y))
-        tent.addAssign(y.mul(((dx === 0 ? 2 : 1) * (dy === 0 ? 2 : 1)) / 16))
+        const same = float(1).sub(smoothstep(1, 3, length(vel.load(q).xy.sub(vOwn).mul(pxs))))
+        const tw = same.mul(((dx === 0 ? 2 : 1) * (dy === 0 ? 2 : 1)) / 16)
+        tent.addAssign(y.mul(tw))
+        tentW.addAssign(tw)
         lo.assign(min(lo, y))
         hi.assign(max(hi, y))
         const d = depth.load(q).r
@@ -269,7 +276,7 @@ class TemporalAANode extends THREE.Node {
       // more than a trace of another surface's history can survive
       const bad = max(reject, offscreen)
       const a = max(max(mix(taaU.alpha, float(0.3), smoothstep(8, 40, speed)), bad.mul(0.75)), taaU.reset)
-      const cur = mix(toYCoCg(compress(center)), tent, max(bad, taaU.reset).mul(0.6))
+      const cur = mix(toYCoCg(compress(center)), tent.div(max(tentW, 1e-4)), max(bad, taaU.reset).mul(0.6))
       const outY = mix(hc, cur, a)
       return vec4(finite(expand(max(fromYCoCg(outY), vec3(0)))), 1)
     })()

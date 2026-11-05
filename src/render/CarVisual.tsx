@@ -34,7 +34,11 @@ export function CarVisual({ entry, lod = 0 }: { entry: CarEntry; lod?: number })
   useEffect(() => {
     // no screen-space AO / GI on the cars (PostFX): its noise would sit on the clear coat's reflections
     model.root.traverse((o) => {
-      if ((o as THREE.Mesh).isMesh) o.userData.noAO = true
+      if ((o as THREE.Mesh).isMesh) {
+        o.userData.noAO = true
+        // a car in the velocity target: the motion blur keeps it in front of the ground (motionHistory.ts)
+        o.userData.mbCar = true
+      }
     })
     const pose = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), model }
     carPoses.set(entry.id, pose)
