@@ -34,6 +34,27 @@ export const cascadesFar = (quality: number) => (quality >= 3 ? 650 : 400)
 /** Cascade cameras: layer 0 plus one that nothing else uses (three lets a layer-0-only shadow camera
  *  inherit the main camera's layers, which would bring the hero back in). */
 const CASCADE_MASK = 1 | (1 << 6)
+/**
+ * Layers of shadow casters limited to the near cascades: an object on NEAR_CASTER_LAYERS[k] casts into
+ * cascades 0..k only (castInNearCascades). The main and probe cameras see them all (seeHero).
+ */
+const NEAR_CASTER_LAYERS = [7, 8, 9, 10]
+const cascadeMask = (i: number) => NEAR_CASTER_LAYERS.reduce((m, l, k) => (k >= i ? m | (1 << l) : m), CASCADE_MASK)
+
+/**
+ * Small casters (posts, boards, cones, tyre stacks, crowd): beyond the near cascades a shadow texel is
+ * 10 cm (cascade 2, 38-130 m on High) to 35 cm (cascade 3), where their shadows are a texel or two,
+ * but each still costs a draw and its triangles in every cascade that covers it. This keeps `o` (and
+ * its children) out of the cascades after `last` (0: first 12 m, 1: 38 m, 2: 130 m on High).
+ */
+export function castInNearCascades(o: THREE.Object3D, last = 1) {
+  const layer = NEAR_CASTER_LAYERS[Math.max(0, Math.min(NEAR_CASTER_LAYERS.length - 1, last))]
+  o.traverse((x) => {
+    x.layers.disable(0)
+    for (const l of NEAR_CASTER_LAYERS) x.layers.disable(l)
+    x.layers.enable(layer)
+  })
+}
 
 const heroLight = new THREE.DirectionalLight(0xffffff, 1)
 heroLight.name = 'hero shadow'
@@ -267,9 +288,10 @@ export function pickHero(cars: Iterable<[string, { pos: THREE.Vector3; root?: TH
   }
 }
 
-/** Cameras that should see the cars draw the hero's layer too. */
+/** Cameras that see the scene: the hero's layer and the near-cascade casters' layers too. */
 export function seeHero(camera: THREE.Camera) {
   camera.layers.enable(HERO_LAYER)
+  for (const l of NEAR_CASTER_LAYERS) camera.layers.enable(l)
 }
 
 /**
@@ -282,7 +304,8 @@ export function cascadesWithoutHero(csm: CascadeSource | null, sunDir?: THREE.Ve
   tagCascadeDepths(csm, sunDir)
   for (let i = 0; i < lights.length; i++) {
     const l = lights[i]
-    if (l.shadow.camera.layers.mask !== CASCADE_MASK) l.shadow.camera.layers.mask = CASCADE_MASK
+    const mask = cascadeMask(i)
+    if (l.shadow.camera.layers.mask !== mask) l.shadow.camera.layers.mask = mask
     // The farthest cascade (130 m and beyond) renders every other frame: its lookup matrix is only
     // recomputed when it renders, so the map and the matrix always belong together, and a frame's
     // lag at that distance does not show. A quarter of the shadow passes' cost saved.
