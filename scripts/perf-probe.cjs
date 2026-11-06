@@ -120,10 +120,15 @@ function instrument(detail) {
     } finally {
       const ms = performance.now() - t0 - (top ? top.cT - c0 : 0)
       addObject(ms)
-      if (!detail) return
-      // the costliest objects to prepare
-      const k = passOf().replace(/:face$/, '').replace(/^post:.*/, 'post') + ' | ' + top0(a[0]).detail + ' [' + (a[1]?.name || a[1]?.type || '') + ']'
-      cur.objMs[k] = (cur.objMs[k] ?? 0) + ms
+      if (detail) {
+        // the costliest objects to prepare (never let the probe break a frame)
+        try {
+          const k = passOf().replace(/:face$/, '').replace(/^post:.*/, 'post') + ' | ' + top0(a[0]).detail + ' [' + (a[1]?.name || a[1]?.type || '') + ']'
+          cur.objMs[k] = (cur.objMs[k] ?? 0) + ms
+        } catch (e) {
+          window.__perfErr = String(e)
+        }
+      }
     }
   }
   const addDraw = timeIn('drawMs')
@@ -154,6 +159,14 @@ function instrument(detail) {
     const res = draw0.call(this, ro, inf)
     addDraw(performance.now() - tDraw)
     if (!detail) return res
+    try {
+      attribute(ro, d0, t0)
+    } catch (e) {
+      window.__perfErr = String(e)
+    }
+    return res
+  }
+  const attribute = (ro, d0, t0) => {
     const dd = info.drawCalls - d0,
       dt = info.triangles - t0
     const label = stack.length ? stack[stack.length - 1].label : '(outside)'
@@ -167,7 +180,6 @@ function instrument(detail) {
     const ob = (cur.objs[k] ??= { draws: 0, tris: 0 })
     ob.draws += dd
     ob.tris += dt
-    return res
   }
   const reset0 = r.info.reset.bind(r.info)
   r.info.reset = function () {
@@ -218,7 +230,14 @@ const M = (n) => (n / 1e6).toFixed(2) + 'M'
   // DETAIL=1: what every draw is and what each render object costs (adds overhead to the timings)
   await page.evaluate(instrument, !!process.env.DETAIL)
   // warm-up frames (pipelines compile, probes fill), then the measured ones
-  await page.waitForFunction((n) => window.__perfFrames.length >= n, +warm + +nFrames, { timeout: 2400000, polling: 500 })
+  const progress = setInterval(async () => {
+    try {
+      const st = await page.evaluate(() => ({ n: window.__perfFrames.length, frames: window.__frames, err: window.__perfErr }))
+      console.error(`[perf] ${st.n} frames recorded (game frame ${st.frames})${st.err ? ' probe error: ' + st.err : ''}; ${logs.slice(-2).join(' | ')}`)
+    } catch {}
+  }, 60000)
+  await page.waitForFunction((n) => window.__perfFrames.length >= n, +warm + +nFrames, { timeout: +(process.env.PERF_TIMEOUT ?? 1500000), polling: 500 })
+  clearInterval(progress)
   const all = await page.evaluate(() => window.__perfFrames)
   const sceneSize = await page.evaluate(() => window.__perfScene)
   const fr = all.slice(+warm)
