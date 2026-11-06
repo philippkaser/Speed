@@ -3,6 +3,7 @@
 import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo } from 'react'
 import * as THREE from 'three/webgpu'
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { float, max, mix, mx_noise_float, normalMap, positionWorld, uv, vec2, vec3 } from 'three/tsl'
 import { game } from '../game/game'
 import { teamRace } from '../team/session'
@@ -44,6 +45,22 @@ function ribbon(track: Track, s0: number, s1: number, edges: (s: number) => [num
     g.setIndex(idx)
     g.computeVertexNormals()
   }
+  return g
+}
+
+/** Merges ribbons (they share one layout) into one geometry. */
+function merged(list: THREE.BufferGeometry[]) {
+  const g = mergeGeometries(list)
+  for (const x of list) x.dispose()
+  return g
+}
+
+/** A ribbon with a colour per vertex (linear). */
+function coloured(g: THREE.BufferGeometry, c: THREE.Color) {
+  const n = g.getAttribute('position').count
+  const a = new Float32Array(n * 3)
+  for (let i = 0; i < n; i++) a.set([c.r, c.g, c.b], i * 3)
+  g.setAttribute('color', new THREE.BufferAttribute(a, 3))
   return g
 }
 
@@ -106,11 +123,11 @@ export function PitLaneScene({ track }: { track: Track }) {
       return [c - 4, c + 4] as [number, number]
     }
     const parts = [ribbon(track, lane.sEntry + 20, lane.sLaneStart, roadEdges(4.5)), ribbon(track, lane.sLaneStart, lane.sLaneEnd, () => [wall + 0.6, lane.dGarage], 0.03, 2), ribbon(track, lane.sLaneEnd, lane.sExit - 10, roadEdges(0))]
-    for (const geo of parts) {
-      const m = new THREE.Mesh(geo, mat)
-      m.receiveShadow = true
-      g.add(m)
-    }
+    // (merged per material: one draw for the roads, one for all the paint)
+    const road = new THREE.Mesh(merged(parts), mat)
+    road.receiveShadow = true
+    road.name = 'pit-road'
+    g.add(road)
     // painted lines: lane edges and the dashed line between the fast and the working lane
     const paint = new THREE.MeshStandardNodeMaterial({ color: 0xe8e8e4, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 })
     const sep = (lane.dFast + lane.dBox) / 2 - 1.6
@@ -118,20 +135,23 @@ export function PitLaneScene({ track }: { track: Track }) {
     for (let s = lane.sLaneStart; s < lane.sLaneEnd; s += 6) lines.push(ribbon(track, s, s + 3, () => [sep - 0.1, sep + 0.1], 0.035, 1))
     // speed limit lines across the lane
     for (const s of [lane.sLaneStart, lane.sLaneEnd]) lines.push(ribbon(track, s, s + 0.4, () => [wall + 0.6, lane.dGarage], 0.036, 0.4))
-    for (const geo of lines) g.add(new THREE.Mesh(geo, paint))
+    const lineMesh = new THREE.Mesh(merged(lines), paint)
+    lineMesh.name = 'pit-lines'
+    g.add(lineMesh)
     return g
   }, [track, lane])
 
   const boxes = useMemo(() => {
     const g = new THREE.Group()
     const list = lane.boxS.map((s, i) => teams.find((t) => t.box === i) ?? { name: '', color: '#3a3d42', accent: '#9ea3a8', box: i })
+    // every box's rectangle (team colour) and edges (accent): two draws for the whole lane, the
+    // colours per vertex
+    const fills: THREE.BufferGeometry[] = [],
+      edges: THREE.BufferGeometry[] = []
     for (const t of list) {
       const s = lane.boxS[t.box]
-      // box rectangle in the team colour
-      const fill = new THREE.MeshStandardNodeMaterial({ color: new THREE.Color(t.color).multiplyScalar(0.8), roughness: 0.7, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 })
-      g.add(new THREE.Mesh(ribbon(track, s - 3.2, s + 3.2, () => [lane.dBox - 1.6, lane.dBox + 1.6], 0.034, 0.8), fill))
-      const edge = new THREE.MeshStandardNodeMaterial({ color: new THREE.Color(t.accent), roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 })
-      for (const ds of [-3.2, 3.0]) g.add(new THREE.Mesh(ribbon(track, s + ds, s + ds + 0.2, () => [lane.dBox - 1.6, lane.dBox + 1.6], 0.036, 0.2), edge))
+      fills.push(coloured(ribbon(track, s - 3.2, s + 3.2, () => [lane.dBox - 1.6, lane.dBox + 1.6], 0.034, 0.8), new THREE.Color(t.color).multiplyScalar(0.8)))
+      for (const ds of [-3.2, 3.0]) edges.push(coloured(ribbon(track, s + ds, s + ds + 0.2, () => [lane.dBox - 1.6, lane.dBox + 1.6], 0.036, 0.2), new THREE.Color(t.accent)))
       // team board above the garage door
       if (t.name) {
         const tex = boardTexture(t.name, t.color, t.accent)
@@ -144,6 +164,11 @@ export function PitLaneScene({ track }: { track: Track }) {
         g.add(board)
       }
     }
+    const fill = new THREE.Mesh(merged(fills), new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.7, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }))
+    const edge = new THREE.Mesh(merged(edges), new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }))
+    fill.name = 'pit-boxes'
+    edge.name = 'pit-box-edges'
+    g.add(fill, edge)
     return g
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [track, lane, teamKey])
