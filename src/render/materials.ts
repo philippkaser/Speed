@@ -232,9 +232,10 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }) {
   seal = max(seal, line(e, 0.03).mul(hasPatch))
 
   // tar snakes: crack sealant along the iso-lines of a slow noise, in some stretches only
-  const cn = mx_noise_float(vec3(s.mul(0.11), d.mul(0.34), 5.1))
-  const snakeZone = smoothstep(0.2, 0.5, mx_noise_float(vec3(s.mul(0.013), d.mul(0.05), 9.7)))
-  const snake = float(1).sub(smoothstep(0.011, fwidth(cn).mul(1.5).add(0.016), abs(cn))).mul(snakeZone)
+  const cn = mx_noise_float(vec3(s.mul(0.17), d.mul(0.45), 5.1))
+  // sparse stretches, and broken into short runs within them
+  const snakeZone = smoothstep(0.35, 0.6, mx_noise_float(vec3(s.mul(0.011), d.mul(0.04), 9.7))).mul(smoothstep(0.0, 0.25, mx_noise_float(vec3(s.mul(0.5), d.mul(0.8), 2.3))))
+  const snake = float(1).sub(smoothstep(0.004, fwidth(cn).mul(1.2).add(0.007), abs(cn))).mul(snakeZone)
   seal = max(seal, snake.mul(0.9))
 
   // rubbered-in racing line: from the simulation's rubber map (or the static racing line)
@@ -441,10 +442,10 @@ export function mountainMaterial() {
   const det = n1.mul(0.55).add(n2.mul(0.3)).add(n3.mul(0.15))
 
   // zones
-  const treeLine = float(560).add(n1.mul(140)).add(n2.mul(40)).sub(drain.mul(160))
-  const forest = float(1).sub(smoothstep(treeLine.sub(50), treeLine.add(30), h)).mul(float(1).sub(smoothstep(0.42, 0.6, slope.add(n2.mul(0.08)))))
+  const treeLine = float(690).add(n1.mul(150)).add(n2.mul(40)).sub(drain.mul(160))
+  const forest = float(1).sub(smoothstep(treeLine.sub(50), treeLine.add(30), h)).mul(float(1).sub(smoothstep(0.48, 0.66, slope.add(n2.mul(0.08)))))
   const rocky = smoothstep(0.36, 0.56, slope.add(det.mul(0.14)).add(drain.mul(0.12)))
-  const snowLine = float(800).add(n1.mul(120)).add(n2.mul(35)).sub(drain.mul(90))
+  const snowLine = float(840).add(n1.mul(120)).add(n2.mul(35)).sub(drain.mul(90))
   const snowSlope = float(1).sub(smoothstep(0.46, 0.7, slope.sub(drain.mul(0.18)).add(n3.mul(0.06))))
   const snow = smoothstep(snowLine.sub(35), snowLine.add(55), h).mul(snowSlope)
 

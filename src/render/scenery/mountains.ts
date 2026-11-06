@@ -3,7 +3,7 @@
 // along the steepest descent cuts gullies and valleys whose depth grows with the area they drain: the
 // look of fluvial erosion), the high range standing behind forested foothills.
 //
-// Built as 24 sectors (frustum culling: the main view draws about a quarter of the ring). Each sector
+// Built as 12 sectors (frustum culling: the main view draws about a third of the ring). Each sector
 // carries two index ranges over the same vertices: the full mesh and a coarse one (every 4th vertex
 // each way) for the cars' reflection probes, picked per camera at draw time.
 //
@@ -27,7 +27,7 @@ export interface MountainSet {
 export function buildMountains(center: THREE.Vector3, inner: number, outer: number, seed = 3): MountainSet {
   const A = 1536,
     K = 128,
-    SECT = 24
+    SECT = 12
   const per = A / SECT
   const radius = new Float64Array(K + 1)
   for (let k = 0; k <= K; k++) radius[k] = inner + (outer - inner) * Math.pow(k / K, 1.35)
