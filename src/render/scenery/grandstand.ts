@@ -84,6 +84,20 @@ export function buildGrandstand(o: StandOpts, kits: { arch: Kit; seats: Kit; sig
     const f = sgn > 0 ? 0b000001 : 0b000010
     arch.box(x - (sgn < 0 ? 0.3 : 0), yTop(R - 1), zBack - 0.3, x + (sgn > 0 ? 0.3 : 0), yRoof, zBack + 2.4, S.concreteDark, f)
   }
+  // big sponsor panels on the end walls, framed
+  {
+    const w = Math.min(R * DEPTH * 0.8, 14),
+      h = w / 4
+    const zc = zBack * 0.55,
+      yc = Math.max(h / 2 + 0.8, yTop(Math.floor(R * 0.45)) - h / 2)
+    for (const [x, f] of [
+      [x1 + 0.02, 1],
+      [x0 - 0.02, -1],
+    ] as const) {
+      arch.box(x - (f < 0 ? 0.15 : 0), yc - h / 2 - 0.15, zc - w / 2 - 0.15, x + (f > 0 ? 0.15 : 0), yc + h / 2 + 0.15, zc + w / 2 + 0.15, S.steelDark, f > 0 ? 0b000001 : 0b000010)
+      signQuad(sign, x + f * 0.17, yc, zc, w, h, slotUV(SPONSORS[(o.seed + (f > 0 ? 2 : 7)) % SPONSORS.length]), { facing: f, axis: 'z', emission: 0.1 })
+    }
+  }
   // ---------------------------------------------------------------- seats, aisles, crowd
   const spots: Spectator[] = []
   const seatW = 0.5
