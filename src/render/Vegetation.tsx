@@ -4,12 +4,15 @@
 // Every kind of vegetation is ONE draw call, however many plants there are:
 //  - each tree model (pine, broadleaf) is a single merged mesh with a single material (trunk, branches
 //    and leaves share one texture atlas), drawn as one instanced draw for the whole forest within
-//    ~300 m;
+//    ~125 m;
 //  - beyond that, every tree of every model is an impostor: one quad per tree in one instanced draw,
 //    with views of the real tree baked at load time (16 directions, colour and normals), lit like the
-//    meshes;
-//  - the grass is one patch mesh (clumps of Poly Haven's grass_medium_01) instanced along the verges
-//    around the camera, in one draw.
+//    meshes. The forests are closed canopies in their cores (scenery/forest.ts), standing on a dark
+//    forest floor baked into the terrain from the same function;
+//  - the grass is a sward of patches along the verges in two levels of detail over the same
+//    instances: the modelled patch (clumps of Poly Haven's grass_medium_01, 1800 triangles) within
+//    ~14 m of the camera, packed per instance, and three crossed cards of the clump billboards from
+//    the same atlas (6 triangles) out to ~80 m, dithered into each other; one draw each.
 // Instances live in a grid of cells. Each frame the visible cells are packed into the instance buffer
 // nearest first; only a change in that set uploads anything. The shadow cascades draw the prefix of
 // instances their range needs, and the meshes cross-fade into the impostors with a dither (no pop).
