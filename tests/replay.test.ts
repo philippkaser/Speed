@@ -224,3 +224,29 @@ test('the replay director films the recording: cuts between shots, holds still w
   carPoses.clear()
   game.stop()
 })
+
+test('practice: watch the replay from the pause menu and come back to it, the session as it was', async () => {
+  const { exitReplay, watchReplay } = await import('../src/game/replayFlow')
+  const { useGameStore } = await import('../src/state/gameStore')
+  game.start({ mode: 'practice', trackId: 'valle-alta', carId: 'vanta-gt3', color: '#c00', opponents: 0, laps: 1, aiSkill: 1, playerName: 'Test' })
+  const p = game.player!
+  p.ai = new AIDriver(p.sim.vehicle, game.track, 0.97)
+  p.ai.id = 'player'
+  for (let i = 0; i < 40 * 60; i++) game.update(1 / 60)
+  const timing = p.timing
+  const pos = [p.sim.vehicle.pos.x, p.sim.vehicle.pos.z]
+  useGameStore.getState().set({ paused: true })
+  expect(watchReplay('pause')).toBe(true)
+  expect(useGameStore.getState().replaying).toBe(true)
+  expect(useGameStore.getState().paused).toBe(false)
+  // the replay has its own timing (the practice ghost follows it), the car its stand-in
+  expect(p.timing).not.toBe(timing)
+  for (let i = 0; i < 120; i++) game.update(1 / 60)
+  expect(game.replay!.t).toBeGreaterThan(game.replay!.start + 1.9)
+  exitReplay()
+  expect(useGameStore.getState().replaying).toBe(false)
+  expect(useGameStore.getState().paused).toBe(true)
+  expect(p.timing).toBe(timing)
+  expect([p.sim.vehicle.pos.x, p.sim.vehicle.pos.z]).toEqual(pos)
+  game.stop()
+})

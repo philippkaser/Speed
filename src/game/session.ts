@@ -51,20 +51,7 @@ export function restartSession() {
   startDriving(kind)
 }
 
-/** Watch the session's replay (from the pause menu or the results); false when nothing is recorded. */
-export function watchReplay(from: 'pause' | 'results') {
-  if (!game.startReplay()) return false
-  // the game loop runs (and plays the replay) only while not paused
-  useGameStore.getState().set({ replaying: true, replayFrom: from, paused: false })
-  return true
-}
-
-/** Back from the replay to where it was opened: the pause menu (the session as it was) or the results. */
-export function exitReplay() {
-  game.endReplay()
-  const g = useGameStore.getState()
-  g.set({ replaying: false, paused: g.replayFrom === 'pause' })
-}
+export { exitReplay, watchReplay } from './replayFlow'
 
 export function quitToMenu() {
   if (useGameStore.getState().sessionKind === 'online') net.leave()
