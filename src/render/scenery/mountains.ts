@@ -3,9 +3,9 @@
 // along the steepest descent cuts gullies and valleys whose depth grows with the area they drain: the
 // look of fluvial erosion), the high range standing behind forested foothills.
 //
-// Built as 12 sectors (frustum culling: the main view draws about a third of the ring). Each sector
-// carries two index ranges over the same vertices: the full mesh and a coarse one (every 4th vertex
-// each way) for the cars' reflection probes, picked per camera at draw time.
+// Built as 12 sectors (frustum culling: the main view draws about a third of the ring), each also as a
+// coarse mesh over the same vertex buffers (every 4th vertex each way) for the cars' reflection
+// probes.
 //
 // aMtn per vertex: x drainage (0 on ridges .. 1 in the main valleys), y sun visibility (baked by
 // marching the height field towards the sun: ridges cast their shadows into the valleys), z sky
@@ -16,9 +16,8 @@ import { fbm2, ridged2, smooth } from './noise'
 
 export interface MountainSet {
   sectors: THREE.BufferGeometry[]
-  /** index ranges [start, count] of the full and the coarse mesh in every sector */
-  fine: [number, number]
-  coarse: [number, number]
+  /** the same sectors, every 4th vertex each way (sharing the vertex buffers): the probes' level */
+  coarseSectors: THREE.BufferGeometry[]
   /** re-bakes the sun visibility (aMtn.y) for a sun direction (towards the sun) */
   bakeSun(dir: { x: number; y: number; z: number }): void
   heightAt(x: number, z: number): number
@@ -227,11 +226,10 @@ export function buildMountains(center: THREE.Vector3, inner: number, outer: numb
         d = k1 * vpr + a1
       coarseIdx.push(p, q, c, q, d, c)
     }
-  const allIdx = new Uint32Array(fineIdx.length + coarseIdx.length)
-  allIdx.set(fineIdx)
-  allIdx.set(coarseIdx, fineIdx.length)
-  const index = new THREE.BufferAttribute(allIdx, 1)
-  const sectors: THREE.BufferGeometry[] = []
+  const index = new THREE.BufferAttribute(new Uint32Array(fineIdx), 1)
+  const coarseIndex = new THREE.BufferAttribute(new Uint32Array(coarseIdx), 1)
+  const sectors: THREE.BufferGeometry[] = [],
+    coarseSectors: THREE.BufferGeometry[] = []
   const attrs: THREE.BufferAttribute[] = []
   for (let sct = 0; sct < SECT; sct++) {
     const nv = vpr * (K + 1)
@@ -260,9 +258,14 @@ export function buildMountains(center: THREE.Vector3, inner: number, outer: numb
     g.setAttribute('aMtn', m)
     attrs.push(m)
     g.setIndex(index)
-    g.setDrawRange(0, fineIdx.length)
     g.computeBoundingSphere()
     sectors.push(g)
+    // the coarse mesh shares the vertex buffers
+    const cg = new THREE.BufferGeometry()
+    for (const name of ['position', 'normal', 'aMtn']) cg.setAttribute(name, g.getAttribute(name))
+    cg.setIndex(coarseIndex)
+    cg.boundingSphere = g.boundingSphere!.clone()
+    coarseSectors.push(cg)
   }
 
   const bakeSun = (dir: { x: number; y: number; z: number }) => {
@@ -293,5 +296,5 @@ export function buildMountains(center: THREE.Vector3, inner: number, outer: numb
     }
   }
 
-  return { sectors, fine: [0, fineIdx.length], coarse: [fineIdx.length, coarseIdx.length], bakeSun, heightAt }
+  return { sectors, coarseSectors, bakeSun, heightAt }
 }

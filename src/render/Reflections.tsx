@@ -37,6 +37,12 @@ const QUALITY = [
 /** Objects flagged `userData.noProbe` (small props) are hidden in probe renders. */
 export const PROBE_HIDDEN = 'noProbe'
 
+/**
+ * Layer seen only by the probe cameras: coarse stand-ins for big meshes (terrain, mountains) whose
+ * full versions are flagged noProbe.
+ */
+export const PROBE_LAYER = 11
+
 interface Probe {
   size: number
   rt: THREE.CubeRenderTarget
@@ -56,7 +62,10 @@ function makeProbe(size: number, generator: THREE.PMREMGenerator): Probe {
   const cam = new THREE.CubeCamera(0.3, 2600, rt)
   // the car in focus is drawn on its own layer (sunShadow.ts)
   for (const c of cam.children) seeHero(c as THREE.Camera)
-  for (const c of cam.children) c.userData.probe = true
+  for (const c of cam.children) {
+    c.userData.probe = true
+    c.layers.enable(PROBE_LAYER)
+  }
   return { size, rt, cam, pmrem: null, generator, face: 0, pending: 0, owner: null, fresh: 0 }
 }
 

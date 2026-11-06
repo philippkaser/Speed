@@ -19,6 +19,7 @@ import { buildGrandstand } from './scenery/grandstand'
 import { buildProps, frameDir } from './scenery/props'
 import { signAtlas, signKit, SLOT, SPONSORS } from './scenery/signage'
 import { crowdMesh, type Spectator } from './scenery/crowd'
+import { castInNearCascades } from './sunShadow'
 
 export const gantryLights = uniform(0) // number of lit red pairs (0..5); -1 = green
 
@@ -71,9 +72,12 @@ export function Scenery({ track, heights }: { track: Track; heights: TerrainHeig
     g.add(staticMesh(arch.toGeometry(), archMat, 'architecture', { cast: true }))
     g.add(staticMesh(glass.toGeometry(), glassMaterial(), 'glass', { cast: true }))
     g.add(staticMesh(sign.toGeometry(), signMat, 'signs'))
-    // seats and small props: no shadows of their own worth the cost, not in the reflection probes
+    // seats: no shadows of their own worth the cost; seats and small props stay out of the probes
     g.add(staticMesh(seats.toGeometry(), archMat, 'seats', { noProbe: true }))
-    g.add(staticMesh(props.toGeometry(), archMat, 'props', { noProbe: true }))
+    // small props cast, but only into the near cascades (a texel or two of shadow beyond)
+    const propMesh = staticMesh(props.toGeometry(), archMat, 'props', { noProbe: true, cast: true })
+    castInNearCascades(propMesh, 1)
+    g.add(propMesh)
     g.add(staticMesh(propSign.toGeometry(), signMat, 'prop-signs', { noProbe: true }))
     const crowd = crowdMesh(spots)
     g.add(crowd)

@@ -400,7 +400,62 @@ export function buildTerrain(track: Track, res = 6, margin = 650) {
   g.setIndex(idx)
   g.computeVertexNormals()
   g.computeBoundingSphere()
-  return { geometry: g, heights: th, bounds: { x0, x1, z0, z1 } }
+  return { geometry: g, heights: th, bounds: { x0, x1, z0, z1 }, nx, nz }
+}
+
+/**
+ * Cuts a regular grid mesh (nx x nz vertices, rows along x) into square chunks of `cells` cells, each
+ * its own geometry (frustum culled per pass), plus a coarse version of each (every `step`-th vertex,
+ * sharing the chunk's vertex buffers) for low-resolution passes such as the cars' reflection probes.
+ * Chunks share their border vertices and the coarse ones sample the same border columns and rows,
+ * so neither level cracks along the seams.
+ */
+export function chunkGrid(src: THREE.BufferGeometry, nx: number, nz: number, cells = 80, step = 4) {
+  const fine: THREE.BufferGeometry[] = [],
+    coarse: THREE.BufferGeometry[] = []
+  const names = Object.keys(src.attributes)
+  for (let j0 = 0; j0 < nz - 1; j0 += cells)
+    for (let i0 = 0; i0 < nx - 1; i0 += cells) {
+      const i1 = Math.min(nx - 1, i0 + cells),
+        j1 = Math.min(nz - 1, j0 + cells)
+      const w = i1 - i0 + 1,
+        h = j1 - j0 + 1
+      const g = new THREE.BufferGeometry()
+      for (const name of names) {
+        const a = src.getAttribute(name) as THREE.BufferAttribute
+        const n = a.itemSize
+        const out = new Float32Array(w * h * n)
+        for (let j = 0; j < h; j++) out.set((a.array as Float32Array).subarray(((j0 + j) * nx + i0) * n, ((j0 + j) * nx + i1 + 1) * n), j * w * n)
+        g.setAttribute(name, new THREE.BufferAttribute(out, n))
+      }
+      const quads = (s: number) => {
+        const idx: number[] = []
+        const cols: number[] = [],
+          rows: number[] = []
+        for (let i = 0; i < w - 1; i += s) cols.push(i)
+        cols.push(w - 1)
+        for (let j = 0; j < h - 1; j += s) rows.push(j)
+        rows.push(h - 1)
+        for (let b = 0; b < rows.length - 1; b++)
+          for (let a = 0; a < cols.length - 1; a++) {
+            const p = rows[b] * w + cols[a],
+              q = rows[b] * w + cols[a + 1],
+              c = rows[b + 1] * w + cols[a],
+              d = rows[b + 1] * w + cols[a + 1]
+            idx.push(p, c, q, q, c, d)
+          }
+        return idx
+      }
+      g.setIndex(quads(1))
+      g.computeBoundingSphere()
+      const cg = new THREE.BufferGeometry()
+      for (const name of names) cg.setAttribute(name, g.getAttribute(name))
+      cg.setIndex(quads(step))
+      cg.boundingSphere = g.boundingSphere!.clone()
+      fine.push(g)
+      coarse.push(cg)
+    }
+  return { fine, coarse }
 }
 
 /** The mountains around the valley (scenery/mountains.ts). */

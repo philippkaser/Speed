@@ -52,7 +52,7 @@ import {
 } from 'three/tsl'
 import { motionTime } from './motionHistory'
 import { csmState, sunState } from './Environment'
-import { cascadesFar, farTreeShadow, setSunShadowTerm, setTreeShadows, type TreeShadowCaster } from './sunShadow'
+import { cascadesFar, castInNearCascades, farTreeShadow, setSunShadowTerm, setTreeShadows, type TreeShadowCaster } from './sunShadow'
 import { valueNoise2 } from '../physics/math'
 import { Surface } from '../physics/ground'
 import { useSettings } from '../state/settings'
@@ -834,6 +834,20 @@ function bakeImpostors(renderer: THREE.WebGPURenderer, species: VegMesh[]): Impo
   }
 }
 
+/** Which cascade of the sun's shadow a camera renders (-1: none). */
+function cascadeOf(camera: THREE.Camera | undefined) {
+  const csm = csmState.csm as { lights: { shadow: { camera: THREE.Camera } }[] } | null
+  if (!csm || !camera) return -1
+  for (let i = 0; i < csm.lights.length; i++) if (csm.lights[i].shadow.camera === camera) return i
+  return -1
+}
+
+/**
+ * 1 where the impostors draw every tree, near ones included (no fade-in): the far shadow cascades and
+ * the reflection probes, which the tree meshes leave out.
+ */
+const impostorsForAll: N = (uniform(0) as N).onObjectUpdate((frame: { camera?: THREE.Camera }) => (frame.camera && (frame.camera.userData.probe || cascadeOf(frame.camera) >= 2) ? 1 : 0))
+
 /** One quad per tree (all species), facing the camera about its vertical axis. */
 function impostorMaterial(imp: Impostors, fadeIn: [number, number], maxDist: number, tints: THREE.Color[][]) {
   const m = new THREE.MeshStandardNodeMaterial({ side: THREE.DoubleSide, alphaTest: 0.4 })
@@ -893,7 +907,8 @@ function impostorMaterial(imp: Impostors, fadeIn: [number, number], maxDist: num
   const vIn = varying(smoothstep(fadeIn[0], fadeIn[1], dist), 'vImpFade')
   const vOut = varying(smoothstep(maxDist * 0.85, maxDist, dist), 'vImpOut')
   const d = ign(screenCoordinate.xy)
-  m.maskNode = d.lessThan(vIn).and(d.greaterThanEqual(vOut))
+  // in the far cascades and the probes the impostors stand in for the near trees too
+  m.maskNode = d.lessThan(max(vIn, impostorsForAll)).and(d.greaterThanEqual(vOut))
   if (debugFlag('impdebug')) {
     // ?impdebug: every quad, atlas colour where the coverage passes, red where it fails
     m.alphaTest = 0
@@ -951,7 +966,8 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
           height: 23,
           castShadow: true,
           shadowMargin: 30,
-          probeRange: 90,
+          // impostors stand in for the meshes in the probes
+          probeRange: 0,
         }),
       )
     if (broad && withMeshes && !debugFlag('notrees'))
@@ -966,7 +982,8 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
           height: 17,
           castShadow: true,
           shadowMargin: 30,
-          probeRange: 90,
+          // impostors stand in for the meshes in the probes
+          probeRange: 0,
         }),
       )
     // impostors: every tree of every species in one quad draw (baked from the meshes above)
@@ -1058,7 +1075,15 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
       for (let i = 0; i + STRIDE <= arr.length; i += STRIDE) casters.push({ x: arr[i], y: arr[i + 1], z: arr[i + 2], radius: c.r * arr[i + 4], height: c.h * arr[i + 5] })
     const margin = 600
     const treeBounds: [number, number, number, number] = [track.minX - margin, track.minZ - margin, track.maxX + margin, track.maxZ + margin]
-    for (const l of layers) group.add(l.mesh)
+    for (const l of layers) {
+      // tree meshes cast into the near cascades only (the impostors cast beyond: impostorsForAll) and
+      // stay out of the probes
+      if (l.o.name === 'pine' || l.o.name === 'broadleaf') {
+        castInNearCascades(l.mesh, 1)
+        l.mesh.userData.noProbe = true
+      }
+      group.add(l.mesh)
+    }
     console.info(`[veg] ${trees.conifers.length / STRIDE} pines, ${trees.broad.length / STRIDE} broadleaf trees, ${layers.length} draw calls, built in ${(performance.now() - t0).toFixed(0)} ms`)
     return { group, layers, impostors, casters, treeBounds }
   }, [meshes, track, heights, density, renderer])
