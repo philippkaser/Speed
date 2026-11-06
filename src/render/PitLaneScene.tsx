@@ -135,9 +135,10 @@ export function PitLaneScene({ track }: { track: Track }) {
       // team board above the garage door
       if (t.name) {
         const tex = boardTexture(t.name, t.color, t.accent)
-        const board = new THREE.Mesh(new THREE.PlaneGeometry(10, 1.56), new THREE.MeshBasicNodeMaterial({ map: tex }))
-        track.pointAt(s, lane.dGarage - 0.25, _p)
-        board.position.set(_p.x, _p.y + 4.75, _p.z)
+        // on the garage's lintel (the pit building's fronts stand 0.3 m behind the lane's edge)
+        const board = new THREE.Mesh(new THREE.PlaneGeometry(5.1, 0.8), new THREE.MeshBasicNodeMaterial({ map: tex }))
+        track.pointAt(s, lane.dGarage + 0.28, _p)
+        board.position.set(_p.x, _p.y + 4.8, _p.z)
         // face the lane (towards -d)
         board.rotation.y = track.headingAt(s) - Math.PI / 2
         g.add(board)
