@@ -276,9 +276,10 @@ export function seeHero(camera: THREE.Camera) {
  * Keeps the cascades' cameras off the hero's layer, and the cascades rendering every frame (they are
  * clones of the sun's shadow, and a clone made while something had paused it would stay paused).
  */
-export function cascadesWithoutHero(csm: { lights?: { shadow: { camera: THREE.Camera; autoUpdate: boolean } }[] } | null) {
+export function cascadesWithoutHero(csm: CascadeSource | null, sunDir?: THREE.Vector3) {
   const lights = csm?.lights ?? []
   cascadeFrame++
+  tagCascadeDepths(csm, sunDir)
   for (let i = 0; i < lights.length; i++) {
     const l = lights[i]
     if (l.shadow.camera.layers.mask !== CASCADE_MASK) l.shadow.camera.layers.mask = CASCADE_MASK
@@ -290,6 +291,42 @@ export function cascadesWithoutHero(csm: { lights?: { shadow: { camera: THREE.Ca
   heroLight.shadow.autoUpdate = true
 }
 let cascadeFrame = 0
+
+interface CascadeSource {
+  lights?: { shadow: { camera: THREE.Camera; autoUpdate: boolean } }[]
+  maxFar?: number
+  camera?: THREE.Camera | null
+  _cascades?: THREE.Vector2[]
+}
+
+/** How far a car's shadow can reach from its centre (half its length plus its height's shadow). */
+const casterReach = (sunDir: THREE.Vector3 | undefined) => 3 + 1.4 / Math.max(0.1, Math.tan(Math.asin(Math.min(1, Math.max(0, sunDir?.y ?? 0.5)))))
+
+/**
+ * Tags every cascade camera with the main camera's view depths (m) whose shadows it holds
+ * (`userData.cascadeDepth`, CSM's fade margins included), widened by how far a car's shadow reaches:
+ * a car outside that range casts nothing any receiver looks up in that cascade (gltfCars.ts CarLOD
+ * leaves it out of that cascade's pass).
+ */
+function tagCascadeDepths(csm: CascadeSource | null, sunDir?: THREE.Vector3) {
+  const cs = csm?._cascades
+  const lights = csm?.lights ?? []
+  const cam = csm?.camera as THREE.PerspectiveCamera | null | undefined
+  if (!cs || !cam || cs.length !== lights.length) return
+  const near = cam.near
+  const far = Math.min(csm!.maxFar ?? cam.far, cam.far)
+  const reach = casterReach(sunDir)
+  for (let i = 0; i < lights.length; i++) {
+    const { x, y } = cs[i]
+    // as CSMShadowNode's fade: the cascade covers [x - m(x) / 2, y + m(y) / 2], m(e) = e^2 / 4 (linear depth)
+    const x0 = Math.max(0, x - (0.25 * x * x) / 2)
+    const y1 = i === lights.length - 1 ? y : y + (0.25 * y * y) / 2
+    const ud = lights[i].shadow.camera.userData as { cascadeDepth?: [number, number] }
+    const r = (ud.cascadeDepth ??= [0, 0])
+    r[0] = near + x0 * (far - near) - reach
+    r[1] = near + y1 * (far - near) + reach
+  }
+}
 
 /**
  * Fits the hero map to the hero car for this frame: `sunDir` points to the sun, `size` is the map's

@@ -29,7 +29,7 @@ function instrument() {
   const stack = []
   let cur = null
   const frames = []
-  const newFrame = () => ({ t0: performance.now(), passes: {}, cats: {}, objs: {}, renders: 0 })
+  const newFrame = () => ({ t0: performance.now(), passes: {}, cats: {}, objs: {}, objMs: {}, renders: 0 })
   cur = newFrame()
   const add = (o, k, d, t, ms) => {
     const e = (o[k] ??= { calls: 0, draws: 0, tris: 0, ms: 0, projectMs: 0, objectMs: 0, drawMs: 0 })
@@ -116,11 +116,16 @@ function instrument() {
     try {
       return rod0.apply(this, a)
     } finally {
-      addObject(performance.now() - t0 - (top ? top.cT - c0 : 0))
+      const ms = performance.now() - t0 - (top ? top.cT - c0 : 0)
+      addObject(ms)
+      // the costliest objects to prepare
+      const k = passOf().replace(/:face$/, '').replace(/^post:.*/, 'post') + ' | ' + top0(a[0]).detail + ' [' + (a[1]?.name || a[1]?.type || '') + ']'
+      cur.objMs[k] = (cur.objMs[k] ?? 0) + ms
     }
   }
   const addDraw = timeIn('drawMs')
   // what each draw is
+  const top0 = (o) => top(o)
   const top = (o) => {
     let p = o,
       name = ''
@@ -250,6 +255,9 @@ const M = (n) => (n / 1e6).toFixed(2) + 'M'
   lines.push('')
   lines.push('heaviest objects (last frame), by triangles:')
   for (const [k, v] of Object.entries(last.objs).sort((a, b) => b[1].tris - a[1].tris).slice(0, 25)) lines.push(`  ${fmt(v.draws, 5)} ${fmt(M(v.tris), 8)}  ${k}`)
+  lines.push('')
+  lines.push('costliest render objects to prepare (last frame, ms, exclusive of nested passes):')
+  for (const [k, v] of Object.entries(last.objMs).sort((a, b) => b[1] - a[1]).slice(0, 25)) lines.push(`  ${fmt(v.toFixed(2), 7)}  ${k}`)
   lines.push('')
   for (const l of [...new Set(logs)].slice(0, 25)) lines.push('  ' + l)
   console.log(lines.join('\n'))

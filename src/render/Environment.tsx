@@ -316,7 +316,7 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
     // the car in focus gets its own detailed shadow map (sunShadow.ts)
     if (csm) {
       seeHero(camera)
-      cascadesWithoutHero(csm as never)
+      cascadesWithoutHero(csm as never, sun.dir)
       _heroCars.length = 0
       for (const [id, pose] of carPoses) _heroCars.push([id, { pos: pose.pos, root: pose.model?.root }])
       pickHero(_heroCars, camera as THREE.PerspectiveCamera)

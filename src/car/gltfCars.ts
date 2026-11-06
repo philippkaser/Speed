@@ -72,9 +72,13 @@ const REF_TAN = Math.tan((50 * Math.PI) / 360)
  * It carries the hero's layer as well, so the hero's own shadow map (which draws nothing else) updates
  * it too.
  */
+const _fwd = new THREE.Vector3()
+const _rel = new THREE.Vector3()
+
 class CarLOD extends THREE.LOD {
-  /** the level the main camera picked */
+  /** the level the main camera picked, and the car's depth in its view (m) */
   mainLevel = 0
+  depth = 0
   private shown = -1
   private _camPos = new THREE.Vector3()
   private _objPos = new THREE.Vector3()
@@ -94,9 +98,16 @@ class CarLOD extends THREE.LOD {
   update(camera: THREE.Camera) {
     const last = this.parts.length - 1
     if (camera.userData.probe) return this.show(last)
-    if ((camera as THREE.OrthographicCamera).isOrthographicCamera) return this.show(Math.min(last, Math.max(this.mainLevel, 1)))
+    if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
+      // a cascade whose receivers this car's shadow cannot reach (sunShadow.ts tagCascadeDepths)
+      const r = camera.userData.cascadeDepth as [number, number] | undefined
+      if (r && (this.depth < r[0] || this.depth > r[1])) return this.show(-1)
+      return this.show(Math.min(last, Math.max(this.mainLevel, 1)))
+    }
     this._camPos.setFromMatrixPosition(camera.matrixWorld)
     this._objPos.setFromMatrixPosition(this.matrixWorld)
+    // view depth (for the cascades), then the distance scaled by the lens
+    this.depth = _fwd.set(0, 0, -1).transformDirection(camera.matrixWorld).dot(_rel.subVectors(this._objPos, this._camPos))
     let d = this._camPos.distanceTo(this._objPos)
     const pc = camera as THREE.PerspectiveCamera
     if (pc.isPerspectiveCamera) d *= Math.tan((pc.fov * Math.PI) / 360) / REF_TAN / pc.zoom
