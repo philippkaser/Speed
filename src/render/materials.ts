@@ -393,17 +393,18 @@ export function terrainMaterial() {
   const m = new THREE.MeshStandardNodeMaterial()
   // beyond the shadow cascades, the distant forests' shadows on the ground (sunShadow.ts)
   setSunShadowTerm(m, farTreeShadow())
-  // forest floor (leaves) away from the track, where the forests grow
+  // forest floor (leaf litter in the canopy's shade) exactly where the trees stand: aTrack.y is the
+  // canopy cover baked from the tree placement (scenery/forest.ts)
   const tr = aTrack()
-  const farFromTrack = smoothstep(20, 120, tr.x)
-  const forest = mx_noise_float(vec3(positionWorld.x.mul(0.006).add(3.1), 1.9, positionWorld.z.mul(0.006).sub(7.7))).mul(0.5).add(0.5)
-  const leafy = smoothstep(0.45, 0.62, forest).mul(farFromTrack).mul(0.8)
-  const g = grassColor(leafy)
+  const cover = tr.y
+  const g = grassColor(cover.mul(0.9))
   // rocky slopes on steep terrain far from the track
   const farRock = smoothstep(80, 400, tr.x)
   const rock = mx_noise_float(vec3(positionWorld.x.mul(0.05), positionWorld.y.mul(0.05), positionWorld.z.mul(0.05))).mul(0.5).add(0.5)
-  const rockMask = smoothstep(0.62, 0.8, rock).mul(farRock).mul(0.7)
-  m.colorNode = mix(g.color, vec3(0.16, 0.15, 0.13).mul(rock.add(0.5)), rockMask)
+  const rockMask = smoothstep(0.62, 0.8, rock).mul(farRock).mul(0.7).mul(float(1).sub(cover))
+  // under the canopy little skylight reaches the ground (the trees' own shadows do the sun)
+  m.aoNode = mix(float(1), float(0.45), cover)
+  m.colorNode = mix(g.color, vec3(0.16, 0.15, 0.13).mul(rock.add(0.5)), rockMask).mul(mix(float(1), float(0.7), cover))
   m.roughnessNode = max(g.rough, 0.85)
   m.normalNode = normalMap(normalFromXY(g.nxy), vec2(0.7))
   return m

@@ -4,6 +4,7 @@ import { inPitGap } from '../track/pitlane'
 import { makeSample, Surface } from '../physics/ground'
 import { clamp, lerp, smoothstep, valueNoise2 } from '../physics/math'
 import { DS, type Track } from '../track/track'
+import { canopyCover } from './scenery/forest'
 
 const tmp = { x: 0, y: 0, z: 0 }
 
@@ -329,6 +330,7 @@ export class TerrainHeight {
     // far from the circuit the exact track query is unnecessary
     if (b.dist > 200) {
       this.lastWallDist = b.dist
+      this.lastS = NaN
       return far
     }
     // global nearest lookup: a hint carried along a grid row can stay latched onto another part of
@@ -342,6 +344,7 @@ export class TerrainHeight {
     const ad = Math.abs(s.d)
     const wallEnd = S.wall[i] + 10
     this.lastWallDist = ad - S.wall[i]
+    this.lastS = s.s
     const t = smoothstep(wallEnd, wallEnd + 70, ad)
     if (t >= 1) return far
     // height continuing the verge (track profile) up to the end of the verge strip
@@ -349,6 +352,8 @@ export class TerrainHeight {
     return lerp(nearH, far, t)
   }
   lastWallDist = 0
+  /** track distance of the last height() query (NaN when it was far from the circuit) */
+  lastS = NaN
 }
 
 export function buildTerrain(track: Track, res = 6, margin = 650) {
@@ -375,6 +380,8 @@ export function buildTerrain(track: Track, res = 6, margin = 650) {
       uv[k * 2] = x / 8
       uv[k * 2 + 1] = z / 8
       ex[k * 4] = th.lastWallDist
+      // canopy cover: the forest floor under the trees (scenery/forest.ts, as Vegetation places them)
+      ex[k * 4 + 1] = canopyCover(x, z, th.lastWallDist, th.lastS, track.length)
     }
   }
   const idx: number[] = []

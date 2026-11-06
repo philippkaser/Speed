@@ -59,6 +59,7 @@ import { debugFlag } from '../util/debug'
 import type { TerrainHeight } from './trackGeometry'
 import { loadVegetation, vegState, type VegMesh } from './worldAssets'
 import { grassGroundColour } from './materials'
+import { forestNoise, treeChance } from './scenery/forest'
 
 type N = any
 
@@ -113,7 +114,7 @@ function placeTrees(track: Track, heights: TerrainHeight, density: number) {
     for (let x = track.minX - margin; x < track.maxX + margin; x += step) {
       const px = x + (r() - 0.5) * step,
         pz = z + (r() - 0.5) * step
-      const forest = valueNoise2(px * 0.006 + 3.1, pz * 0.006 - 7.7) * 0.7 + valueNoise2(px * 0.02, pz * 0.02) * 0.3
+      const forest = forestNoise(px, pz)
       if (forest < 0.48) continue
       track.sample(px, pz, s)
       const S = s.d >= 0 ? track.L : track.R
@@ -122,7 +123,7 @@ function placeTrees(track: Track, heights: TerrainHeight, density: number) {
       if (ad < wall + 14 + r() * 10) continue
       // keep the inside of the start straight clear for the grandstands & pits
       if ((s.s > track.length - 420 || s.s < 460) && ad < wall + 90) continue
-      if (r() > Math.min(1, (forest - 0.46) * 7) ** 1.5 * 0.92 + 0.04) continue
+      if (r() > treeChance(forest)) continue
       const y = heights.height(px, pz)
       const conifer = valueNoise2(px * 0.004, pz * 0.004) > 0.45
       const scale = conifer ? 0.72 + r() * 0.6 : 0.58 + r() * 0.42
