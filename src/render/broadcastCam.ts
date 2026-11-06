@@ -84,6 +84,11 @@ function pickKind(c: RaceCar, battle: boolean): ShotKind {
   if (director.lockShot && director.lockShot !== 'grid' && director.lockShot !== 'pit' && director.lockShot !== 'finish') return director.lockShot
   const p = c.pit
   if (p && p.path && (p.phase === 'service' || (p.phase === 'in' && p.u > p.path.boxU - 170))) return 'pit'
+  return chooseKind(battle)
+}
+
+/** A shot type for a car on track: no repeats, battles get more trackside and onboard shots. */
+function chooseKind(battle: boolean): ShotKind {
   const options: [ShotKind, number][] = battle
     ? [
         ['trackside', 0.38],
@@ -128,15 +133,14 @@ function cutTo(target: RaceCar, kind: ShotKind, second = '') {
   st.minDur = kind === 'pit' ? 6 : 3.8 + Math.random() * 1.5
   st.maxDur = kind === 'trackside' ? 14 : kind === 'pit' ? 30 : 7.5 + Math.random() * 4
   cameraCut.frames = 3
-  if (kind === 'trackside') placePost(target)
+  if (kind === 'trackside') placePost(target.entry.timing.s, target.vehicle.speed)
   if (kind === 'heli') st.heliAngle = (Math.random() < 0.5 ? -1 : 1) * (0.7 + Math.random() * 1.6)
 }
 
-/** A trackside camera position a few seconds ahead of the car, behind the barrier, raised. */
-function placePost(c: RaceCar) {
+/** A trackside camera position a few seconds ahead of a car (at s, m/s), behind the barrier, raised. */
+function placePost(s0: number, speed: number) {
   const tr = game.track
-  const v = c.vehicle
-  const s = c.entry.timing.s + 55 + Math.max(v.speed, 20) * (1.6 + Math.random() * 1.4)
+  const s = s0 + 55 + Math.max(speed, 20) * (1.6 + Math.random() * 1.4)
   const i = tr.idx(s)
   const side = Math.abs(tr.curv[i]) > 0.002 ? (tr.curv[i] > 0 ? -1 : 1) : Math.random() < 0.5 ? 1 : -1
   const S = side > 0 ? tr.L : tr.R
@@ -213,6 +217,22 @@ export function broadcastCamera(cam: THREE.PerspectiveCamera, dt: number, focusO
   // ------------------------------------------------------------------ camera
   const target = tr.byId.get(director.target)
   if (!target) return
+  renderShot(cam, dt, focusOut, { id: target.id, speed: target.vehicle.speed, box: target.team.box, gridT: game.countdownTotal - game.countdown })
+}
+
+/** What a shot needs of the car it follows. */
+export interface ShotTarget {
+  id: string
+  /** m/s */
+  speed: number
+  /** the team's pit box (pit shots), -1 none */
+  box: number
+  /** seconds since the grid shot began */
+  gridT: number
+}
+
+/** Films director.shot of a car: camera placement, operator tracking, zoom. */
+function renderShot(cam: THREE.PerspectiveCamera, dt: number, focusOut: THREE.Vector3, target: ShotTarget) {
   const pose = carPoses.get(target.id)
   if (!pose) return
   const carPos = pose.pos
@@ -226,7 +246,7 @@ export function broadcastCamera(cam: THREE.PerspectiveCamera, dt: number, focusO
     case 'grid': {
       const trk = game.track
       trk.pointAt(34, 0, _p)
-      const t = game.countdownTotal - game.countdown
+      const t = target.gridT
       cam.position.set(_p.x, _p.y + 7.5 - Math.min(t, 8) * 0.25, _p.z)
       trk.pointAt(-55 - Math.min(t, 8) * 2, 0, _p)
       _v.set(_p.x, _p.y + 0.5, _p.z)
@@ -294,7 +314,7 @@ export function broadcastCamera(cam: THREE.PerspectiveCamera, dt: number, focusO
       markCameraPath(cam)
       // camera mount vibration
       st.shake += dt
-      const sp = target.vehicle.speed
+      const sp = target.speed
       const amp = 0.0012 + sp * 0.00002
       cam.rotateX((valueNoise2(st.shake * 23, 1.7) - 0.5) * amp)
       cam.rotateZ((valueNoise2(st.shake * 19, 5.3) - 0.5) * amp)
@@ -320,7 +340,7 @@ export function broadcastCamera(cam: THREE.PerspectiveCamera, dt: number, focusO
     }
     case 'pit': {
       const lane = pitLane(game.track)
-      const boxS = lane.boxS[target.team.box]
+      const boxS = lane.boxS[Math.max(0, target.box)]
       if (!st.init) {
         game.track.pointAt(boxS + 15, lane.dFast - 2, _p)
         st.post.set(_p.x, _p.y + 2.1, _p.z)
@@ -341,4 +361,168 @@ export function broadcastCamera(cam: THREE.PerspectiveCamera, dt: number, focusO
   cam.far = 12000
   cam.updateProjectionMatrix()
   st.init = true
+}
+
+// ------------------------------------------------------------------------------------- replays
+
+/** A car of a replay, as the replay director sees it (src/game/replay.ts ReplayCarView). */
+export interface ReplayFieldCar {
+  id: string
+  position: number
+  /** track position (m) and total distance covered (m) */
+  s: number
+  distance: number
+  /** m/s */
+  speed: number
+  finished: boolean
+  /** sliding or off the track right now */
+  incident: boolean
+  isPlayer: boolean
+}
+
+export interface ReplayField {
+  cars: ReplayFieldCar[]
+  /** replay clock (s) */
+  now: number
+  /** seconds since the green light (negative on the grid) */
+  raceTime: number
+  /** the leader is on the last lap */
+  lastLap: boolean
+  /** the viewer asked to follow this car ('' = director's choice) */
+  focus: string
+  /** the replay jumped (seek): start over with a fresh shot */
+  jumped: boolean
+}
+
+const rd = {
+  positions: new Map<string, number>(),
+  overtakeAt: new Map<string, number>(),
+  incidentAt: new Map<string, number>(),
+  scoreAt: 0,
+}
+
+function replayInterval(f: ReplayField, c: ReplayFieldCar) {
+  const ahead = f.cars.find((o) => o.position === c.position - 1)
+  if (!ahead) return 0
+  return Math.max(0, ahead.distance - c.distance) / Math.max(c.speed, 15)
+}
+
+function replayInterest(f: ReplayField, c: ReplayFieldCar) {
+  if (c.finished && director.shot !== 'finish') return -100
+  const now = f.now
+  let s = Math.max(0, 3.2 - c.position * 0.28)
+  const gap = replayInterval(f, c)
+  if (gap > 0 && gap < 1.0) s += 6 * (1 - gap) + (c.position <= 5 ? 2 : 0)
+  if (now - (rd.overtakeAt.get(c.id) ?? -99) < 4) s += 7
+  if (now - (rd.incidentAt.get(c.id) ?? -99) < 5) s += 8
+  if (c.isPlayer) s += 3
+  if (f.focus === c.id) s += 60
+  if (c.id === director.target) s += 1.5
+  if (f.lastLap && c.position === 1) s += 4
+  return s
+}
+
+function replayCut(f: ReplayField, target: ReplayFieldCar, kind: ShotKind, second = '') {
+  if (kind === 'rear') {
+    const ahead = f.cars.find((o) => o.position === target.position - 1)
+    if (ahead && replayInterval(f, target) < 1.2) {
+      second = target.id
+      target = ahead
+    } else kind = 'onboard'
+  }
+  director.target = target.id
+  director.second = second
+  director.shot = kind
+  director.since = 0
+  director.cut++
+  st.lastKinds.push(kind)
+  if (st.lastKinds.length > 4) st.lastKinds.shift()
+  st.init = false
+  st.minDur = 3.8 + Math.random() * 1.5
+  st.maxDur = kind === 'trackside' ? 14 : 7.5 + Math.random() * 4
+  cameraCut.frames = 3
+  if (kind === 'trackside') placePost(target.s, target.speed)
+  if (kind === 'heli') st.heliAngle = (Math.random() < 0.5 ? -1 : 1) * (0.7 + Math.random() * 1.6)
+}
+
+/**
+ * The TV director for replays: the same shots and cutting rules as the team broadcast, choosing from
+ * what the recording shows (battles from the gaps, overtakes from position changes, incidents from
+ * slides and trips off the track, the leader on the last lap, the viewer's car). dt is replay time:
+ * a paused replay holds its shot, a fast one cuts faster.
+ */
+export function replayBroadcast(cam: THREE.PerspectiveCamera, dt: number, focusOut: THREE.Vector3, f: ReplayField) {
+  if (!f.cars.length) return
+  if (f.jumped) {
+    rd.positions.clear()
+    rd.overtakeAt.clear()
+    rd.incidentAt.clear()
+    rd.scoreAt = 0
+    director.finishShown = false
+    director.target = ''
+  }
+  for (const c of f.cars) {
+    const prev = rd.positions.get(c.id)
+    if (prev !== undefined && c.position < prev) rd.overtakeAt.set(c.id, f.now)
+    rd.positions.set(c.id, c.position)
+    if (c.incident) rd.incidentAt.set(c.id, f.now)
+  }
+  director.since += dt
+  const byId = (id: string) => f.cars.find((c) => c.id === id)
+  const lead = f.cars.find((c) => c.position === 1)
+  if (f.raceTime < 0) {
+    if (director.shot !== 'grid' || !director.target) {
+      director.shot = 'grid'
+      director.since = 0
+      director.cut++
+      cameraCut.frames = 3
+      st.init = false
+    }
+    director.target = lead?.id ?? f.cars[0].id
+  } else {
+    rd.scoreAt -= dt
+    const cur = byId(director.target)
+    let invalid = !cur || director.shot === 'grid' || (cur.finished && director.shot !== 'finish')
+    if (director.shot === 'trackside' && cur) {
+      const pose = carPoses.get(cur.id)
+      if (pose) {
+        const d = st.post.distanceTo(pose.pos)
+        _fwd.set(0, 0, 1).applyQuaternion(pose.quat)
+        const behind = _v.subVectors(st.post, pose.pos).dot(_fwd) < -25
+        if (d > 330 || (behind && d > 70)) invalid = true
+      }
+    }
+    if (lead && f.lastLap && !director.finishShown && lead.s > game.track.length - 520 && !lead.finished) {
+      director.finishShown = true
+      replayCut(f, lead, 'finish')
+    } else if (director.shot === 'finish' && director.since < 7) {
+      // hold the finish shot
+    } else if (rd.scoreAt <= 0 || invalid) {
+      rd.scoreAt = 0.4
+      let best: ReplayFieldCar | null = null,
+        bestS = -1e9
+      for (const c of f.cars) {
+        const s = replayInterest(f, c)
+        if (s > bestS) {
+          bestS = s
+          best = c
+        }
+      }
+      const curS = cur ? replayInterest(f, cur) : -1e9
+      const timeUp = director.since > st.maxDur
+      const better = best && best.id !== director.target && bestS > curS + 2.5 && director.since > st.minDur
+      if (best && (invalid || timeUp || better)) {
+        const b = best
+        const ahead = f.cars.find((o) => o.position === b.position - 1)
+        const behind = f.cars.find((o) => o.position === b.position + 1)
+        const behindGap = behind ? replayInterval(f, behind) : 0
+        const partner = ahead && replayInterval(f, b) > 0 && replayInterval(f, b) < 1 ? ahead : behind && behindGap > 0 && behindGap < 1 ? behind : null
+        const locked = director.lockShot && director.lockShot !== 'grid' && director.lockShot !== 'pit' && director.lockShot !== 'finish' ? director.lockShot : null
+        replayCut(f, b, locked ?? chooseKind(!!partner), partner?.id ?? '')
+      }
+    }
+  }
+  const target = byId(director.target)
+  if (!target) return
+  renderShot(cam, dt, focusOut, { id: target.id, speed: target.speed, box: -1, gridT: Math.min(8, Math.max(0, f.raceTime + 8)) })
 }

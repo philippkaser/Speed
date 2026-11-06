@@ -134,7 +134,7 @@ export function SettingsPanel({ onClose, inGame = false }: { onClose: () => void
           <>
             <Toggle label="ABS" sub="Anti-lock braking (per-wheel slip control)" value={s.assists.abs} onChange={(v) => s.setAssists({ abs: v })} />
             <Slider label="Traction control" sub="0 = off · 5 = maximum intervention" value={s.assists.tc} min={0} max={5} step={1} onChange={(v) => s.setAssists({ tc: v })} />
-            <Slider label="Steering assist" sub="Countersteer & slip-angle guidance for pads/keyboard. 0 for wheels." value={s.assists.steering} min={0} max={1} step={0.05} unit="%" format={(v) => Math.round(v * 100) + ''} onChange={(v) => s.setAssists({ steering: v })} />
+            <Slider label="Steering assist" sub="Pads and keyboard: counter-steer that catches slides, the front tyres kept at their grip limit. 0 for wheels." value={s.assists.steering} min={0} max={1} step={0.05} unit="%" format={(v) => Math.round(v * 100) + ''} onChange={(v) => s.setAssists({ steering: v })} />
             <Toggle label="Automatic gearbox" value={s.assists.autoGear} onChange={(v) => s.setAssists({ autoGear: v })} />
             <FieldRow label="Driving line">
               <Segmented
@@ -219,7 +219,7 @@ function Controls() {
   return (
     <>
       <div className="section-title">Keyboard & gamepad</div>
-      <Slider label="Steering speed" value={c.steeringSensitivity} min={0.4} max={2} step={0.05} format={(v) => v.toFixed(2)} unit="×" onChange={(v) => s.setControls({ steeringSensitivity: v })} />
+      <Slider label="Steering speed" sub="Keyboard: how fast the steering builds (it slows with speed; opposite lock is always quick)" value={c.steeringSensitivity} min={0.4} max={2} step={0.05} format={(v) => v.toFixed(2)} unit="×" onChange={(v) => s.setControls({ steeringSensitivity: v })} />
       <Slider label="Stick linearity" sub="Higher = finer control near centre" value={c.steeringLinearity} min={1} max={2.5} step={0.05} format={(v) => v.toFixed(2)} onChange={(v) => s.setControls({ steeringLinearity: v })} />
       <Slider label="Deadzone" value={c.deadzone} min={0} max={0.25} step={0.01} format={(v) => Math.round(v * 100) + ''} unit="%" onChange={(v) => s.setControls({ deadzone: v })} />
       <Toggle label="Vibration" value={c.vibration} onChange={(v) => s.setControls({ vibration: v })} />

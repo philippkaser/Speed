@@ -1355,3 +1355,205 @@ input[type='range']::-moz-range-thumb {
   bottom: 0;
   background: var(--gold);
 }
+
+/* ------------------------------------------------------------------ replay viewer */
+.replay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.replay > * {
+  pointer-events: auto;
+}
+.rp-top {
+  position: absolute;
+  top: 22px;
+  left: 24px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.rp-tag {
+  background: var(--accent);
+  color: #fff;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  letter-spacing: 0.16em;
+}
+.rp-lap,
+.rp-clock {
+  background: var(--glass-strong);
+  border: 1px solid var(--line);
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+.rp-tower {
+  position: absolute;
+  top: 66px;
+  left: 24px;
+  width: 248px;
+  background: var(--glass-strong);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  backdrop-filter: blur(10px);
+}
+.rp-row {
+  display: grid;
+  grid-template-columns: 26px 4px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--line);
+}
+.rp-row:last-child {
+  border-bottom: 0;
+}
+.rp-row:hover {
+  background: var(--glass-light);
+}
+.rp-row b {
+  text-align: right;
+  color: var(--muted);
+}
+.rp-row i {
+  height: 14px;
+  border-radius: 2px;
+}
+.rp-row span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rp-row em {
+  font-style: normal;
+  color: var(--muted);
+  font-size: 12px;
+}
+.rp-row.me span {
+  font-weight: 700;
+}
+.rp-row.on {
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.rp-row.follow em {
+  color: var(--gold);
+}
+.rp-third {
+  position: absolute;
+  left: 50%;
+  bottom: 92px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--glass-strong);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 16px;
+  white-space: nowrap;
+  backdrop-filter: blur(10px);
+}
+.rp-third b {
+  font-size: 18px;
+}
+.rp-third i {
+  width: 4px;
+  height: 22px;
+  border-radius: 2px;
+}
+.rp-name {
+  font-size: 17px;
+  font-weight: 700;
+}
+.rp-tele {
+  color: var(--muted);
+  font-size: 14px;
+}
+.rp-tele small {
+  font-size: 11px;
+}
+.rp-shot {
+  color: var(--gold);
+  font-size: 11px;
+}
+.rp-bar {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: 22px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--glass-strong);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 12px;
+  backdrop-filter: blur(10px);
+}
+.rp-btn {
+  background: var(--glass-light);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 11px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rp-btn:hover {
+  border-color: var(--line-strong);
+}
+.rp-btn.play {
+  width: 44px;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.rp-btn.exit {
+  margin-left: auto;
+}
+.rp-scrub {
+  flex: 1;
+  min-width: 120px;
+  accent-color: var(--accent);
+}
+.rp-time {
+  font-size: 13px;
+  color: var(--muted);
+  min-width: 96px;
+  text-align: right;
+}
+.rp-seg {
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.rp-seg button {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  padding: 7px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rp-seg button.on {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--text);
+}
+@media (max-width: 900px) {
+  .rp-tower {
+    display: none;
+  }
+  .rp-bar {
+    flex-wrap: wrap;
+  }
+}

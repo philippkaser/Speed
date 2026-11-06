@@ -12,7 +12,7 @@
 // Aero: drag + front/rear downforce with ride height / rake / yaw sensitivity, slipstream.
 import { EngineState, engineTorque } from './engine'
 import { type Ground, type GroundSample, makeSample, Surface, SURFACES } from './ground'
-import { clamp, lerp, M3, Quat, smoothstep, V3, valueNoise2, DEG, RADS_TO_RPM } from './math'
+import { clamp, lerp, lookup, M3, Quat, smoothstep, V3, valueNoise2, DEG, RADS_TO_RPM } from './math'
 import { COMPOUNDS, type CarSetup, type CarSpec, type CompoundSpec, cornerSprungMass, GRAVITY, type TyreSpec } from './spec'
 import { Kinematics, defaultGeometry } from './kinematics'
 import { TyreModel, TyreState, updateTyre } from './tyre'
@@ -36,6 +36,31 @@ export interface Assists {
 }
 
 export const DEFAULT_ASSISTS: Assists = { abs: true, tc: 2, steering: 0.7, autoGear: false, stability: false }
+
+/** Tuning of the steering assist (Vehicle.assistedSteer), measured with scripts/feel-probe.ts. */
+export const STEER_ASSIST = {
+  /**
+   * full input asks for the wheel angle of a steady corner at the limit: the front tyres at
+   * rangeSlip x their peak slip angle, the rear running rangeRear x theirs (at the limit the front
+   * axle's velocity angle is the limit radius' geometric angle L / R minus the rear slip)
+   */
+  rangeSlip: 0.95,
+  rangeRear: 0.4,
+  /** share of the compound's peak mu assumed for the limit radius */
+  mu: 0.9,
+  /** counter-steer starts when the rear axle slips beyond this share of the rear tyres' peak slip angle */
+  rearThreshold: 0.8,
+  /** counter-steer per radian of rear slip beyond the threshold */
+  kp: 1.0,
+  /** counter-steer per rad/s of body slip rate beyond the deadband */
+  kd: 0.12,
+  /** body slip rates below this (rad/s) are ordinary turn-in and get no counter-steer */
+  rateDeadband: 0.25,
+  /** filter time constant of the body slip rate (s) */
+  rateTau: 0.03,
+  /** the front tyres are kept within this share of their peak slip angle */
+  frontLimit: 1.15,
+}
 
 export function makeInput(): VehicleInput {
   return { steer: 0, throttle: 0, brake: 0, handbrake: 0, clutch: 0, shiftUp: false, shiftDown: false }
@@ -407,6 +432,7 @@ export class Vehicle {
     this.shiftTimer = 0
     this.pendingGear = 1
     this.tcCut = 0
+    this.bodySlip = this.assistBetaRate = this.assistSteer = 0
     this.prevVel.set(0, 0, 0)
     this.updateAxes()
     this.updateWheelWorld()
@@ -524,7 +550,12 @@ export class Vehicle {
     if (this.assists.tc > 0 && this.speed > 2) {
       // level 1 allows 1.5x peak slip ratio, level 5 holds the tyre right at the peak
       const thr = peakK * (1.0 + 0.5 / this.assists.tc)
-      const over = driveSlip - thr
+      let over = driveSlip - thr
+      // a driven tyre that already works sideways (a corner exit) spins up past its grip at a far
+      // smaller slip ratio: the same allowance on its combined slip (1 = peak of the friction
+      // circle) keeps the power from pushing the rear wide
+      const comb = Math.max(rl.tyre.slipRatio > 0.02 ? rl.tyre.combinedSlip : 0, rr.tyre.slipRatio > 0.02 ? rr.tyre.combinedSlip : 0)
+      if (throttle > 0.05) over = Math.max(over, (comb - (1.0 + 0.8 / this.assists.tc)) * peakK)
       this.tcCut = clamp(this.tcCut + (over > 0 ? over * 90 + 4 : -5) * h, 0, 0.95)
     } else this.tcCut = Math.max(0, this.tcCut - h * 5)
     this.tcActive = this.tcCut > 0.04
@@ -556,21 +587,7 @@ export class Vehicle {
     this.clutchEngage = engage
 
     // steering: driver input -> road wheel angles
-    let delta = -clamp(input.steer, -1, 1) * sp.steerLock
-    if (this.assists.steering > 0) {
-      const fa = this.a
-      // velocity direction at the front axle relative to heading
-      const vxF = vbx + this.wBodyY() * fa
-      const beta = Math.atan2(vxF, Math.max(Math.abs(vf), 0.5))
-      const speedBlend = smoothstep(4, 26, Math.abs(vf))
-      const blend = speedBlend * this.assists.steering
-      // the slip-angle limit engages fully from ~60% assist; counter-steer scales with strength
-      const limitBlend = speedBlend * Math.min(1, this.assists.steering * 1.65)
-      const peakA = this.wheels[0].model.compound.peakSlipAngle * 1.15
-      const limit = lerp(sp.steerLock, Math.min(sp.steerLock, peakA), limitBlend)
-      delta = -clamp(input.steer, -1, 1) * limit + beta * 0.9 * blend * (vf > 0 ? 1 : 0)
-      delta = clamp(delta, -sp.steerLock, sp.steerLock)
-    }
+    const delta = this.assistedSteer(input.steer, vf, vbx, h)
     this.steerInput = delta / sp.steerLock
     this.applySteering(delta)
 
@@ -707,6 +724,76 @@ export class Vehicle {
     return this.w.x * this.up.x + this.w.y * this.up.y + this.w.z * this.up.z
   }
 
+  /** body slip angle (rad, + = the car moves to the left of where it points), for the steering assist and the keyboard filter */
+  bodySlip = 0
+  /** steering assist state: the body slip rate (filtered) */
+  private assistBetaRate = 0
+  /** counter-steer the steering assist added last step, incl. the front slip limit (rad, + left), for telemetry */
+  assistSteer = 0
+
+  /**
+   * Driver steering (-1 left .. 1 right) -> road wheel angle (rad, + left), through the steering
+   * assist for keyboards and pads (assists.steering 0..1). The assist only shapes the driver's input
+   * and adds counter-steer; it never brakes or touches the tyres:
+   *  - range: full input asks for the wheel angle the car needs at its cornering limit at this speed
+   *    (the tyres' peak slip angle plus the geometric angle of the tightest radius the grip allows),
+   *    a feed-forward from the speed: no yaw-rate feedback, so the car's own yaw damping is kept and
+   *    turn-in does not overshoot;
+   *  - counter-steer: a PD controller on the slide. P on the rear axle's slip beyond what a gripping
+   *    rear tyre runs (its velocity angle includes -b r / v, which damps yaw), D on the body slip
+   *    rate beyond what ordinary turn-in produces: it starts catching as the rear lets go and takes
+   *    the lock off as the rear grips again, which is what stops the snap back (tank slapper);
+   *  - limit: the front tyres are kept within their useful slip angle (a little past the peak) in
+   *    both directions, so neither full lock in a corner (understeer, scrub) nor too much opposite
+   *    lock in a slide can be asked of them.
+   */
+  private assistedSteer(steerIn: number, vf: number, vbx: number, h: number) {
+    const sp = this.spec
+    const u = clamp(steerIn, -1, 1)
+    const s = this.assists.steering
+    const vx = Math.max(Math.abs(vf), 0.5)
+    const beta = Math.atan2(vbx, vx)
+    const rate = h > 0 ? (beta - this.bodySlip) / h : 0
+    this.bodySlip = beta
+    this.assistBetaRate += (rate - this.assistBetaRate) * clamp(h / STEER_ASSIST.rateTau, 0, 1)
+    if (s <= 0) {
+      this.assistSteer = 0
+      return -u * sp.steerLock
+    }
+    const A = STEER_ASSIST
+    const r = this.wBodyY()
+    const speedBlend = smoothstep(4, 26, Math.abs(vf))
+    const blend = speedBlend * s
+    // the range and the slip limit engage fully from ~60% assist; counter-steer scales with strength
+    const limitBlend = speedBlend * Math.min(1, s * 1.65)
+    const peakF = this.wheels[0].model.compound.peakSlipAngle
+    const peakR = this.wheels[2].model.compound.peakSlipAngle
+    // the tightest radius the grip allows at this speed: a = mu (g + downforce / m), R = v^2 / a
+    const aMax = this.wheels[0].model.compound.mu * A.mu * (GRAVITY + this.downforce / this.mass)
+    const kin = Math.atan((sp.wheelbase * aMax) / (vx * vx))
+    const range = clamp(peakF * A.rangeSlip - peakR * A.rangeRear + kin, peakF * 0.5, sp.steerLock)
+    const driver = -u * lerp(sp.steerLock, range, limitBlend)
+    let delta = driver
+    let cs = 0
+    if (vf > 0) {
+      // P: rear axle slip beyond a gripping tyre's
+      const betaR = Math.atan2(vbx - r * this.b, vx)
+      const over = Math.sign(betaR) * Math.max(0, Math.abs(betaR) - peakR * A.rearThreshold)
+      // D: body slip rate beyond turn-in
+      const br = this.assistBetaRate
+      const d = Math.sign(br) * Math.max(0, Math.abs(br) - A.rateDeadband)
+      cs = (A.kp * over + A.kd * d) * blend
+    }
+    delta += cs
+    // keep the front tyres within their useful slip angle
+    const betaF = Math.atan2(vbx + r * this.a, vx)
+    const aLim = peakF * A.frontLimit
+    delta = lerp(delta, clamp(delta, betaF - aLim, betaF + aLim), limitBlend * (vf > 0 ? 1 : 0))
+    delta = clamp(delta, -sp.steerLock, sp.steerLock)
+    this.assistSteer = delta - driver
+    return delta
+  }
+
   private applySteering(delta: number) {
     const sp = this.spec
     const L = sp.wheelbase
@@ -772,9 +859,30 @@ export class Vehicle {
     }
     if (this.gear > 1) {
       const rpmDown = Math.abs(wheelOmega * this.ratioFor(this.gear - 1)) * RADS_TO_RPM
-      const threshold = throttle > 0.6 ? eng.limiterRpm - 700 : eng.limiterRpm * (brake > 0.2 ? 0.78 : 0.55)
+      // kickdown on throttle only while the engine is below its power band: dropping to the lowest
+      // gear that still fits under the limiter put first gear in at 70 km/h mid-corner, and the
+      // rear went straight past its grip
+      const kick = throttle > 0.6 && rpm < this.powerBandRpm()
+      const threshold = kick ? eng.limiterRpm - 700 : eng.limiterRpm * (brake > 0.2 ? 0.78 : 0.55)
       if (rpmDown < threshold) this.requestShift(-1)
     }
+  }
+
+  private bandRpm = 0
+  /** where the engine makes 60% of its peak power (the bottom of its useful band) */
+  powerBandRpm() {
+    if (this.bandRpm) return this.bandRpm
+    const tq = this.spec.engine.torque
+    let peak = 0
+    for (const [rpm, t] of tq) peak = Math.max(peak, rpm * t)
+    let band = tq[0][0]
+    for (let rpm = tq[0][0]; rpm < this.spec.engine.limiterRpm; rpm += 50) {
+      if (rpm * lookup(tq, rpm) >= 0.6 * peak) {
+        band = rpm
+        break
+      }
+    }
+    return (this.bandRpm = band)
   }
 
   private applyBodyForceAtLocal(lx: number, ly: number, lz: number, mag: number, dir: V3) {

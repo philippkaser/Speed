@@ -11,7 +11,8 @@ import { useGameStore } from '../state/gameStore'
 import { carPoses } from './CarVisual'
 import { cameraPose } from '../audio/cameraPose'
 import { cameraCut } from './PostFX'
-import { broadcastCamera } from './broadcastCam'
+import { broadcastCamera, replayBroadcast, type ReplayField } from './broadcastCam'
+import type { ReplayPlayer } from '../game/replay'
 import { markCameraPath } from './motionHistory'
 
 export const CAMERA_MODES = ['chase', 'chaseNear', 'cockpit', 'hood', 'bumper'] as const
@@ -74,15 +75,14 @@ export function CameraRig() {
     dragging: false,
     lastX: 0,
     lastY: 0,
-    headX: 0,
-    headY: 0,
     lastMode: '' as string,
-    fovKick: 0,
-    wasLookBack: false,
-    // g forces for the camera, low-passed: the physics values change abruptly from frame to frame
-    // (gear changes, kerbs), and a camera that follows them twitches by centimetres every frame
-    gLong: 0,
-    gLat: 0,
+    /** the player's driving cameras (chase, cockpit...) and the car state they follow */
+    drive: new DriveCamera(),
+    car: makeDriveCarState(),
+    /** replays: their own chase / onboard camera, and what was shown last frame (a change is a cut) */
+    replayDrive: new DriveCamera(),
+    replayCam: '',
+    replayFocus: '',
   })
 
   // orbit drag in showroom
@@ -128,6 +128,18 @@ export function CameraRig() {
     const camMode = useGameStore.getState().camera
     s.shakeT += dt
 
+    // --------------------------------------------------------------- replay
+    if (game.replay) {
+      replayCamera(cam, s, game.replay, gfx.fov)
+      return
+    }
+    if (s.replayCam) {
+      // back from a replay: whoever's driver the onboard camera hid is shown again, the view cuts
+      for (const c of game.cars) carPoses.get(c.id)?.model?.setVisibleParts({ body: true, interior: true, driver: true })
+      s.replayCam = s.replayFocus = ''
+      s.drive.reset()
+      cameraCut.frames = 3
+    }
     // --------------------------------------------------------------- team race: TV broadcast
     if (mode === 'team') {
       broadcastCamera(cam, dt, cameraFocus)
@@ -239,114 +251,336 @@ export function CameraRig() {
     }
 
     // --------------------------------------------------------------- driving cameras
-    const lookBack = input.lookBack()
-    const side = input.lookSide()
-    const heading = Math.atan2(_fwd.x, _fwd.z)
-    const velHeading = speed > 3 ? Math.atan2(v.vel.x, v.vel.z) : heading
-    if (!s.initialized || s.lastMode !== camMode) {
-      s.yaw = heading
-      s.pitch = 0
-      s.initialized = true
-      cameraCut.frames = 3
-    }
-    s.lastMode = camMode
-    // camera yaw blends between heading and velocity (shows the slide angle)
-    let targetYaw = heading + angleDiff(velHeading, heading) * clamp(speed / 30, 0, 1) * 0.45
-    if (lookBack) targetYaw += Math.PI
-    targetYaw += side * Math.PI * 0.5
-    if (lookBack !== s.wasLookBack) {
-      cameraCut.frames = 3
-      s.wasLookBack = lookBack
-    }
-    s.yaw += angleDiff(targetYaw, s.yaw) * clamp(dt * (lookBack || side ? 30 : 7.5), 0, 1)
-    const fwdPitch = Math.asin(clamp(_fwd.y, -0.5, 0.5))
-    s.pitch += (fwdPitch * 0.7 - s.pitch) * clamp(dt * 4, 0, 1)
-
-    const shakeAmt = gfx.cameraShake
-    const kerb = v.wheels.reduce((a, w) => a + (w.surface === 1 || w.surface === 2 || w.surface === 3 ? 1 : 0), 0) / 4
-    const road = Math.pow(clamp(speed / 85, 0, 1), 2)
-    const t = s.shakeT
-    const shakeMag = (road * 0.006 + kerb * 0.018 + v.scrape * 0.03) * shakeAmt
-    const shx = (valueNoise2(t * 31, 1.3) - 0.5) * shakeMag,
-      shy = (valueNoise2(t * 37, 7.1) - 0.5) * shakeMag
-
-    // FOV: widen with speed (sense of speed), small kick on acceleration
-    const kg = 1 - Math.exp(-dt / 0.25)
-    s.gLong += (clamp(v.accelLong, -2, 2) - s.gLong) * kg
-    s.gLat += (clamp(v.accelLat, -2.5, 2.5) - s.gLat) * kg
-    s.fovKick += (clamp(s.gLong, -1.5, 1) * 2.2 - s.fovKick) * clamp(dt * 3, 0, 1)
-    const speedFov = 13 * Math.pow(clamp((speed - 8) / 80, 0, 1), 1.2)
-
     const model = pose.model
-    const inside = camMode === 'cockpit' || camMode === 'hood' || camMode === 'bumper'
+    const lookBack = input.lookBack()
     model?.setVisibleParts({ body: camMode !== 'hood' && camMode !== 'bumper', interior: true, driver: camMode !== 'cockpit' || lookBack })
+    const car = s.car
+    car.pos.copy(carPos)
+    car.quat.copy(carQ)
+    car.vel.set(v.vel.x, v.vel.y, v.vel.z)
+    car.speed = speed
+    car.accelLong = v.accelLong
+    car.accelLat = v.accelLat
+    car.kerb = v.wheels.reduce((a, w) => a + (w.surface === 1 || w.surface === 2 || w.surface === 3 ? 1 : 0), 0) / 4
+    car.scrape = v.scrape
+    const r = s.drive.update(cam, car, dt, { mode: camMode, fov: gfx.fov, shake: gfx.cameraShake, lookBack, side: input.lookSide(), model })
+    if (r.cut) cameraCut.frames = 3
+    cameraFocus.copy(carPos)
+  }, -2)
 
-    if (!inside || lookBack) {
-      const near = camMode === 'chaseNear'
-      const dist = (near ? 4.6 : 6.2) + clamp(s.gLong, -1.5, 1.2) * 0.22 + speed * 0.004
+  return null
+}
+
+// ------------------------------------------------------------------------------- replay cameras
+
+/**
+ * Replays: the TV director (broadcastCam.ts, shots chosen from the recording) or a chase / onboard
+ * camera on the car being followed. Camera time is replay time, so a paused replay holds its shot and
+ * the springs and the operator's pans keep their pace at any playback speed. A jump in the recording,
+ * a change of camera or of the car followed is a cut (no blur across it, fresh TAA history).
+ */
+function replayCamera(cam: THREE.PerspectiveCamera, s: { replayDrive: DriveCamera; replayCam: string; replayFocus: string; car: DriveCarState }, rp: ReplayPlayer, fov: number) {
+  const adv = rp.lastAdvance
+  const focus = rp.cam === 'tv' ? rp.tvFocus : rp.focus
+  const cut = rp.jumped || s.replayCam !== rp.cam || s.replayFocus !== focus
+  s.replayCam = rp.cam
+  s.replayFocus = focus
+  rp.jumped = false
+  if (cut) {
+    cameraCut.frames = 3
+    s.replayDrive.reset()
+  }
+  // every car complete, except the driver of the car the onboard camera rides in
+  for (const c of game.cars) carPoses.get(c.id)?.model?.setVisibleParts({ body: true, interior: true, driver: !(rp.cam === 'onboard' && c.id === rp.focus) })
+  if (rp.cam === 'tv') {
+    const laps = rp.replay.header.laps
+    const lead = rp.views.find((v) => v.position === 1)
+    const field: ReplayField = {
+      cars: rp.views.map((v) => ({ id: v.id, position: v.position, s: v.s, distance: v.distance, speed: v.speed, finished: v.finished, incident: v.sliding || v.offTrack, isPlayer: v.isPlayer })),
+      now: rp.t,
+      raceTime: rp.replay.goAt >= 0 ? rp.raceTime : 1e3,
+      lastLap: rp.replay.header.mode !== 'practice' && !!lead && lead.lap >= laps - 1,
+      focus,
+      jumped: cut,
+    }
+    replayBroadcast(cam, adv, cameraFocus, field)
+    return
+  }
+  const e = game.cars.find((c) => c.id === rp.focus) ?? game.cars[0]
+  const pose = e && carPoses.get(e.id)
+  if (!pose) return
+  const v = e.sim.vehicle
+  const car = s.car
+  car.pos.copy(pose.pos)
+  car.quat.copy(pose.quat)
+  car.vel.set(v.vel.x, v.vel.y, v.vel.z)
+  car.speed = v.speed
+  car.accelLong = v.accelLong
+  car.accelLat = v.accelLat
+  car.kerb = v.wheels.reduce((a, w) => a + (w.surface === 1 || w.surface === 2 || w.surface === 3 ? 1 : 0), 0) / 4
+  car.scrape = v.scrape
+  const r = s.replayDrive.update(cam, car, adv, { mode: rp.cam === 'onboard' ? 'cockpit' : 'chase', fov, shake: 0, lookBack: false, side: 0, model: pose.model })
+  if (r.cut) cameraCut.frames = 3
+  cameraFocus.copy(pose.pos)
+}
+
+// ------------------------------------------------------------------------------- driving cameras
+
+/** Critically damped spring with an exact step: the same motion at any frame rate. */
+export class Spring {
+  x = 0
+  v = 0
+  reset(x: number) {
+    this.x = x
+    this.v = 0
+    return x
+  }
+  /**
+   * omega: natural frequency (rad/s); settles to the target in about 4.7 / omega seconds.
+   * targetVel: how fast the target itself moves (feed-forward): a steadily moving target (a road
+   * climbing, a car turning) is followed without lag, and only what moves on top of that is smoothed.
+   */
+  step(target: number, omega: number, dt: number, targetVel = 0) {
+    // in the frame moving with the target (where it was at the start of the step)
+    const d = this.x - (target - targetVel * dt)
+    const dv = this.v - targetVel
+    const e = Math.exp(-omega * dt)
+    const t = (dv + omega * d) * dt
+    this.x = target + (d + t) * e
+    this.v = targetVel + (dv - omega * t) * e
+    return this.x
+  }
+}
+
+/** What the driving cameras need from the car (its interpolated pose and a little telemetry). */
+export interface DriveCarState {
+  pos: THREE.Vector3
+  quat: THREE.Quaternion
+  vel: THREE.Vector3
+  /** m/s */
+  speed: number
+  /** g */
+  accelLong: number
+  accelLat: number
+  /** share of the wheels on kerbs, grass or gravel */
+  kerb: number
+  /** body scraping the ground 0..1 */
+  scrape: number
+}
+
+export function makeDriveCarState(): DriveCarState {
+  return { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), vel: new THREE.Vector3(), speed: 0, accelLong: 0, accelLat: 0, kerb: 0, scrape: 0 }
+}
+
+export interface DriveCamOptions {
+  mode: DriveCam
+  /** base field of view (deg) */
+  fov: number
+  /** camera shake setting 0..1 */
+  shake: number
+  lookBack: boolean
+  /** -1 look left, 1 look right */
+  side: number
+  /** the car's model, for the eye positions of the in-car cameras */
+  model?: { cockpitEye: THREE.Vector3; bodyOffset: THREE.Vector3; body: { zFront: number } }
+}
+
+/** Chase camera tuning (measured with scripts/feel/camera.ts). */
+export const CHASE = {
+  /** yaw follows the car's heading (rad/s natural frequency): a slight lag shows rotation */
+  yawW: 7,
+  /** share of the heading's turn rate fed forward: the rest lags (in a 60 deg/s hairpin by 2 x 0.5 x 60 / yawW = 8.6 deg) */
+  yawFF: 0.5,
+  /** share of the slide angle (heading vs velocity) the camera turns with: slides show on screen */
+  slipShare: 0.4,
+  /** vertical follow of the camera's position: kerbs and bumps do not jolt the frame */
+  heightW: 4,
+  /**
+   * share of the car's own (unsmoothed) vertical motion the aim follows: all of it, so the car stays
+   * put on screen; with the position smoothed that takes a rotation of hundredths of a degree
+   */
+  aimRaw: 1,
+  /** road pitch follow and its share (the body's dive and squat are not the road's slope) */
+  pitchW: 2.2,
+  pitchShare: 0.8,
+  /** distance and lateral offset from g forces */
+  gW: 2.5,
+  /** extra field of view (deg) at full speed, reached around 250 km/h */
+  speedFov: 4,
+  fovW: 2.5,
+}
+
+const _cv = new THREE.Vector3(),
+  _cl = new THREE.Vector3(),
+  _cf = new THREE.Vector3(),
+  _cs = new THREE.Vector3()
+
+/**
+ * The player's driving cameras: chase (far / near) and the in-car views (cockpit, hood, bumper).
+ * Pure (no React, no renderer): CameraRig runs it every frame, scripts/feel/camera.ts headlessly.
+ *
+ * Chase: every degree of freedom is a critically damped spring, so nothing overshoots and the motion
+ * is the same at any frame rate. The frame follows the car's heading with a slight lag and turns with
+ * part of a slide (the slide shows as the car's angle on screen); the car's vertical motion and the
+ * road's pitch are smoothed, so kerbs and bumps move the car a little inside a steady frame instead
+ * of jolting the frame; the field of view opens only a little with speed. Shake (kerbs, scraping) is a
+ * small translation added after markCameraPath, so it never blurs and never rotates the world.
+ *
+ * In-car: rigidly on the chassis (the cockpit stays sharp in the motion blur), head sway from g forces.
+ */
+export class DriveCamera {
+  private init = false
+  private lastMode = ''
+  private wasLookBack = false
+  private lastSide = 0
+  private yaw = new Spring()
+  private height = new Spring()
+  private pitch = new Spring()
+  private dist = new Spring()
+  private lat = new Spring()
+  private fov = new Spring()
+  private gLong = new Spring()
+  private gLat = new Spring()
+  private headX = new Spring()
+  private headY = new Spring()
+  private t = 0
+  /** the car's vertical speed and the heading's turn rate, smoothed (feed-forward of the springs) */
+  private vy = 0
+  private yawRate = 0
+  private prevYawTarget = 0
+  /** the camera's path this frame (before shake), for tests */
+  readonly pathPos = new THREE.Vector3()
+
+  reset() {
+    this.init = false
+  }
+
+  update(cam: THREE.PerspectiveCamera, car: DriveCarState, dt: number, o: DriveCamOptions): { cut: boolean } {
+    const A = CHASE
+    this.t += dt
+    _cf.set(0, 0, 1).applyQuaternion(car.quat)
+    const heading = Math.atan2(_cf.x, _cf.z)
+    const velHeading = car.speed > 3 ? Math.atan2(car.vel.x, car.vel.z) : heading
+    const roadPitch = Math.asin(clamp(_cf.y, -0.5, 0.5)) * A.pitchShare
+    let yawTarget = heading + angleDiff(velHeading, heading) * A.slipShare * smooth01((car.speed - 3) / 22)
+    if (o.lookBack) yawTarget += Math.PI
+    yawTarget += o.side * Math.PI * 0.5
+    const inside = (o.mode === 'cockpit' || o.mode === 'hood' || o.mode === 'bumper') && !o.lookBack
+    const near = o.mode === 'chaseNear'
+    const speedFov = A.speedFov * smooth01((car.speed - 8) / 62)
+    // a new view (mode, looking back or sideways) is a cut: every spring starts where it should be
+    let cut = false
+    if (!this.init || this.lastMode !== o.mode || this.wasLookBack !== o.lookBack || this.lastSide !== o.side) {
+      cut = true
+      this.init = true
+      this.yaw.reset(yawTarget)
+      this.height.reset(car.pos.y)
+      this.pitch.reset(roadPitch)
+      this.dist.reset((near ? 4.6 : 6.2) + car.speed * 0.004)
+      this.lat.reset(0)
+      this.vy = car.vel.y
+      this.yawRate = 0
+      this.prevYawTarget = yawTarget
+      this.gLong.reset(clamp(car.accelLong, -2, 2))
+      this.gLat.reset(clamp(car.accelLat, -2.5, 2.5))
+      this.headX.reset(0)
+      this.headY.reset(0)
+      this.fov.reset(inside ? o.fov + (o.mode === 'cockpit' ? 12 : 4) + speedFov * 0.5 : o.fov + speedFov)
+    }
+    this.lastMode = o.mode
+    this.wasLookBack = o.lookBack
+    this.lastSide = o.side
+    // g forces, smoothed (the physics values change abruptly from step to step: gear changes, kerbs)
+    const gl = this.gLong.step(clamp(car.accelLong, -2, 2), A.gW * 1.6, dt)
+    const gt = this.gLat.step(clamp(car.accelLat, -2.5, 2.5), A.gW * 1.6, dt)
+    // shake: kerbs, gravel and scraping only; the chase camera has no road buzz
+    const t = this.t
+    const shakeMag = (car.kerb * 0.006 + car.scrape * 0.02) * o.shake
+    const shx = (valueNoise2(t * 11, 1.3) - 0.5) * shakeMag,
+      shy = (valueNoise2(t * 13, 7.1) - 0.5) * shakeMag
+
+    if (!inside) {
+      // the road's climb and the car's turning are followed without lag; bumps and kerbs, and part
+      // of the turn rate, are smoothed
+      const lp = (tau: number) => 1 - Math.exp(-dt / tau)
+      this.vy += (car.vel.y - this.vy) * lp(0.3)
+      if (dt > 0) this.yawRate += (angleDiff(yawTarget, this.prevYawTarget) / dt - this.yawRate) * lp(0.12)
+      this.prevYawTarget = yawTarget
+      const yaw = this.yaw.step(this.yaw.x + angleDiff(yawTarget, this.yaw.x), A.yawW, dt, this.yawRate * A.yawFF)
+      const y = this.height.step(car.pos.y, A.heightW, dt, this.vy)
+      const pitch = this.pitch.step(roadPitch, A.pitchW, dt)
+      const dist = this.dist.step((near ? 4.6 : 6.2) + clamp(gl, -1.5, 1.2) * 0.22 + car.speed * 0.004, A.gW, dt)
+      const lat = this.lat.step(clamp(gt, -2, 2) * 0.12, A.gW, dt)
       const height = near ? 1.35 : 1.75
-      const cy = Math.cos(s.yaw),
-        sy = Math.sin(s.yaw)
-      _v.set(carPos.x - sy * dist, carPos.y + height + Math.sin(-s.pitch) * dist * 0.5, carPos.z - cy * dist)
-      // lateral g pushes the camera slightly outwards
-      const lat = clamp(s.gLat, -2, 2) * 0.12
-      _v.x += cy * lat
-      _v.z += -sy * lat
-      // keep above terrain / road
-      const minY = carPos.y + 0.6
-      if (_v.y < minY) _v.y = minY
-      cam.position.copy(_v)
-      _look.set(carPos.x + sy * 3.0, carPos.y + (near ? 0.75 : 0.95), carPos.z + cy * 3.0)
+      const cy = Math.cos(yaw),
+        sy = Math.sin(yaw)
+      // behind the car along the (smoothed) road slope, pushed slightly out by lateral g
+      _cv.set(car.pos.x - sy * dist + cy * lat, y + height - Math.sin(pitch) * dist, car.pos.z - cy * dist - sy * lat)
+      if (_cv.y < car.pos.y + 0.6) _cv.y = car.pos.y + 0.6
+      const aimY = y + (car.pos.y - y) * A.aimRaw + (near ? 0.75 : 0.95)
+      _cl.set(car.pos.x + sy * 3.0, aimY + Math.sin(pitch) * 3.0, car.pos.z + cy * 3.0)
+      cam.position.copy(_cv)
       cam.up.set(0, 1, 0)
-      cam.lookAt(_look)
+      cam.lookAt(_cl)
       // the camera's path ends here; the shake on top of it does not blur
       markCameraPath(cam)
-      cam.position.x += shx
+      this.pathPos.copy(cam.position)
+      // the shake moves the camera (no rotation: the horizon never shakes)
+      cam.position.x += cy * shx
+      cam.position.z -= sy * shx
       cam.position.y += shy
-      cam.lookAt(_look)
-      setFov(cam, gfx.fov + speedFov + s.fovKick, dt)
+      const fovT = o.fov + speedFov + clamp(gl, -1.5, 1) * 0.8
+      cam.fov = this.fov.step(fovT, A.fovW, dt)
       cam.near = 0.1
-      cameraFocus.copy(carPos)
-      return
+      cam.far = 12000
+      cam.updateProjectionMatrix()
+      return { cut }
     }
 
     // in-car cameras: rigidly attached to the chassis, head motion from g forces
-    const eye = model ? model.cockpitEye : _v2.set(0.36, 0.55, -0.3)
+    const model = o.model
+    const eye = model ? model.cockpitEye : _cs.set(0.36, 0.55, -0.3)
     let lx = eye.x,
       ly = eye.y,
       lz = eye.z
-    if (camMode === 'hood') {
+    if (o.mode === 'hood') {
       lx = 0
       ly = eye.y + 0.12
       lz = (model?.bodyOffset.z ?? 0) + (model?.body.zFront ?? 2) * 0.35
-    } else if (camMode === 'bumper') {
+    } else if (o.mode === 'bumper') {
       lx = 0
       ly = (model?.bodyOffset.y ?? -0.4) + 0.42
       lz = (model?.bodyOffset.z ?? 0) + (model?.body.zFront ?? 2.3) - 0.05
     }
-    // head sway (cockpit only)
-    const k = camMode === 'cockpit' ? 1 : 0.15
-    s.headX += (clamp(s.gLat, -2.5, 2.5) * 0.022 * k - s.headX) * clamp(dt * 8, 0, 1)
-    s.headY += (clamp(-s.gLong, -2, 2) * 0.012 * k - s.headY) * clamp(dt * 8, 0, 1)
-    _v.set(lx + s.headX, ly, lz + s.headY)
-    _v.applyQuaternion(carQ).add(carPos)
-    cam.position.copy(_v)
-    cam.quaternion.copy(carQ)
+    // head sway (cockpit only): the head leans with the g forces, settling without bounce
+    const k = o.mode === 'cockpit' ? 1 : 0.15
+    const hx = this.headX.step(clamp(gt, -2.5, 2.5) * 0.022 * k, 9, dt)
+    const hy = this.headY.step(clamp(-gl, -2, 2) * 0.012 * k, 9, dt)
+    _cv.set(lx + hx, ly, lz + hy)
+    _cv.applyQuaternion(car.quat).add(car.pos)
+    cam.position.copy(_cv)
+    cam.quaternion.copy(car.quat)
     // three cameras look down -z; the car faces +z
-    cam.rotateY(Math.PI + side * Math.PI * 0.5)
-    cam.rotateZ(-s.headX * 0.8 * k)
+    cam.rotateY(Math.PI + o.side * Math.PI * 0.5)
+    cam.rotateZ(-hx * 0.8 * k)
     cam.rotateX(-0.03)
     // the camera's path ends here (it rides with the chassis, so the cockpit stays sharp); the shake
     // on top of it does not blur
     markCameraPath(cam)
-    cam.position.add(_sh.set(0, shy * 0.6, 0).applyQuaternion(carQ))
-    cam.rotateX(shx * 0.5)
-    setFov(cam, (camMode === 'cockpit' ? gfx.fov + 12 : gfx.fov + 4) + speedFov * 0.6, dt)
+    this.pathPos.copy(cam.position)
+    cam.position.add(_cs.set(0, shy * 0.6, 0).applyQuaternion(car.quat))
+    cam.rotateX(shx * 0.3)
+    cam.fov = this.fov.step((o.mode === 'cockpit' ? o.fov + 12 : o.fov + 4) + speedFov * 0.5, A.fovW, dt)
     cam.near = 0.04
+    cam.far = 12000
     cam.updateProjectionMatrix()
-  }, -2)
+    return { cut }
+  }
+}
 
-  return null
+function smooth01(x: number) {
+  const t = clamp(x, 0, 1)
+  return t * t * (3 - 2 * t)
 }
 
 function setFov(cam: THREE.PerspectiveCamera, fov: number, dt: number) {

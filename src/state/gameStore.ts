@@ -33,6 +33,9 @@ interface GameUIState {
   rendererInfo: string
   /** first fatal GPU/renderer error of this page load */
   gpuError: string
+  /** watching the session's replay, and where it was opened from (where it goes back to) */
+  replaying: boolean
+  replayFrom: 'pause' | 'results'
   setScreen: (s: Screen) => void
   back: () => void
   setPaused: (p: boolean) => void
@@ -65,6 +68,8 @@ export const useGameStore = create<GameUIState>()(
       sceneReady: false,
       rendererInfo: '',
       gpuError: '',
+      replaying: false,
+      replayFrom: 'pause',
       setScreen: (s) => set({ previous: get().screen, screen: s }),
       back: () => set({ screen: get().previous === get().screen ? 'home' : get().previous }),
       setPaused: (p) => set({ paused: p }),

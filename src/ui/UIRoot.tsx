@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { audio } from '../audio/audio'
 import { game } from '../game/game'
-import { quitToMenu, restartSession, startAttract } from '../game/session'
+import { exitReplay, quitToMenu, restartSession, startAttract, watchReplay } from '../game/session'
 import { input } from '../input/input'
 import { net, useNet } from '../net/client'
 import { useGameStore } from '../state/gameStore'
@@ -9,6 +9,7 @@ import { useSettings } from '../state/settings'
 import { switchToWebGL } from '../render/gpuHealth'
 import { Btn, fmtTime } from './components'
 import { HUD } from './hud/HUD'
+import { cycleReplayCamera, ReplayOverlay } from './hud/Replay'
 import { Telemetry } from './hud/Telemetry'
 import { Garage } from './screens/Garage'
 import { Home, Title } from './screens/Home'
@@ -143,6 +144,7 @@ function PauseMenu() {
         >
           Reset car to track
         </Btn>
+        {!online && (game.recorder?.replay.count ?? 0) > 30 && <Btn onClick={() => watchReplay('pause')}>Watch replay</Btn>}
         <Btn onClick={() => g.cycleCamera()}>Camera: {g.camera}</Btn>
         <Btn onClick={() => setSettings(true)}>Settings</Btn>
         <Btn ghost sound="back" onClick={quitToMenu}>
@@ -153,13 +155,44 @@ function PauseMenu() {
   )
 }
 
+/** The classification: the winner's time, gaps for the other finishers, laps down for lapped cars. */
+export function classification() {
+  const list = game.standings()
+  const winner = list.find((c) => c.timing.finished)
+  const fastest = Math.min(...list.map((c) => (c.timing.best > 0 ? c.timing.best : Infinity)))
+  const L = game.track.length
+  return list.map((c) => {
+    const t = c.timing
+    let time: string
+    if (t.finished && winner) time = c === winner ? fmtTime(t.finishTime) : '+' + gap(t.finishTime - winner.timing.finishTime)
+    else {
+      // still running: laps down only if the winner really is a lap or more ahead
+      const down = winner ? Math.floor((winner.timing.distance - t.distance) / L) : 0
+      time = down >= 1 ? `+${down} lap${down > 1 ? 's' : ''}` : 'On last lap'
+    }
+    return { pos: t.position, name: c.name, time, best: fmtTime(t.best), fastest: t.best > 0 && t.best === fastest, me: c.isPlayer, color: c.color }
+  })
+}
+
+function gap(d: number) {
+  if (d < 60) return d.toFixed(3)
+  const m = Math.floor(d / 60)
+  return `${m}:${(d - m * 60).toFixed(3).padStart(6, '0')}`
+}
+
 function Results() {
   const g = useGameStore()
   const netResults = useNet((s) => s.results)
   const online = g.sessionKind === 'online'
+  // the field keeps finishing behind the results
+  const [, tick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => tick((x) => x + 1), 500)
+    return () => clearInterval(id)
+  }, [])
   const rows = online && netResults
-    ? netResults.map((r, i) => ({ pos: i + 1, name: r.name, time: r.dnf ? 'DNF' : fmtTime(r.time), best: fmtTime(r.bestLap), me: r.id === useNet.getState().myId, color: game.cars.find((c) => c.id === r.id)?.color ?? '#e4002b' }))
-    : game.standings().map((c) => ({ pos: c.timing.position, name: c.name, time: c.timing.finished ? fmtTime(c.timing.finishTime) : '+' + Math.max(0, game.totalLaps - c.timing.lap) + ' lap', best: fmtTime(c.timing.best), me: c.isPlayer, color: c.color }))
+    ? netResults.map((r, i) => ({ pos: i + 1, name: r.name, time: r.dnf ? 'DNF' : fmtTime(r.time), best: fmtTime(r.bestLap), fastest: false, me: r.id === useNet.getState().myId, color: game.cars.find((c) => c.id === r.id)?.color ?? '#e4002b' }))
+    : classification()
   const me = rows.find((r) => r.me)
   return (
     <div className="overlay">
@@ -187,13 +220,16 @@ function Results() {
                     {r.name}
                   </td>
                   <td className="num">{r.time}</td>
-                  <td className="num">{r.best}</td>
+                  <td className="num" style={r.fastest ? { color: 'var(--purple)', fontWeight: 700 } : undefined} title={r.fastest ? 'Fastest lap' : undefined}>
+                    {r.best}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
         <div style={{ padding: '0 24px 22px', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          {!online && (game.recorder?.replay.count ?? 0) > 30 && <Btn onClick={() => watchReplay('results')}>Watch replay</Btn>}
           {!online && <Btn onClick={restartSession}>Race again</Btn>}
           {online && (
             <Btn
@@ -216,6 +252,7 @@ function Results() {
 
 function Driving() {
   const paused = useGameStore((s) => s.paused)
+  const replaying = useGameStore((s) => s.replaying)
   const [finished, setFinished] = useState(false)
   const netResults = useNet((s) => s.results)
   useEffect(() => {
@@ -227,6 +264,7 @@ function Driving() {
   }, [])
   const showResults = finished || (useGameStore.getState().sessionKind === 'online' && !!netResults)
   const onTeamComplete = useCallback(() => setFinished(true), [])
+  if (replaying) return <ReplayOverlay />
   if (game.mode === 'team')
     return (
       <>
@@ -254,6 +292,11 @@ export function UIRoot() {
     () =>
       input.on((a) => {
         const g = useGameStore.getState()
+        if (g.replaying) {
+          if (a === 'pause') exitReplay()
+          if (a === 'camera') cycleReplayCamera()
+          return
+        }
         if (a === 'pause') {
           if (g.screen === 'driving') {
             g.set({ paused: !g.paused })
@@ -289,6 +332,9 @@ export function UIRoot() {
       }),
     [],
   )
+
+  // the replay flag follows the game (a new session ends a replay)
+  useEffect(() => game.on((e) => e.type === 'replay' && useGameStore.getState().replaying !== e.on && useGameStore.getState().set({ replaying: e.on })), [])
 
   // online: the server's countdown starts the race for everybody in the room
   useEffect(() => {

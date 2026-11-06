@@ -21,6 +21,7 @@ export function startShowroom() {
 
 export function startDriving(kind: 'practice' | 'race') {
   const g = useGameStore.getState()
+  if (g.replaying) g.set({ replaying: false })
   if (g.sessionHour !== null) g.set({ sessionHour: null })
   const c = g.career
   audio.resume()
@@ -50,9 +51,12 @@ export function restartSession() {
   startDriving(kind)
 }
 
+export { exitReplay, watchReplay } from './replayFlow'
+
 export function quitToMenu() {
   if (useGameStore.getState().sessionKind === 'online') net.leave()
-  useGameStore.getState().set({ paused: false })
+  game.endReplay()
+  useGameStore.getState().set({ paused: false, replaying: false })
   startAttract()
   useGameStore.getState().setScreen('home')
 }
