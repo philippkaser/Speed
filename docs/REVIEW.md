@@ -35,3 +35,25 @@ See the sections below (filled in as each part lands) and the commit history on 
 - **HDR output** (opt-in, WebGPU): an extended-range half-float canvas on HDR displays. The tone curve is re-targeted to the display's peak (`toneCurveHDR`) so shadows and mid-tones land exactly where SDR puts them and only the shoulder opens up. Peak and paper-white sliders. Tested in `tests/camera.test.ts`. It could not be checked on a real HDR display here.
 - **Physical depth of field** for the cinematic cameras only (menu backdrop, showroom, TV broadcast, `lensDof.force` for replays): the circle of confusion of a real lens (focal length from the field of view on a full-frame sensor, an f-number, auto-focus on the car in focus). The driving cameras never get it.
 - In-game overlay (Settings → Show frame rate): fps, GPU ms per frame (timestamp queries) and internal → output resolution.
+
+### Measured after merging the first round (High, 960x540, same views as the baseline)
+
+| | Before | After |
+|---|---|---|
+| Practice, chase cam: draw calls | 635 | 317 |
+| Practice: triangles per frame | 13.0M | 11.0M |
+| Practice: grass triangles | 1.89M | 0.20M (+8k for distant grass cards) |
+| Race grid, 12 cars: draw calls | 2,177 | 423 |
+| Race grid: triangles per frame | 15.9M | 13.3M (still too high: being attributed per pass) |
+
+### World art (first round)
+Pit building with a glazed curtain wall, mullions, a control tower, a cantilevered roof and team boards over the garages; a grandstand with a steel-truss cantilever roof and a dense crowd; floodlight towers; a live timing screen; sponsor boards along the barriers; a start gantry with flags; alpine mountains in 12 sectors with real silhouettes, rock and snow; race tarmac with sealant lines, tar snakes and patching; grass in two levels of detail (meshes near, cards far) and denser forests with a forest floor.
+
+### Gameplay (first round)
+- Drive feel measured with a headless harness (`scripts/feel-probe.ts`, `tests/feel.test.ts`): keyboard and pad pipelines rebuilt, and a steering assist that damps yaw instead of feeding it.
+- The chase camera runs on critically damped springs (`tests/drivecam.test.ts`): a steady frame, the car still on screen, +4 degrees of FOV at speed (was +13).
+- **Replays:** every car recorded at 30 Hz in compact typed arrays and played back without physics. The TV director picks shots from the recording, plus chase and onboard cameras on any car, a broadcast overlay and transport controls. Watch from the pause menu or the results screen (`tests/replay.test.ts`).
+- Results show gaps to the winner, laps down only when really lapped, and the fastest lap, live as the field finishes.
+
+### Performance (first round)
+Baked car levels of detail built for draw calls, one level-of-detail decision per car, cheap shadow and probe versions, cars left out of cascades their shadow cannot reach, the far cascades drawing the cars' far level, reflection probes without grass and with one matrix update for all faces, skid marks drawn only where laid, car textures on a texel-density budget, and car models loaded in order of need. `scripts/perf-probe.cjs` reports draw calls, triangles and render CPU time per pass.
