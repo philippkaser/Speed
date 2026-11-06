@@ -37,6 +37,7 @@ import {
   screenCoordinate,
   sin,
   smoothstep,
+  step,
   texture,
   uniform,
   uniformArray,
@@ -103,7 +104,9 @@ function placeTrees(track: Track, heights: TerrainHeight, density: number) {
   const conifers: number[] = []
   const broad: number[] = []
   const margin = 560
-  const step = 11 / Math.sqrt(Math.max(density, 0.1))
+  // forests: closed canopies in their cores (a tree every ~8 m), thinning out to the edges and to
+  // scattered trees in the meadows
+  const step = 8 / Math.sqrt(Math.max(density, 0.1))
   const s = heights.sample
   for (let z = track.minZ - margin; z < track.maxZ + margin; z += step) {
     s.hint = -1
@@ -119,7 +122,7 @@ function placeTrees(track: Track, heights: TerrainHeight, density: number) {
       if (ad < wall + 14 + r() * 10) continue
       // keep the inside of the start straight clear for the grandstands & pits
       if ((s.s > track.length - 420 || s.s < 460) && ad < wall + 90) continue
-      if (r() > (forest - 0.4) * 2.2) continue
+      if (r() > Math.min(1, (forest - 0.46) * 7) ** 1.5 * 0.92 + 0.04) continue
       const y = heights.height(px, pz)
       const conifer = valueNoise2(px * 0.004, pz * 0.004) > 0.45
       const scale = conifer ? 0.72 + r() * 0.6 : 0.58 + r() * 0.42
@@ -167,6 +170,65 @@ function placeGrass(track: Track, density: number) {
   }
   void DS
   return new Float32Array(out)
+}
+
+/**
+ * The grass's far level of detail: three crossed cards per patch, each showing one of the clump
+ * billboards Poly Haven ships in the grass atlas (the bottom of grass.webp). 6 triangles instead of the
+ * patch's 1800; same instances, same material (ground colour, canopy shading, wind by height).
+ */
+function grassCards() {
+  // sprite rectangles in the atlas, pixels from the top-left of the 1024 x 1024 image
+  const sprites: [number, number, number, number][] = [
+    [201, 770, 499, 902],
+    [599, 778, 839, 890],
+    [26, 905, 205, 1016],
+    [240, 914, 519, 1016],
+    [590, 888, 808, 1016],
+  ]
+  const pos: number[] = [],
+    nrm: number[] = [],
+    uvs: number[] = [],
+    wind: number[] = [],
+    idx: number[] = []
+  const H = 0.4
+  const cards: [number, number, number, number][] = [
+    // sprite, angle, offset x, offset z
+    [0, 0.2, -0.15, 0.1],
+    [3, 1.25, 0.2, -0.1],
+    [4, 2.3, 0.0, 0.25],
+  ]
+  for (const [si, ang, ox, oz] of cards) {
+    const [x0, y0, x1, y1] = sprites[si]
+    const w = (H * (x1 - x0)) / (y1 - y0)
+    const c = Math.cos(ang),
+      s = Math.sin(ang)
+    const base = pos.length / 3
+    for (const [u, v] of [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
+    ]) {
+      const lx = (u - 0.5) * w
+      pos.push(ox + lx * c, v * H, oz + lx * s)
+      // lit mostly from above, like the patches' blades
+      const nx = -s * 0.45,
+        nz = c * 0.45
+      const l = Math.hypot(nx, 0.9, nz)
+      nrm.push(nx / l, 0.9 / l, nz / l)
+      uvs.push((x0 + u * (x1 - x0)) / 1024, (y1 - v * (y1 - y0)) / 1024)
+      wind.push(v, 1)
+    }
+    idx.push(base, base + 1, base + 2, base, base + 2, base + 3)
+  }
+  const g = new THREE.BufferGeometry()
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3))
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  g.setAttribute('wind', new THREE.Float32BufferAttribute(wind, 2))
+  g.setIndex(idx)
+  return g
 }
 
 // ------------------------------------------------------------------------------------- cells
@@ -241,6 +303,12 @@ interface LayerOpts {
   probeRange: number
   /** share of a cell's instances drawn at a distance (1: all); far grass thins out */
   keep?: (dist: number) => number
+  /**
+   * per-instance draw distance (m, on-screen terms): only instances this close are packed (the near
+   * level of detail of the grass). The cells near the camera are few, so this is cheap; the buffer is
+   * re-packed as the camera moves.
+   */
+  instanceRange?: number
 }
 
 /** One kind of vegetation: one mesh, one draw call; per-frame cell culling into the instance buffer. */
@@ -329,7 +397,9 @@ class VegLayer {
       list.push({ i, d: Math.max(0, d) })
     }
     list.sort((p, q) => p.d - q.d)
-    const key = list.map((x) => x.i).join(',')
+    const range = this.o.instanceRange ? this.o.instanceRange / lensOf(camera) : 0
+    // the near layer re-packs when the camera has moved half a metre
+    const key = list.map((x) => x.i).join(',') + (range ? `|${Math.round(_cp.x * 2)},${Math.round(_cp.y * 2)},${Math.round(_cp.z * 2)},${range.toFixed(1)}` : '')
     if (key === this.key) return
     this.key = key
     const A = this.a.array as Float32Array,
@@ -338,11 +408,18 @@ class VegLayer {
     this.prefixCount.length = 0
     this.prefixDist.length = 0
     const lens = lensOf(camera)
+    const r2 = (range + 0.8) * (range + 0.8)
     for (const { i, d } of list) {
       const c = this.cells[i]
       const count = this.o.keep ? Math.ceil(c.count * Math.min(1, this.o.keep(d * lens))) : c.count
       for (let k = 0; k < count; k++) {
         const s = (c.start + k) * STRIDE
+        if (range) {
+          const dx = this.data[s] - _cp.x,
+            dy = this.data[s + 1] - _cp.y,
+            dz = this.data[s + 2] - _cp.z
+          if (dx * dx + dy * dy + dz * dz > r2) continue
+        }
         A[n * 4] = this.data[s]
         A[n * 4 + 1] = this.data[s + 1]
         A[n * 4 + 2] = this.data[s + 2]
@@ -395,15 +472,20 @@ interface WindOpts {
 }
 
 /** The instance transform (yaw, scale) with wind, for this frame and (positionPrevious) the last. */
-function instanceTransform(wind: WindOpts, shrink?: N) {
+function instanceTransform(wind: WindOpts, shrink?: N, scaleAll?: N, widen?: N) {
   const iA: N = attribute('iA', 'vec4'),
     iB: N = attribute('iB', 'vec4'),
     w: N = attribute('wind', 'vec2')
   const yaw = iA.w,
-    sc = iB.x,
     phase = iB.w
+  let sc: N = iB.x
   let sy: N = iB.y
   if (shrink) sy = sy.mul(shrink)
+  if (scaleAll) {
+    sc = sc.mul(scaleAll)
+    sy = sy.mul(scaleAll)
+  }
+  if (widen) sc = sc.mul(widen)
   const cs = cos(yaw),
     sn = sin(yaw)
   const rot = (v: N) => vec3(v.x.mul(cs).sub(v.z.mul(sn)), v.y, v.x.mul(sn).add(v.z.mul(cs)))
@@ -451,6 +533,13 @@ interface VegMaterialOpts {
    * the ground, 1 at the tips) comes from the mesh.
    */
   canopy?: { root: number; selfShadow: number }
+  /**
+   * collapse instances that are fully faded (in or out) to nothing in the vertex shader: no fragments
+   * are shaded only to be discarded (the grass cards overlap the near grass)
+   */
+  collapse?: boolean
+  /** cards: grow wider with distance (0..1 over the fade-out range) as they thin out, keeping cover */
+  widen?: number
 }
 
 function vegMaterial(o: VegMaterialOpts) {
@@ -458,7 +547,13 @@ function vegMaterial(o: VegMaterialOpts) {
   const iA: N = attribute('iA', 'vec4')
   const dist = iA.xyz.sub(vegCam).length().mul(vegLens)
   const fade = smoothstep(o.fadeOut[0], o.fadeOut[1], dist)
-  const tf = instanceTransform(o.wind, o.shrink ? float(1).sub(fade.mul(0.6)) : undefined)
+  let alive: N = undefined
+  if (o.collapse) {
+    alive = step(fade, 0.999)
+    if (o.fadeIn) alive = alive.mul(step(0.001, smoothstep(o.fadeIn[0], o.fadeIn[1], dist)))
+  }
+  const widen: N = o.widen ? float(1).add(smoothstep(o.fadeOut[0] * 0.4, o.fadeOut[1], dist).mul(o.widen)) : undefined
+  const tf = instanceTransform(o.wind, o.shrink ? float(1).sub(fade.mul(0.6)) : undefined, alive, widen)
   m.positionNode = tf.node
   const vFade = varying(fade, 'vVegFade')
   const tex = texture(o.atlas, uv())
@@ -805,8 +900,8 @@ function impostorMaterial(imp: Impostors, fadeIn: [number, number], maxDist: num
 
 // ------------------------------------------------------------------------------------- component
 
-const NEAR_TREES = 220
-const FADE: [number, number] = [180, 220]
+const NEAR_TREES = 170
+const FADE: [number, number] = [140, 170]
 const FAR_TREES = 2600
 
 export function Vegetation({ track, heights }: { track: Track; heights: TerrainHeight }) {
@@ -900,34 +995,45 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
     }
     if (grass && !debugFlag('nograss') && density >= 0.5) {
       const g = placeGrass(track, density)
-      const reach = 24 + 18 * Math.min(density, 1.4)
+      // two levels of detail over the same patches: the modelled clumps near the camera (each instance
+      // packed only while within `near`), crossed cards beyond, out to `reach`, dithered into each other
+      const near = 11 + 3 * Math.min(density, 1.4)
+      const reach = 55 + 25 * Math.min(density, 1.4)
+      const common = {
+        atlas: grass.atlas,
+        wind: { sway: 0.05, flutter: 0.008, speed: 1.6 },
+        alphaTest: 0.4,
+        tintA: new THREE.Color(0.9, 0.95, 0.88),
+        tintB: new THREE.Color(1.04, 1.08, 0.96),
+        groundColour: grassGroundColour,
+        roughTrunk: 0.85,
+        roughLeaf: 0.85,
+        crown: 0,
+        canopy: { root: 0.32, selfShadow: 0.28 },
+        collapse: true,
+      }
+      const opts = { instances: g, height: 0.6, castShadow: false, shadowMargin: 0, probeRange: 0 }
       layers.push(
         new VegLayer({
+          ...opts,
           name: 'grass',
-          instances: g,
           geometry: grass.geometry,
-          material: vegMaterial({
-            atlas: grass.atlas,
-            wind: { sway: 0.05, flutter: 0.008, speed: 1.6 },
-            alphaTest: 0.4,
-            fadeOut: [reach * 0.6, reach],
-            tintA: new THREE.Color(0.9, 0.95, 0.88),
-            tintB: new THREE.Color(1.04, 1.08, 0.96),
-            groundColour: grassGroundColour,
-            roughTrunk: 0.85,
-            roughLeaf: 0.85,
-            crown: 0,
-            canopy: { root: 0.32, selfShadow: 0.28 },
-            shrink: true,
-          }),
+          material: vegMaterial({ ...common, fadeOut: [near - 2.5, near] }),
+          cell: 8,
+          maxDist: near,
+          instanceRange: near,
+        }),
+      )
+      layers.push(
+        new VegLayer({
+          ...opts,
+          name: 'grass-cards',
+          geometry: grassCards(),
+          material: vegMaterial({ ...common, fadeIn: [near - 2.5, near], fadeOut: [reach * 0.72, reach], widen: 0.7 }),
           cell: 24,
           maxDist: reach,
-          height: 0.6,
-          castShadow: false,
-          shadowMargin: 0,
-          probeRange: 0,
-          // full density near the car, thinning out with distance (and shrinking, see the material)
-          keep: (d) => Math.max(0.2, Math.min(1, (16 / Math.max(d, 1)) ** 1.6)),
+          // full density to ~25 m, thinning beyond (the cards widen to keep the cover)
+          keep: (d) => Math.max(0.3, Math.min(1, (26 / Math.max(d, 1)) ** 1.25)),
         }),
       )
       console.info(`[veg] ${g.length / STRIDE} grass patches`)
