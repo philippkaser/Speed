@@ -15,6 +15,8 @@
 //   renderer.backend.draw  every draw: which object, in which pass
 //   renderer.info.reset    the start of a frame (GameCanvas resets the counters first thing)
 //   window.__onFrame       the end of a frame (GameCanvas' capture hook runs after the post chain)
+// env DETAIL=1 also attributes every draw and every render object's preparation time to what is
+// drawn (scene groups, objects, materials): it costs time itself, so compare timings without it.
 // CPU times are main-thread JS (three's render objects, bindings, uniforms, command encoding and the
 // WebGPU wire), meaningful on SwiftShader too; they are noisy on a shared machine: medians are given.
 const { chromium } = require('playwright')
@@ -22,7 +24,7 @@ const fs = require('fs')
 const [base = 'http://localhost:4302', query0 = '?offscreen&webgpu&q=high&race', nFrames = '4', warm = '4', W = '960', H = '540', outJson] = process.argv.slice(2)
 const query = query0 + (query0.includes('perfprobe') ? '' : (query0.includes('?') ? '&' : '?') + 'perfprobe')
 
-function instrument() {
+function instrument(detail) {
   const H = window.__perfHook
   const r = H.renderer
   const info = r.info.render
@@ -118,6 +120,7 @@ function instrument() {
     } finally {
       const ms = performance.now() - t0 - (top ? top.cT - c0 : 0)
       addObject(ms)
+      if (!detail) return
       // the costliest objects to prepare
       const k = passOf().replace(/:face$/, '').replace(/^post:.*/, 'post') + ' | ' + top0(a[0]).detail + ' [' + (a[1]?.name || a[1]?.type || '') + ']'
       cur.objMs[k] = (cur.objMs[k] ?? 0) + ms
@@ -150,6 +153,7 @@ function instrument() {
     const tDraw = performance.now()
     const res = draw0.call(this, ro, inf)
     addDraw(performance.now() - tDraw)
+    if (!detail) return res
     const dd = info.drawCalls - d0,
       dt = info.triangles - t0
     const label = stack.length ? stack[stack.length - 1].label : '(outside)'
@@ -211,7 +215,8 @@ const M = (n) => (n / 1e6).toFixed(2) + 'M'
   await page.waitForFunction(() => window.speed?.store?.getState().sceneReady && window.__perfHook && (window.__frames ?? 0) > 2, null, { timeout: 1200000, polling: 1000 })
   const tReady = Date.now()
   if (process.env.EVAL) await page.evaluate(process.env.EVAL)
-  await page.evaluate(instrument)
+  // DETAIL=1: what every draw is and what each render object costs (adds overhead to the timings)
+  await page.evaluate(instrument, !!process.env.DETAIL)
   // warm-up frames (pipelines compile, probes fill), then the measured ones
   await page.waitForFunction((n) => window.__perfFrames.length >= n, +warm + +nFrames, { timeout: 2400000, polling: 500 })
   const all = await page.evaluate(() => window.__perfFrames)
@@ -242,6 +247,7 @@ const M = (n) => (n / 1e6).toFixed(2) + 'M'
   lines.push(`${'TOTAL'.padEnd(36)} ${fmt(sum(rows, 'calls'))} ${fmt(sum(rows, 'draws'))} ${fmt(M(sum(rows, 'tris')), 9)} ${fmt(sum(rows, 'ms').toFixed(2), 9)}`)
   // categories per pass (last measured frame)
   const last = fr[fr.length - 1]
+  if (process.env.DETAIL) {
   lines.push('')
   lines.push('what is drawn, per pass (last frame): category draws/tris')
   for (const [p, cats] of Object.entries(last.cats).sort((a, b) => order(a[0]) - order(b[0]) || a[0].localeCompare(b[0]))) {
@@ -258,6 +264,7 @@ const M = (n) => (n / 1e6).toFixed(2) + 'M'
   lines.push('')
   lines.push('costliest render objects to prepare (last frame, ms, exclusive of nested passes):')
   for (const [k, v] of Object.entries(last.objMs).sort((a, b) => b[1] - a[1]).slice(0, 25)) lines.push(`  ${fmt(v.toFixed(2), 7)}  ${k}`)
+  }
   lines.push('')
   for (const l of [...new Set(logs)].slice(0, 25)) lines.push('  ' + l)
   console.log(lines.join('\n'))
