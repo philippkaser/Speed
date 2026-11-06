@@ -126,11 +126,10 @@ const wanted = new Set<GltfCarId>()
 const loads = new Map<GltfCarId, Promise<void>>()
 let loader: GLTFLoader | null = null
 
-/** A car with this model is drawn (CarVisual): the model loads before the others. */
+/** A car uses this model (the session, CarVisual): it starts loading now, before the others. */
 export function requestCarModel(id: GltfCarId) {
   wanted.add(id)
-  // the session can change after the first load (a race after practice): load it now
-  if (loader) loadModel(id)
+  loadModel(id)
 }
 
 function loadModel(id: GltfCarId): Promise<void> {
