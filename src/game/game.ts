@@ -14,6 +14,7 @@ import { useSettings } from '../state/settings'
 import { Track } from '../track/track'
 import { getTrackDef } from '../track/trackDef'
 import type { GltfCarId } from '../car/gltfCars'
+import { ReplayPlayer, ReplayRecorder } from './replay'
 
 /** bodywork of the GT3 field, in turn */
 const GT3_FIELD: GltfCarId[] = ['amg-gt3', 'ferrari-296-gt3', 'mustang-gt3']
@@ -113,6 +114,7 @@ type GameEvent =
   | { type: 'trackLimits' }
   | { type: 'session' }
   | { type: 'notice'; text: string }
+  | { type: 'replay'; on: boolean }
 
 const AI_NAMES = ['M. Okafor', 'L. Marchetti', 'S. Lindqvist', 'K. Tanaka', 'A. Duarte', 'J. Becker', 'R. Moreau', 'D. Novak', 'P. Haddad', 'E. Varga', 'T. Silva']
 const AI_COLORS = ['#f2f2f0', '#0a0a0c', '#f5b800', '#0057b8', '#2e7d32', '#ff6f00', '#6a1b9a', '#9e9e9e', '#00838f', '#b71c1c', '#c0a060']
@@ -171,6 +173,7 @@ export class Game {
   /** Start a new session. */
   start(cfg: SessionConfig) {
     const prevCar = this.config?.carId
+    this.endReplay()
     this.endTeamRace()
     this.timeScale = 1
     this.config = cfg
@@ -242,6 +245,7 @@ export class Game {
     }
     if (cfg.mode === 'showroom') this.phase = 'idle'
     for (const c of this.cars) this.initTiming(c)
+    this.beginRecording()
     this.version++
     this.emit({ type: 'session' })
   }
@@ -268,6 +272,8 @@ export class Game {
 
   /** Team race: every car is AI driven, the player runs the pit wall. Cars are given in grid order. */
   startTeam(trackId: string, laps: number, cars: TeamEntryConfig[]) {
+    this.endReplay()
+    this.recorder = null
     this.endTeamRace()
     this.timeScale = 1
     this.config = { mode: 'team', trackId, carId: cars[0]?.carId ?? 'vanta-gt3', color: '#fff', opponents: cars.length, laps, aiSkill: 1, playerName: '' }
@@ -331,6 +337,7 @@ export class Game {
   startOnline(room: RoomInfo, myId: string, setup?: CarSetup) {
     const me = room.players.find((p) => p.id === myId)
     if (!me) return
+    this.endReplay()
     this.config = { mode: 'online', trackId: room.trackId, carId: me.carId, color: me.color, setup, opponents: 0, laps: room.laps, aiSkill: 1, playerName: me.name }
     this.mode = 'online'
     this.track = this.getTrack(room.trackId)
@@ -357,6 +364,7 @@ export class Game {
     this.countdown = (room.startAt - net.serverNow()) / 1000
     sim.frozen = true
     for (const c of this.cars) this.initTiming(c)
+    this.beginRecording()
     this.version++
     this.emit({ type: 'session' })
   }
@@ -381,6 +389,36 @@ export class Game {
   }
 
   onlineStartAt = 0
+  /** the session's recording (practice, races, online) */
+  recorder: ReplayRecorder | null = null
+  /** a replay being watched: physics, input and timing stand still while it plays */
+  replay: ReplayPlayer | null = null
+
+  private beginRecording() {
+    const m = this.mode
+    this.recorder =
+      m === 'practice' || m === 'race' || m === 'online'
+        ? new ReplayRecorder(this.cars, { mode: m, trackId: this.track.def.id, laps: this.totalLaps, trackLength: this.track.length }, m === 'practice' ? 15 * 60 : 45 * 60)
+        : null
+  }
+
+  /** Watch the session's recording from its start (a race from the green light). */
+  startReplay() {
+    const rec = this.recorder
+    if (!rec || rec.replay.count < 2 || this.replay) return false
+    this.replay = new ReplayPlayer(rec.replay, this.cars)
+    this.emit({ type: 'replay', on: true })
+    return true
+  }
+
+  /** Back to the live session, exactly as it was left. */
+  endReplay() {
+    if (!this.replay) return
+    this.replay.restore()
+    this.replay = null
+    this.world.alpha = 1
+    this.emit({ type: 'replay', on: false })
+  }
   private ffbFrame = false
   paused = false
   /** time trial ghost: samples [t, x, y, z, qx, qy, qz, qw] at 30 Hz */
@@ -389,6 +427,8 @@ export class Game {
   private ghostAcc = 0
 
   stop() {
+    this.endReplay()
+    this.recorder = null
     this.cars = []
     this.player = null
     this.world = new PhysicsWorld(this.track)
@@ -411,6 +451,13 @@ export class Game {
 
   /** Called every frame before rendering. */
   update(dt: number) {
+    if (this.replay) {
+      // playback: the recording drives the cars, nothing is simulated
+      this.replay.update(Math.min(dt, 0.1))
+      this.world.alpha = 1
+      if (ffb.status === 'on') ffb.update(0)
+      return
+    }
     dt = Math.min(dt, 0.1) * this.timeScale
     const tr = this.track
     this.sessionTime += dt
@@ -430,6 +477,7 @@ export class Game {
           c.sim.frozen = false
           c.timing.lapStartTime = this.sessionTime
         }
+        if (this.recorder) this.recorder.replay.goAt = this.sessionTime
         this.emit({ type: 'go' })
       }
     }
@@ -514,6 +562,7 @@ export class Game {
       }
     }
     this.updatePositions()
+    this.recorder?.update(dt, this.sessionTime)
     this.teamRace?.afterPhysics(dt)
     this.world.events.length = Math.min(this.world.events.length, 64)
   }
