@@ -30,7 +30,7 @@
 // Per-model metadata (wheel centres and radii, steering wheel, seat, livery material, source credit)
 // goes into the root node's extras.
 import { Document, type Material, NodeIO, type Primitive, type Texture, type TextureInfo } from '@gltf-transform/core'
-import { ALL_EXTENSIONS, type EmissiveStrength } from '@gltf-transform/extensions'
+import { ALL_EXTENSIONS, type Clearcoat, type EmissiveStrength, type Specular, type Transmission } from '@gltf-transform/extensions'
 import { listTextureSlots, meshopt, prune, textureCompress } from '@gltf-transform/functions'
 import { mkdirSync, readFileSync, statSync } from 'fs'
 import { MeshoptEncoder, MeshoptSimplifier } from 'meshoptimizer'
@@ -247,6 +247,169 @@ function simplifyPart(p: Part, ratio: number, error: number, lockBorder = true):
   const c = compact(p.attrs, Array.from(ind))
   const [min, max] = bounds(c.attrs.POSITION.data)
   return { ...p, ...c, min, max }
+}
+
+// ------------------------------------------------------------------------------ texture budget
+
+/**
+ * Finest texel density (texels per metre) any camera resolves, by where a part is: the exterior is
+ * seen from 1 m at the closest (hood and bumper cameras: ~0.5 mm per pixel at 4K), the cabin from
+ * 0.5 m (the cockpit camera), the steering wheel from 0.35 m. Texels finer than that are only ever
+ * seen through a coarser mip level: the texture is resized to match, which changes no pixel.
+ */
+const DENSITY = { exterior: 2048, cabin: 4096, steering: 6000 }
+
+/** A texture's slots on a material (or its extensions) and the uv set each slot reads. */
+function textureUses(doc: Document) {
+  const uses = new Map<Texture, { mat: Material; uv: number }[]>()
+  for (const mat of doc.getRoot().listMaterials()) {
+    const infos: [Texture | null, TextureInfo | null][] = [
+      [mat.getBaseColorTexture(), mat.getBaseColorTextureInfo()],
+      [mat.getMetallicRoughnessTexture(), mat.getMetallicRoughnessTextureInfo()],
+      [mat.getNormalTexture(), mat.getNormalTextureInfo()],
+      [mat.getOcclusionTexture(), mat.getOcclusionTextureInfo()],
+      [mat.getEmissiveTexture(), mat.getEmissiveTextureInfo()],
+    ]
+    const cc = mat.getExtension('KHR_materials_clearcoat') as Clearcoat | null
+    if (cc) infos.push([cc.getClearcoatTexture(), cc.getClearcoatTextureInfo()], [cc.getClearcoatRoughnessTexture(), cc.getClearcoatRoughnessTextureInfo()], [cc.getClearcoatNormalTexture(), cc.getClearcoatNormalTextureInfo()])
+    const sp = mat.getExtension('KHR_materials_specular') as Specular | null
+    if (sp) infos.push([sp.getSpecularTexture(), sp.getSpecularTextureInfo()], [sp.getSpecularColorTexture(), sp.getSpecularColorTextureInfo()])
+    const tr = mat.getExtension('KHR_materials_transmission') as Transmission | null
+    if (tr) infos.push([tr.getTransmissionTexture(), tr.getTransmissionTextureInfo()])
+    for (const [t, info] of infos) if (t) uses.set(t, [...(uses.get(t) ?? []), { mat, uv: info?.getTexCoord() ?? 0 }])
+  }
+  return uses
+}
+
+/** Single-colour images (the sources carry 2048^2 ones) as the factors they amount to. */
+async function constantTextures(doc: Document) {
+  let freed = 0
+  for (const t of doc.getRoot().listTextures()) {
+    const img = t.getImage()
+    if (!img) continue
+    const st = await sharp(Buffer.from(img)).stats()
+    if (!st.channels.every((c) => c.max - c.min <= 1)) continue
+    const c = st.channels.map((ch) => ch.mean / 255)
+    const [r, g, b] = c
+    const a = c[3] ?? 1
+    const lin = (x: number) => srgb2lin(x)
+    let handled = true
+    for (const slot of listTextureSlots(t)) {
+      for (const mat of doc.getRoot().listMaterials()) {
+        if (slot === 'baseColorTexture' && mat.getBaseColorTexture() === t) {
+          const f = mat.getBaseColorFactor()
+          mat.setBaseColorFactor([f[0] * lin(r), f[1] * lin(g), f[2] * lin(b), f[3] * a]).setBaseColorTexture(null)
+        } else if (slot === 'metallicRoughnessTexture' && mat.getMetallicRoughnessTexture() === t) {
+          mat.setRoughnessFactor(mat.getRoughnessFactor() * g).setMetallicFactor(mat.getMetallicFactor() * b).setMetallicRoughnessTexture(null)
+        } else if (slot === 'emissiveTexture' && mat.getEmissiveTexture() === t) {
+          const f = mat.getEmissiveFactor()
+          mat.setEmissiveFactor([f[0] * lin(r), f[1] * lin(g), f[2] * lin(b)]).setEmissiveTexture(null)
+        } else if (slot === 'occlusionTexture' && mat.getOcclusionTexture() === t) {
+          if (r > 0.99) mat.setOcclusionTexture(null)
+          else handled = false
+        } else if (slot === 'normalTexture' && mat.getNormalTexture() === t) {
+          if (Math.abs(r - 0.5) < 0.01 && Math.abs(g - 0.5) < 0.01) mat.setNormalTexture(null)
+          else handled = false
+        } else {
+          const sp = mat.getExtension('KHR_materials_specular') as Specular | null
+          const cc = mat.getExtension('KHR_materials_clearcoat') as Clearcoat | null
+          if (slot === 'specularTexture' && sp?.getSpecularTexture() === t) sp.setSpecularFactor(sp.getSpecularFactor() * a).setSpecularTexture(null)
+          else if (slot === 'specularColorTexture' && sp?.getSpecularColorTexture() === t) {
+            const f = sp.getSpecularColorFactor()
+            sp.setSpecularColorFactor([f[0] * lin(r), f[1] * lin(g), f[2] * lin(b)]).setSpecularColorTexture(null)
+          } else if (slot === 'clearcoatTexture' && cc?.getClearcoatTexture() === t) cc.setClearcoatFactor(cc.getClearcoatFactor() * r).setClearcoatTexture(null)
+          else if (slot === 'clearcoatRoughnessTexture' && cc?.getClearcoatRoughnessTexture() === t) cc.setClearcoatRoughnessFactor(cc.getClearcoatRoughnessFactor() * g).setClearcoatRoughnessTexture(null)
+          else if (slot === 'clearcoatNormalTexture' && cc?.getClearcoatNormalTexture() === t) {
+            if (Math.abs(r - 0.5) < 0.01 && Math.abs(g - 0.5) < 0.01) cc.setClearcoatNormalTexture(null)
+            else handled = false
+          }
+        }
+      }
+    }
+    if (handled && t.listParents().every((p) => p.propertyType === 'Root')) {
+      const m = await sharp(Buffer.from(img)).metadata()
+      freed += ((m.width ?? 0) * (m.height ?? 0) * 16) / 3
+      t.dispose()
+    }
+  }
+  if (freed) console.log(`  single-colour textures replaced by factors: ${(freed / 1e6).toFixed(0)} MB of GPU memory`)
+}
+
+/**
+ * Resizes every texture to the finest texel density a camera resolves on the parts that use it
+ * (DENSITY): from the parts' surface areas in the world and in the texture (tiling included).
+ */
+async function textureBudget(doc: Document) {
+  const uses = textureUses(doc)
+  // per material: world area and uv area per uv set, and the most demanding place it is used
+  const stats = new Map<Material, { A: number; a: number[]; density: number }>()
+  for (const node of doc.getRoot().listNodes()) {
+    const mesh = node.getMesh()
+    if (!mesh) continue
+    const steer = /steering/.test(node.getName())
+    for (const prim of mesh.listPrimitives()) {
+      const mat = prim.getMaterial()
+      const pos = prim.getAttribute('POSITION')
+      const idx = prim.getIndices()
+      if (!mat || !pos || !idx) continue
+      const I = idx.getArray()!
+      const P = pos.getArray()! as Float32Array
+      const uvs = [prim.getAttribute('TEXCOORD_0')?.getArray() as Float32Array | undefined, prim.getAttribute('TEXCOORD_1')?.getArray() as Float32Array | undefined]
+      const st = stats.get(mat) ?? { A: 0, a: [0, 0], density: 0 }
+      const mn = pos.getMin([]),
+        mx = pos.getMax([])
+      const inCabin = mn[0] > -0.78 && mx[0] < 0.78 && mn[1] > 0.1 && mx[1] < 1.02 && mn[2] > -1.05 && mx[2] < 0.8
+      st.density = Math.max(st.density, steer ? DENSITY.steering : inCabin ? DENSITY.cabin : DENSITY.exterior)
+      for (let t = 0; t < I.length; t += 3) {
+        const i0 = I[t],
+          i1 = I[t + 1],
+          i2 = I[t + 2]
+        const ux = P[i1 * 3] - P[i0 * 3],
+          uy = P[i1 * 3 + 1] - P[i0 * 3 + 1],
+          uz = P[i1 * 3 + 2] - P[i0 * 3 + 2]
+        const vx = P[i2 * 3] - P[i0 * 3],
+          vy = P[i2 * 3 + 1] - P[i0 * 3 + 1],
+          vz = P[i2 * 3 + 2] - P[i0 * 3 + 2]
+        st.A += 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx)
+        for (let k = 0; k < 2; k++) {
+          const U = uvs[k]
+          if (!U) continue
+          st.a[k] += 0.5 * Math.abs((U[i1 * 2] - U[i0 * 2]) * (U[i2 * 2 + 1] - U[i0 * 2 + 1]) - (U[i2 * 2] - U[i0 * 2]) * (U[i1 * 2 + 1] - U[i0 * 2 + 1]))
+        }
+      }
+      stats.set(mat, st)
+    }
+  }
+  let before = 0,
+    after = 0
+  const changed: string[] = []
+  for (const [tex, list] of uses) {
+    const img = tex.getImage()
+    if (!img) continue
+    const meta = await sharp(Buffer.from(img)).metadata()
+    const W = meta.width ?? 0,
+      H = meta.height ?? 0
+    // the size the most demanding use needs: density * sqrt(world area / uv area)
+    let need = 0
+    for (const { mat, uv } of list) {
+      const st = stats.get(mat)
+      if (!st || st.A <= 0) continue
+      const a = st.a[uv] ?? 0
+      need = Math.max(need, a > 1e-9 ? st.density * Math.sqrt(st.A / a) : Infinity)
+    }
+    const S = Math.max(W, H)
+    let target = S
+    if (need > 0 && need < S) target = Math.max(256, Math.min(S, 2 ** Math.ceil(Math.log2(need))))
+    before += (W * H * 16) / 3
+    if (target < S) {
+      const w = Math.max(1, Math.round((W * target) / S)),
+        h = Math.max(1, Math.round((H * target) / S))
+      tex.setImage(new Uint8Array(await sharp(Buffer.from(img)).resize(w, h, { kernel: 'lanczos3' }).png().toBuffer())).setMimeType('image/png')
+      changed.push(`${list[0].mat.getName()} ${W}x${H}->${w}x${h}`)
+      after += (w * h * 16) / 3
+    } else after += (W * H * 16) / 3
+  }
+  console.log(`  texture budget: GPU memory ${(before / 1e6).toFixed(0)} -> ${(after / 1e6).toFixed(0)} MB (${changed.length} resized${changed.length ? ': ' + changed.join(', ') : ''})`)
 }
 
 // ------------------------------------------------------------------------------ baked levels of detail
@@ -824,6 +987,11 @@ async function build(def: ModelDef) {
     credit: { title: asset.extras?.title ?? '', author: asset.extras?.author ?? '', license: asset.extras?.license ?? '', source: asset.extras?.source ?? '' },
   })
   await doc.transform(prune())
+
+  // ---- textures: single-colour images become factors, the rest are sized to the finest detail a
+  //      camera can see on the parts that use them
+  await constantTextures(doc)
+  await textureBudget(doc)
 
   // ---- textures: name them by use. The livery stays sharp; surface data (normals, roughness and
   //      metalness, clear coat) keeps the source's resolution, in near-lossless WebP (lossy WebP
