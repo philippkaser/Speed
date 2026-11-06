@@ -137,8 +137,11 @@ function band(x: N, a: number, b: number) {
 
 /** anti-aliased thin line where |x| < halfWidth (x in metres) */
 function line(x: N, halfWidth: number | N) {
-  const w = fwidth(x).add(0.003)
-  return float(1).sub(smoothstep(float(halfWidth), float(halfWidth).add(w), abs(x)))
+  const fw = fwidth(x)
+  const w = fw.add(0.003)
+  // thinner than a pixel at a distance: fade instead of widening (the line keeps its share of the pixel)
+  const cover = clamp(float(halfWidth).mul(2).div(fw.add(1e-4)), 0, 1)
+  return float(1).sub(smoothstep(float(halfWidth), float(halfWidth).add(w), abs(x))).mul(cover)
 }
 
 /** Track rubber map (2 m x 1 m cells) as a texture, refreshed while cars lay rubber. */
@@ -269,7 +272,8 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }) {
 
   // sealant: black, smooth bitumen
   albedo = mix(albedo, vec3(0.011, 0.011, 0.012), seal.mul(0.92))
-  rough = mix(rough, float(0.34), seal)
+  // (bitumen sealant is smooth, but dusty: not a mirror for the sky at grazing angles)
+  rough = mix(rough, float(0.55), seal)
 
   // white edge lines (0.25 m wide, 0.1 m inside the asphalt edge), slightly worn paint
   const fromEdge = hw.sub(abs(d))
@@ -328,7 +332,7 @@ export function kerbMaterial() {
   const fs = fract(s.div(1.5))
   const endDist = min(fs, float(1).sub(fs)).mul(1.5)
   const chipN = mx_noise_float(vec3(s.mul(3.1), u.mul(6.0), 2.7)).mul(0.5).add(0.5)
-  const chip = smoothstep(0.62, 0.7, chipN.add(float(0.25).sub(endDist).max(0)).add(abs(u.sub(0.5)).mul(0.25)))
+  const chip = smoothstep(0.74, 0.8, chipN.add(float(0.2).sub(endDist).max(0)).add(abs(u.sub(0.5)).mul(0.12)))
   col = mix(col, vec3(0.24, 0.235, 0.22), chip)
   // tyre rubber on the inner half, dirt and grass on the outer edge
   const n = mx_noise_float(vec3(s.mul(0.5), u.mul(3), 0)).mul(0.5).add(0.5)
