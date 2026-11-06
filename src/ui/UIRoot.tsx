@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { audio } from '../audio/audio'
 import { game } from '../game/game'
-import { quitToMenu, restartSession, startAttract } from '../game/session'
+import { exitReplay, quitToMenu, restartSession, startAttract, watchReplay } from '../game/session'
 import { input } from '../input/input'
 import { net, useNet } from '../net/client'
 import { useGameStore } from '../state/gameStore'
@@ -9,6 +9,7 @@ import { useSettings } from '../state/settings'
 import { switchToWebGL } from '../render/gpuHealth'
 import { Btn, fmtTime } from './components'
 import { HUD } from './hud/HUD'
+import { cycleReplayCamera, ReplayOverlay } from './hud/Replay'
 import { Telemetry } from './hud/Telemetry'
 import { Garage } from './screens/Garage'
 import { Home, Title } from './screens/Home'
@@ -143,6 +144,7 @@ function PauseMenu() {
         >
           Reset car to track
         </Btn>
+        {!online && (game.recorder?.replay.count ?? 0) > 30 && <Btn onClick={() => watchReplay('pause')}>Watch replay</Btn>}
         <Btn onClick={() => g.cycleCamera()}>Camera: {g.camera}</Btn>
         <Btn onClick={() => setSettings(true)}>Settings</Btn>
         <Btn ghost sound="back" onClick={quitToMenu}>
@@ -194,6 +196,7 @@ function Results() {
           </table>
         </div>
         <div style={{ padding: '0 24px 22px', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          {!online && (game.recorder?.replay.count ?? 0) > 30 && <Btn onClick={() => watchReplay('results')}>Watch replay</Btn>}
           {!online && <Btn onClick={restartSession}>Race again</Btn>}
           {online && (
             <Btn
@@ -216,6 +219,7 @@ function Results() {
 
 function Driving() {
   const paused = useGameStore((s) => s.paused)
+  const replaying = useGameStore((s) => s.replaying)
   const [finished, setFinished] = useState(false)
   const netResults = useNet((s) => s.results)
   useEffect(() => {
@@ -227,6 +231,7 @@ function Driving() {
   }, [])
   const showResults = finished || (useGameStore.getState().sessionKind === 'online' && !!netResults)
   const onTeamComplete = useCallback(() => setFinished(true), [])
+  if (replaying) return <ReplayOverlay />
   if (game.mode === 'team')
     return (
       <>
@@ -254,6 +259,11 @@ export function UIRoot() {
     () =>
       input.on((a) => {
         const g = useGameStore.getState()
+        if (g.replaying) {
+          if (a === 'pause') exitReplay()
+          if (a === 'camera') cycleReplayCamera()
+          return
+        }
         if (a === 'pause') {
           if (g.screen === 'driving') {
             g.set({ paused: !g.paused })
@@ -289,6 +299,9 @@ export function UIRoot() {
       }),
     [],
   )
+
+  // the replay flag follows the game (a new session ends a replay)
+  useEffect(() => game.on((e) => e.type === 'replay' && useGameStore.getState().replaying !== e.on && useGameStore.getState().set({ replaying: e.on })), [])
 
   // online: the server's countdown starts the race for everybody in the room
   useEffect(() => {
