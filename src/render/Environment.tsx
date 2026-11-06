@@ -313,9 +313,11 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
       csm.camera = camera
       csm.updateFrustums()
     }
+    // the camera sees every layer the scene draws on (the hero's, the near-cascade casters'), with or
+    // without shadows
+    seeHero(camera)
     // the car in focus gets its own detailed shadow map (sunShadow.ts)
     if (csm) {
-      seeHero(camera)
       cascadesWithoutHero(csm as never, sun.dir)
       _heroCars.length = 0
       for (const [id, pose] of carPoses) _heroCars.push([id, { pos: pose.pos, root: pose.model?.root }])

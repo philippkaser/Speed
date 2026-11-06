@@ -7,6 +7,9 @@ import { Scenery } from './Scenery'
 import { debugFlag } from '../util/debug'
 import { buildBarriers, buildKerbs, buildMarkings, buildMountains, buildRoad, buildRunoff, buildTerrain, buildVerge, type MountainSet } from './trackGeometry'
 import { sunState } from './Environment'
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
+import { chunkInstances } from './spatial'
+import { castInNearCascades } from './sunShadow'
 
 function mesh(geo: THREE.BufferGeometry, mat: THREE.Material, opts: { cast?: boolean; receive?: boolean; name?: string } = {}) {
   const m = new THREE.Mesh(geo, mat)
@@ -80,11 +83,33 @@ export function TrackScene({ track }: { track: Track }) {
     const posts = instanced(postGeo, postMat, b.posts, false)
     posts.userData.noProbe = true
     g.add(posts)
-    const tyreGeo = new THREE.TorusGeometry(0.24, 0.1, 8, 16)
+    // Tyre walls: 4,400 tyres around the circuit. In cells of 150 m (each pass draws only the cells it
+    // sees: one instanced mesh for the whole circuit drew every tyre in the view and in every shadow
+    // cascade, 1.1 M triangles each), out of the farthest cascade (35 cm texels: a tyre is a texel or
+    // two there). Shadow maps and cells far from the camera draw a coarser torus, kept in the same
+    // buffers as a second index range (as the mountains do for the probes).
+    const fine = new THREE.TorusGeometry(0.24, 0.1, 8, 16)
+    const coarse = new THREE.TorusGeometry(0.24, 0.1, 5, 10)
+    const tyreGeo = mergeGeometries([fine, coarse])
     tyreGeo.rotateX(Math.PI / 2)
+    const fineRange = [0, fine.index!.count] as const,
+      coarseRange = [fine.index!.count, coarse.index!.count] as const
+    fine.dispose()
+    coarse.dispose()
     const tyres = instanced(tyreGeo, tyreWallMaterial(), b.tyres)
     tyres.userData.noProbe = true
     g.add(tyres)
+    const _c = new THREE.Vector3()
+    for (const chunk of chunkInstances(tyres, 150)) {
+      castInNearCascades(chunk, 2)
+      chunk.onBeforeRender = (_r, scene, camera) => {
+        const shadowPass = !!(scene.overrideMaterial as { isShadowPassMaterial?: boolean } | null)?.isShadowPassMaterial
+        // a tyre 60 m away is ~10 px tall at 1080p: the coarse torus is indistinguishable there
+        const far = !shadowPass && chunk.boundingSphere ? _c.setFromMatrixPosition(camera.matrixWorld).distanceTo(chunk.boundingSphere.center) - chunk.boundingSphere.radius > 60 : false
+        const [start, count] = shadowPass || far ? coarseRange : fineRange
+        tyreGeo.setDrawRange(start, count)
+      }
+    }
     g.userData.terrain = terrain
     console.info(`[track] geometry built in ${(performance.now() - t0).toFixed(0)} ms`)
     return g
