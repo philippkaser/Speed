@@ -185,7 +185,9 @@ export function Reflections() {
     if (sys.version !== game.version || performance.now() - sys.hiddenAt > 3000) {
       sys.hidden.length = 0
       scene.traverse((o) => {
-        if (o.userData[PROBE_HIDDEN]) sys.hidden.push(o)
+        // (the grass has no instances within the probes' range, yet three still prepares its render
+        // object for every face: ~1.5 ms each)
+        if (o.userData[PROBE_HIDDEN] || o.name === 'veg:grass') sys.hidden.push(o)
       })
       sys.hiddenAt = performance.now()
       sys.version = game.version
@@ -205,6 +207,11 @@ export function Reflections() {
     const prevTarget = renderer.getRenderTarget()
     const prevFace = renderer.getActiveCubeFace()
     const prevMip = renderer.getActiveMipmapLevel()
+    // the scene's world matrices once for all the faces (each render would traverse the whole scene
+    // graph again: the largest part of a probe face's own cost)
+    const autoMatrices = scene.matrixWorldAutoUpdate
+    scene.updateMatrixWorld()
+    scene.matrixWorldAutoUpdate = false
     try {
       for (const { p, faces } of work) {
         const pose = p.owner ? carPoses.get(p.owner) : undefined
@@ -235,6 +242,7 @@ export function Reflections() {
         }
       }
     } finally {
+      scene.matrixWorldAutoUpdate = autoMatrices
       renderer.setRenderTarget(prevTarget, prevFace, prevMip)
       sys.hidden.forEach((o, i) => (o.visible = hiddenState[i]))
       // back as they were; cascades created during the probes render in the main pass

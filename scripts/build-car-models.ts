@@ -13,15 +13,24 @@
 //    its pivot at the wheel centre
 //  - merges geometry by material (a few dozen draw calls instead of hundreds of nodes)
 //  - adds two simplified levels of detail (interior removed; ~20% and ~5% of the triangles) for cars
-//    that are small on screen and for the shadow passes
+//    that are small on screen, for the shadow passes and the reflection probes. They are built for
+//    draw calls: the livery keeps its material (the team colours are applied to its texture), every
+//    other material is baked into vertex attributes (colour and opacity, roughness, metalness,
+//    emission, brake-light and brake-disc masks) and merged into one opaque and one glass primitive;
+//    each wheel is one primitive. Alpha-blended decals stay textured on the middle level. The far
+//    level is two draws: the livery and everything else, the windows opaque, the wheels merged in.
+//    (A car at the middle level is at most ~220 px long at 1080p, the far one ~70 px: texture detail
+//    other than the livery's is a few pixels there; filtered vertex colours do not shimmer.)
+//  - every mesh sits on a leaf node of its own: the quantization below puts its dequantization
+//    transform on the mesh's node, which must not be a pivot the game moves (steering wheel, calipers)
 //  - stores textures as WebP: the livery up to 4K, surface data (normal, roughness / metalness, clear
 //    coat) at the source's resolution (near-lossless, or lossy at high quality where the data is
 //    noise-like), colour maps at 1K; and compresses the
 //    geometry with meshopt
 // Per-model metadata (wheel centres and radii, steering wheel, seat, livery material, source credit)
 // goes into the root node's extras.
-import { Document, type Material, NodeIO, type Primitive } from '@gltf-transform/core'
-import { ALL_EXTENSIONS } from '@gltf-transform/extensions'
+import { Document, type Material, NodeIO, type Primitive, type Texture, type TextureInfo } from '@gltf-transform/core'
+import { ALL_EXTENSIONS, type Clearcoat, type EmissiveStrength, type Specular, type Transmission } from '@gltf-transform/extensions'
 import { listTextureSlots, meshopt, prune, textureCompress } from '@gltf-transform/functions'
 import { mkdirSync, readFileSync, statSync } from 'fs'
 import { MeshoptEncoder, MeshoptSimplifier } from 'meshoptimizer'
@@ -33,6 +42,13 @@ const DATA_SLOTS = /^(normalTexture|metallicRoughnessTexture|clearcoatTexture|cl
 
 /** physics wheelbase of the GT3 class (src/physics/spec.ts, vanta-gt3) */
 const TARGET_WHEELBASE = 2.72
+
+/** Baked levels of detail: emission is stored over this scale (attributes are normalised to 0..1). */
+const EMIT_SCALE = 8
+/** Texture resolution the baked vertex attributes are sampled from (a box-filtered copy). */
+const BAKE_SIZE = 64
+/** Alpha-blended decals smaller than this (m^2, one side) are left out of the middle level. */
+const DECAL_MIN_AREA = 0.01
 
 interface ModelDef {
   id: string
@@ -231,6 +247,405 @@ function simplifyPart(p: Part, ratio: number, error: number, lockBorder = true):
   const c = compact(p.attrs, Array.from(ind))
   const [min, max] = bounds(c.attrs.POSITION.data)
   return { ...p, ...c, min, max }
+}
+
+// ------------------------------------------------------------------------------ texture budget
+
+/**
+ * Finest texel density (texels per metre) any camera resolves, by where a part is: the exterior is
+ * seen from 1 m at the closest (hood and bumper cameras: ~0.5 mm per pixel at 4K), the cabin from
+ * 0.5 m (the cockpit camera), the steering wheel from 0.35 m. Texels finer than that are only ever
+ * seen through a coarser mip level: the texture is resized to match, which changes no pixel.
+ */
+const DENSITY = { exterior: 2048, cabin: 4096, steering: 6000 }
+
+/** A texture's slots on a material (or its extensions) and the uv set each slot reads. */
+function textureUses(doc: Document) {
+  const uses = new Map<Texture, { mat: Material; uv: number }[]>()
+  for (const mat of doc.getRoot().listMaterials()) {
+    const infos: [Texture | null, TextureInfo | null][] = [
+      [mat.getBaseColorTexture(), mat.getBaseColorTextureInfo()],
+      [mat.getMetallicRoughnessTexture(), mat.getMetallicRoughnessTextureInfo()],
+      [mat.getNormalTexture(), mat.getNormalTextureInfo()],
+      [mat.getOcclusionTexture(), mat.getOcclusionTextureInfo()],
+      [mat.getEmissiveTexture(), mat.getEmissiveTextureInfo()],
+    ]
+    const cc = mat.getExtension('KHR_materials_clearcoat') as Clearcoat | null
+    if (cc) infos.push([cc.getClearcoatTexture(), cc.getClearcoatTextureInfo()], [cc.getClearcoatRoughnessTexture(), cc.getClearcoatRoughnessTextureInfo()], [cc.getClearcoatNormalTexture(), cc.getClearcoatNormalTextureInfo()])
+    const sp = mat.getExtension('KHR_materials_specular') as Specular | null
+    if (sp) infos.push([sp.getSpecularTexture(), sp.getSpecularTextureInfo()], [sp.getSpecularColorTexture(), sp.getSpecularColorTextureInfo()])
+    const tr = mat.getExtension('KHR_materials_transmission') as Transmission | null
+    if (tr) infos.push([tr.getTransmissionTexture(), tr.getTransmissionTextureInfo()])
+    for (const [t, info] of infos) if (t) uses.set(t, [...(uses.get(t) ?? []), { mat, uv: info?.getTexCoord() ?? 0 }])
+  }
+  return uses
+}
+
+/** Single-colour images (the sources carry 2048^2 ones) as the factors they amount to. */
+async function constantTextures(doc: Document) {
+  let freed = 0
+  for (const t of doc.getRoot().listTextures()) {
+    const img = t.getImage()
+    if (!img) continue
+    const st = await sharp(Buffer.from(img)).stats()
+    if (!st.channels.every((c) => c.max - c.min <= 1)) continue
+    const c = st.channels.map((ch) => ch.mean / 255)
+    const [r, g, b] = c
+    const a = c[3] ?? 1
+    const lin = (x: number) => srgb2lin(x)
+    let handled = true
+    for (const slot of listTextureSlots(t)) {
+      for (const mat of doc.getRoot().listMaterials()) {
+        if (slot === 'baseColorTexture' && mat.getBaseColorTexture() === t) {
+          const f = mat.getBaseColorFactor()
+          mat.setBaseColorFactor([f[0] * lin(r), f[1] * lin(g), f[2] * lin(b), f[3] * a]).setBaseColorTexture(null)
+        } else if (slot === 'metallicRoughnessTexture' && mat.getMetallicRoughnessTexture() === t) {
+          mat.setRoughnessFactor(mat.getRoughnessFactor() * g).setMetallicFactor(mat.getMetallicFactor() * b).setMetallicRoughnessTexture(null)
+        } else if (slot === 'emissiveTexture' && mat.getEmissiveTexture() === t) {
+          const f = mat.getEmissiveFactor()
+          mat.setEmissiveFactor([f[0] * lin(r), f[1] * lin(g), f[2] * lin(b)]).setEmissiveTexture(null)
+        } else if (slot === 'occlusionTexture' && mat.getOcclusionTexture() === t) {
+          if (r > 0.99) mat.setOcclusionTexture(null)
+          else handled = false
+        } else if (slot === 'normalTexture' && mat.getNormalTexture() === t) {
+          if (Math.abs(r - 0.5) < 0.01 && Math.abs(g - 0.5) < 0.01) mat.setNormalTexture(null)
+          else handled = false
+        } else {
+          const sp = mat.getExtension('KHR_materials_specular') as Specular | null
+          const cc = mat.getExtension('KHR_materials_clearcoat') as Clearcoat | null
+          if (slot === 'specularTexture' && sp?.getSpecularTexture() === t) sp.setSpecularFactor(sp.getSpecularFactor() * a).setSpecularTexture(null)
+          else if (slot === 'specularColorTexture' && sp?.getSpecularColorTexture() === t) {
+            const f = sp.getSpecularColorFactor()
+            sp.setSpecularColorFactor([f[0] * lin(r), f[1] * lin(g), f[2] * lin(b)]).setSpecularColorTexture(null)
+          } else if (slot === 'clearcoatTexture' && cc?.getClearcoatTexture() === t) cc.setClearcoatFactor(cc.getClearcoatFactor() * r).setClearcoatTexture(null)
+          else if (slot === 'clearcoatRoughnessTexture' && cc?.getClearcoatRoughnessTexture() === t) cc.setClearcoatRoughnessFactor(cc.getClearcoatRoughnessFactor() * g).setClearcoatRoughnessTexture(null)
+          else if (slot === 'clearcoatNormalTexture' && cc?.getClearcoatNormalTexture() === t) {
+            if (Math.abs(r - 0.5) < 0.01 && Math.abs(g - 0.5) < 0.01) cc.setClearcoatNormalTexture(null)
+            else handled = false
+          }
+        }
+      }
+    }
+    if (handled && t.listParents().every((p) => p.propertyType === 'Root')) {
+      const m = await sharp(Buffer.from(img)).metadata()
+      freed += ((m.width ?? 0) * (m.height ?? 0) * 16) / 3
+      t.dispose()
+    }
+  }
+  if (freed) console.log(`  single-colour textures replaced by factors: ${(freed / 1e6).toFixed(0)} MB of GPU memory`)
+}
+
+/**
+ * Resizes every texture to the finest texel density a camera resolves on the parts that use it
+ * (DENSITY): from the parts' surface areas in the world and in the texture (tiling included).
+ */
+async function textureBudget(doc: Document) {
+  const uses = textureUses(doc)
+  // per material: world area and uv area per uv set, and the most demanding place it is used
+  const stats = new Map<Material, { A: number; a: number[]; density: number }>()
+  for (const node of doc.getRoot().listNodes()) {
+    const mesh = node.getMesh()
+    if (!mesh) continue
+    const steer = /steering/.test(node.getName())
+    for (const prim of mesh.listPrimitives()) {
+      const mat = prim.getMaterial()
+      const pos = prim.getAttribute('POSITION')
+      const idx = prim.getIndices()
+      if (!mat || !pos || !idx) continue
+      const I = idx.getArray()!
+      const P = pos.getArray()! as Float32Array
+      const uvs = [prim.getAttribute('TEXCOORD_0')?.getArray() as Float32Array | undefined, prim.getAttribute('TEXCOORD_1')?.getArray() as Float32Array | undefined]
+      const st = stats.get(mat) ?? { A: 0, a: [0, 0], density: 0 }
+      const mn = pos.getMin([]),
+        mx = pos.getMax([])
+      const inCabin = mn[0] > -0.78 && mx[0] < 0.78 && mn[1] > 0.1 && mx[1] < 1.02 && mn[2] > -1.05 && mx[2] < 0.8
+      st.density = Math.max(st.density, steer ? DENSITY.steering : inCabin ? DENSITY.cabin : DENSITY.exterior)
+      for (let t = 0; t < I.length; t += 3) {
+        const i0 = I[t],
+          i1 = I[t + 1],
+          i2 = I[t + 2]
+        const ux = P[i1 * 3] - P[i0 * 3],
+          uy = P[i1 * 3 + 1] - P[i0 * 3 + 1],
+          uz = P[i1 * 3 + 2] - P[i0 * 3 + 2]
+        const vx = P[i2 * 3] - P[i0 * 3],
+          vy = P[i2 * 3 + 1] - P[i0 * 3 + 1],
+          vz = P[i2 * 3 + 2] - P[i0 * 3 + 2]
+        st.A += 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx)
+        for (let k = 0; k < 2; k++) {
+          const U = uvs[k]
+          if (!U) continue
+          st.a[k] += 0.5 * Math.abs((U[i1 * 2] - U[i0 * 2]) * (U[i2 * 2 + 1] - U[i0 * 2 + 1]) - (U[i2 * 2] - U[i0 * 2]) * (U[i1 * 2 + 1] - U[i0 * 2 + 1]))
+        }
+      }
+      stats.set(mat, st)
+    }
+  }
+  let before = 0,
+    after = 0
+  const changed: string[] = []
+  for (const [tex, list] of uses) {
+    const img = tex.getImage()
+    if (!img) continue
+    const meta = await sharp(Buffer.from(img)).metadata()
+    const W = meta.width ?? 0,
+      H = meta.height ?? 0
+    // the size the most demanding use needs: density * sqrt(world area / uv area)
+    let need = 0
+    for (const { mat, uv } of list) {
+      const st = stats.get(mat)
+      if (!st || st.A <= 0) continue
+      const a = st.a[uv] ?? 0
+      need = Math.max(need, a > 1e-9 ? st.density * Math.sqrt(st.A / a) : Infinity)
+    }
+    const S = Math.max(W, H)
+    let target = S
+    if (need > 0 && need < S) target = Math.max(256, Math.min(S, 2 ** Math.ceil(Math.log2(need))))
+    before += (W * H * 16) / 3
+    if (target < S) {
+      const w = Math.max(1, Math.round((W * target) / S)),
+        h = Math.max(1, Math.round((H * target) / S))
+      tex.setImage(new Uint8Array(await sharp(Buffer.from(img)).resize(w, h, { kernel: 'lanczos3' }).png().toBuffer())).setMimeType('image/png')
+      changed.push(`${list[0].mat.getName()} ${W}x${H}->${w}x${h}`)
+      after += (w * h * 16) / 3
+    } else after += (W * H * 16) / 3
+  }
+  console.log(`  texture budget: GPU memory ${(before / 1e6).toFixed(0)} -> ${(after / 1e6).toFixed(0)} MB (${changed.length} resized${changed.length ? ': ' + changed.join(', ') : ''})`)
+}
+
+// ------------------------------------------------------------------------------ baked levels of detail
+
+interface Raw {
+  w: number
+  h: number
+  data: Uint8Array
+  wrapS: number
+  wrapT: number
+}
+const rawCache = new Map<Texture, Promise<Raw>>()
+
+/** A texture as a small box-filtered RGBA copy (what a vertex far away averages over). */
+function rawTexture(tex: Texture, info: TextureInfo | null): Promise<Raw> {
+  let r = rawCache.get(tex)
+  if (!r) {
+    r = sharp(Buffer.from(tex.getImage()!))
+      .resize(BAKE_SIZE, BAKE_SIZE, { fit: 'fill' })
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true })
+      .then(({ data, info: i }) => ({ w: i.width, h: i.height, data: new Uint8Array(data), wrapS: info?.getWrapS() ?? 10497, wrapT: info?.getWrapT() ?? 10497 }))
+    rawCache.set(tex, r)
+  }
+  return r
+}
+
+const wrap = (x: number, n: number, mode: number) => {
+  if (mode === 33071) return Math.min(n - 1, Math.max(0, x))
+  if (mode === 33648) {
+    const p = ((x % (2 * n)) + 2 * n) % (2 * n)
+    return p < n ? p : 2 * n - 1 - p
+  }
+  return ((x % n) + n) % n
+}
+
+/** Bilinear sample (0..1 per channel) at a glTF uv (v down from the top of the image). */
+function sampleRaw(r: Raw, u: number, v: number, out: number[]) {
+  const x = u * r.w - 0.5,
+    y = v * r.h - 0.5
+  const x0 = Math.floor(x),
+    y0 = Math.floor(y)
+  const fx = x - x0,
+    fy = y - y0
+  for (let c = 0; c < 4; c++) out[c] = 0
+  for (const [dx, dy, w] of [
+    [0, 0, (1 - fx) * (1 - fy)],
+    [1, 0, fx * (1 - fy)],
+    [0, 1, (1 - fx) * fy],
+    [1, 1, fx * fy],
+  ]) {
+    const i = (wrap(y0 + dy, r.h, r.wrapT) * r.w + wrap(x0 + dx, r.w, r.wrapS)) * 4
+    for (let c = 0; c < 4; c++) out[c] += (w * r.data[i + c]) / 255
+  }
+  return out
+}
+
+const srgb2lin = (c: number) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4))
+
+interface BakeSource {
+  mat: Material | null
+  name: string
+  blend: boolean
+  base: Raw | null
+  baseUV: string
+  mr: Raw | null
+  mrUV: string
+  em: Raw | null
+  emUV: string
+}
+
+async function bakeSource(mat: Material | null): Promise<BakeSource> {
+  const tex = async (t: Texture | null, info: TextureInfo | null) => (t ? rawTexture(t, info) : null)
+  return {
+    mat,
+    name: mat?.getName() ?? '',
+    blend: mat?.getAlphaMode() === 'BLEND',
+    base: await tex(mat?.getBaseColorTexture() ?? null, mat?.getBaseColorTextureInfo() ?? null),
+    baseUV: `TEXCOORD_${mat?.getBaseColorTextureInfo()?.getTexCoord() ?? 0}`,
+    mr: await tex(mat?.getMetallicRoughnessTexture() ?? null, mat?.getMetallicRoughnessTextureInfo() ?? null),
+    mrUV: `TEXCOORD_${mat?.getMetallicRoughnessTextureInfo()?.getTexCoord() ?? 0}`,
+    em: await tex(mat?.getEmissiveTexture() ?? null, mat?.getEmissiveTextureInfo() ?? null),
+    emUV: `TEXCOORD_${mat?.getEmissiveTextureInfo()?.getTexCoord() ?? 0}`,
+  }
+}
+
+/** Window glass (as the game normalises it: a smooth dielectric, see gltfCars.ts normaliseMaterial). */
+const isWindow = (name: string) => /glass|window|windshield/i.test(name) && !/light|lamp|emissive/i.test(name)
+const isLight = (name: string) => /light|lamp/i.test(name)
+
+/**
+ * How a material is drawn at the simplified levels: the livery with its own material, blended decals
+ * with theirs (middle level), glass and everything else baked into vertex attributes.
+ */
+function routeOf(src: BakeSource, livery: string): 'livery' | 'decal' | 'glass' | 'opaque' {
+  if (src.name === livery) return 'livery'
+  if (src.blend) return /glass|window|windshield/i.test(src.name) || !src.base ? 'glass' : 'decal'
+  return 'opaque'
+}
+
+/**
+ * Bakes a part's material into vertex attributes:
+ *   COLOR_0  linear base colour, opacity
+ *   _PBR     roughness, metalness, brake-light mask, brake-disc mask (opaque) or the glass's
+ *            reflection compensation as an opacity (glass: alpha blending scales the reflection by the
+ *            opacity, the game divides by it)
+ *   _EMIT    emission / EMIT_SCALE (linear)
+ * `mode` 'opaqueGlass': windows drawn opaque (far level). `rearZ`: triangles behind it light up with the
+ * brakes, for materials that light the head and tail lights together (see gltfCars.ts splitLights).
+ */
+function bake(p: Part, src: BakeSource, mode: 'opaque' | 'glass' | 'opaqueGlass', rearZ: number): Part {
+  const m = src.mat
+  const n = p.attrs.POSITION.data.length / 3
+  const col = new Float32Array(n * 4),
+    pbr = new Float32Array(n * 4),
+    emit = new Float32Array(n * 3)
+  const bf = m?.getBaseColorFactor() ?? [1, 1, 1, 1]
+  const rough0 = m?.getRoughnessFactor() ?? 1,
+    metal0 = m?.getMetallicFactor() ?? 1
+  const strength = (m?.getExtension('KHR_materials_emissive_strength') as EmissiveStrength | null)?.getEmissiveStrength() ?? 1
+  const ef = (m?.getEmissiveFactor() ?? [0, 0, 0]).map((x) => x * strength)
+  const name = src.name
+  const rearAll = /Light_Rear/i.test(name)
+  const rearSplit = /Lights$/i.test(name)
+  const disc = /Disc/i.test(name) ? 1 : 0
+  const window = isWindow(name) && src.blend
+  const blackWindow = window && !src.base && !/sticker/i.test(name)
+  const t = [0, 0, 0, 0]
+  const uvOf = (sem: string) => p.attrs[sem]?.data ?? p.attrs.TEXCOORD_0?.data
+  const bUV = uvOf(src.baseUV),
+    mUV = uvOf(src.mrUV),
+    eUV = uvOf(src.emUV)
+  const P = p.attrs.POSITION.data
+  for (let i = 0; i < n; i++) {
+    let r = bf[0],
+      g = bf[1],
+      b = bf[2],
+      a = src.blend ? bf[3] : 1
+    if (src.base && bUV) {
+      sampleRaw(src.base, bUV[i * 2], bUV[i * 2 + 1], t)
+      r *= srgb2lin(t[0])
+      g *= srgb2lin(t[1])
+      b *= srgb2lin(t[2])
+      if (src.blend) a *= t[3]
+    }
+    let rough = rough0,
+      metal = metal0
+    if (src.mr && mUV) {
+      sampleRaw(src.mr, mUV[i * 2], mUV[i * 2 + 1], t)
+      rough *= t[1]
+      metal *= t[2]
+    }
+    let er = ef[0],
+      eg = ef[1],
+      eb = ef[2]
+    if (src.em && eUV && (er || eg || eb || rearAll || rearSplit)) {
+      sampleRaw(src.em, eUV[i * 2], eUV[i * 2 + 1], t)
+      er *= srgb2lin(t[0])
+      eg *= srgb2lin(t[1])
+      eb *= srgb2lin(t[2])
+    }
+    // brake lights: the game sets their emission (red, brighter with the brakes) over the emissive map
+    let rear = 0
+    if (rearAll || (rearSplit && P[i * 3 + 2] < rearZ)) {
+      rear = src.em && eUV ? Math.max(t[0], t[1], t[2]) : 1
+      er = eg = eb = 0
+    }
+    if (window) {
+      metal = 0
+      rough = Math.min(rough, 0.03)
+      if (blackWindow) {
+        r = g = b = 0
+        a = Math.min(a, 0.3)
+      }
+    }
+    if (mode !== 'glass') a = 1
+    col.set([r, g, b, a].map((x) => Math.min(1, Math.max(0, x))), i * 4)
+    const w = mode === 'glass' ? (blackWindow ? Math.max(0.25, a) : 1) : disc
+    pbr.set([Math.min(1, Math.max(0.02, rough)), Math.min(1, Math.max(0, metal)), rear, w], i * 4)
+    emit.set([er, eg, eb].map((x) => Math.min(1, Math.max(0, x / EMIT_SCALE))), i * 3)
+  }
+  const normal = p.attrs.NORMAL ?? { size: 3, data: new Float32Array(n * 3).map((_, k) => (k % 3 === 1 ? 1 : 0)) }
+  return {
+    material: null,
+    group: p.group,
+    sig: 'baked',
+    attrs: { POSITION: p.attrs.POSITION, NORMAL: normal, COLOR_0: { size: 4, data: col }, _PBR: { size: 4, data: pbr }, _EMIT: { size: 3, data: emit } },
+    indices: p.indices,
+    min: p.min,
+    max: p.max,
+  }
+}
+
+/** A part moved by `d` (wheel parts are stored relative to their wheel's centre). */
+function translated(p: Part, d: V3): Part {
+  const P = p.attrs.POSITION.data.slice()
+  for (let i = 0; i < P.length; i += 3) {
+    P[i] += d[0]
+    P[i + 1] += d[1]
+    P[i + 2] += d[2]
+  }
+  const [min, max] = bounds(P)
+  return { ...p, attrs: { ...p.attrs, POSITION: { size: 3, data: P } }, min, max }
+}
+
+/** Surface area of a part (m^2). */
+function area(p: Part) {
+  const P = p.attrs.POSITION.data,
+    I = p.indices
+  let s = 0
+  for (let t = 0; t < I.length; t += 3) {
+    const a = I[t] * 3,
+      b = I[t + 1] * 3,
+      c = I[t + 2] * 3
+    const ux = P[b] - P[a],
+      uy = P[b + 1] - P[a + 1],
+      uz = P[b + 2] - P[a + 2]
+    const vx = P[c] - P[a],
+      vy = P[c + 1] - P[a + 1],
+      vz = P[c + 2] - P[a + 2]
+    s += 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx)
+  }
+  return s
+}
+
+/** Merges parts that share a vertex layout (one primitive each layout), with the given material. */
+function mergeBySig(parts: Part[], material?: Material | null): Part[] {
+  const by = new Map<string, Part[]>()
+  const ids = new Map<Material | null, number>()
+  for (const p of parts) {
+    if (!ids.has(p.material)) ids.set(p.material, ids.size)
+    const key = p.sig + '|' + (material === undefined ? ids.get(p.material) : '')
+    by.set(key, [...(by.get(key) ?? []), p])
+  }
+  return [...by.values()].map((l) => ({ ...merge(l), material: material === undefined ? l[0].material : material }))
 }
 
 async function build(def: ModelDef) {
@@ -455,37 +870,67 @@ async function build(def: ModelDef) {
   const cabin = (p: Part) => p.min[0] > -0.78 && p.max[0] < 0.78 && p.min[1] > 0.1 && p.max[1] < 1.02 && p.min[2] > -1.05 && p.max[2] < 0.8
   const tiny = (p: Part) => Math.hypot(p.max[0] - p.min[0], p.max[1] - p.min[1], p.max[2] - p.min[2]) < 0.05
   const small = (p: Part) => Math.hypot(p.max[0] - p.min[0], p.max[1] - p.min[1], p.max[2] - p.min[2]) < 0.2
-  const lod0 = new Map<string, Part[]>(),
-    lod1 = new Map<string, Part[]>(),
-    lod2 = new Map<string, Part[]>()
-  let tris0 = 0,
-    tris1 = 0,
-    tris2 = 0
+  // what the baked levels sample (decoded once per texture)
+  const srcs = new Map<Material | null, BakeSource>()
+  for (const p of parts) if (!srcs.has(p.material)) srcs.set(p.material, await bakeSource(p.material))
+  // the brake lights of materials that light the head and tail lights together: the rear quarter
+  let zMin = Infinity,
+    zMax = -Infinity
+  for (const p of parts)
+    if (p.group === 'body') {
+      zMin = Math.min(zMin, p.min[2])
+      zMax = Math.max(zMax, p.max[2])
+    }
+  const rearZ = zMin + 0.25 * (zMax - zMin)
+  const lodOpaque = doc.createMaterial('lod:opaque').setMetallicFactor(0).setRoughnessFactor(1)
+  const lodGlass = doc.createMaterial('lod:glass').setAlphaMode('BLEND').setDoubleSided(true).setMetallicFactor(0).setRoughnessFactor(0.05)
+  const lod0 = new Map<string, Part[]>()
+  const lod1 = { livery: [] as Part[], opaque: [] as Part[], glass: [] as Part[], decals: [] as Part[], wheels: new Map<string, Part[]>() }
+  const lod2 = { livery: [] as Part[], opaque: [] as Part[] }
+  const dropped: string[] = []
   for (const list of groups.values()) {
     const g = list[0].group
     const m0 = merge(list)
     lod0.set(g, [...(lod0.get(g) ?? []), m0])
-    tris0 += m0.indices.length / 3
     if (g.endsWith(':fixed') || g === 'steer') continue // calipers and the steering wheel vanish at a distance
+    const src = srcs.get(list[0].material)!
+    const route = routeOf(src, liveryMat)
     const body = g === 'body'
+    const corner = body ? '' : g.split(':')[0]
     const keep1 = body ? list.filter((p) => !cabin(p) && !tiny(p)) : list
     if (keep1.length) {
       const s1 = simplifyPart(merge(keep1), body ? 0.14 : 0.2, body ? 0.004 : 0.01)
-      if (s1) {
-        lod1.set(g, [...(lod1.get(g) ?? []), s1])
-        tris1 += s1.indices.length / 3
-      }
+      if (s1 && !body) lod1.wheels.set(corner, [...(lod1.wheels.get(corner) ?? []), bake(s1, src, 'opaque', rearZ)])
+      else if (s1 && route === 'livery') lod1.livery.push(s1)
+      else if (s1 && route === 'decal') {
+        if (area(s1) >= DECAL_MIN_AREA) lod1.decals.push(s1)
+        else dropped.push(`${src.name} (${area(s1).toFixed(3)} m2)`)
+      } else if (s1) (route === 'glass' ? lod1.glass : lod1.opaque).push(bake(s1, src, route === 'glass' ? 'glass' : 'opaque', rearZ))
     }
-    // far level: silhouette and paint only
+    // far level: silhouette and paint only (the windows opaque, the wheels merged in, no decals)
     const keep2 = body ? list.filter((p) => !cabin(p) && !small(p)) : list
     if (keep2.length) {
       const s2 = simplifyPart(merge(keep2), body ? 0.04 : 0.06, 0.08, false)
-      if (s2) {
-        lod2.set(g, [...(lod2.get(g) ?? []), s2])
-        tris2 += s2.indices.length / 3
-      }
+      if (!s2) continue
+      if (!body) lod2.opaque.push(bake(translated(s2, wheel[corner].centre), src, 'opaque', rearZ))
+      else if (route === 'livery') lod2.livery.push(s2)
+      // lights keep their place (opaque); glass over them goes, so they show
+      else if (route === 'decal') {
+        if (isLight(src.name)) lod2.opaque.push(bake(s2, src, 'opaque', rearZ))
+      } else if (route === 'glass') {
+        if (isWindow(src.name)) lod2.opaque.push(bake(s2, src, 'opaqueGlass', rearZ))
+      } else lod2.opaque.push(bake(s2, src, 'opaque', rearZ))
     }
   }
+  if (dropped.length) console.log(`  middle level leaves out the decals ${dropped.join(', ')}`)
+  const body1 = [...mergeBySig(lod1.livery), ...mergeBySig(lod1.opaque, lodOpaque), ...mergeBySig(lod1.glass, lodGlass), ...mergeBySig(lod1.decals)]
+  const body2 = [...mergeBySig(lod2.livery), ...mergeBySig(lod2.opaque, lodOpaque)]
+  const wheels1 = new Map([...lod1.wheels].map(([k, l]) => [k, mergeBySig(l, lodOpaque)]))
+  const tris = (l: Part[]) => l.reduce((s, p) => s + p.indices.length / 3, 0)
+  const tris0 = [...lod0.values()].reduce((s, l) => s + tris(l), 0)
+  const tris1 = tris(body1) + [...wheels1.values()].reduce((s, l) => s + tris(l), 0)
+  const tris2 = tris(body2)
+  console.log(`  primitives: LOD0 body ${lod0.get('body')!.length}, steering ${lod0.get('steer')?.length ?? 0}; LOD1 body ${body1.length} (${body1.map((p) => p.material?.getName()).join(', ')}), wheels 1 each; LOD2 body ${body2.length}, wheels merged in`)
 
   // ---- new scene
   const root = doc.getRoot()
@@ -505,25 +950,23 @@ async function build(def: ModelDef) {
     }
     return mesh
   }
+  // a transform node with its mesh on a leaf node of its own (see the header: quantization)
+  const pivotNode = (name: string, list: Part[]) => doc.createNode(name).addChild(doc.createNode(name + '_mesh').setMesh(makeMesh(name, list)))
   const top = doc.createNode('car')
   scene.addChild(top)
   top.addChild(doc.createNode('body_lod0').setMesh(makeMesh('body_lod0', lod0.get('body')!)))
-  top.addChild(doc.createNode('body_lod1').setMesh(makeMesh('body_lod1', lod1.get('body')!)))
-  top.addChild(doc.createNode('body_lod2').setMesh(makeMesh('body_lod2', lod2.get('body')!)))
-  if (steering && lod0.get('steer')) top.addChild(doc.createNode('steering').setTranslation(steering.pivot).setMesh(makeMesh('steering', lod0.get('steer')!)))
+  top.addChild(doc.createNode('body_lod1').setMesh(makeMesh('body_lod1', body1)))
+  top.addChild(doc.createNode('body_lod2').setMesh(makeMesh('body_lod2', body2)))
+  if (steering && lod0.get('steer')) top.addChild(pivotNode('steering', lod0.get('steer')!).setTranslation(steering.pivot))
   for (const k of CORNERS) {
     const w = doc.createNode(`wheel_${k}`).setTranslation(wheel[k].centre)
     top.addChild(w)
-    for (const [suffix, map] of [
-      ['lod0', lod0],
-      ['lod1', lod1],
-      ['lod2', lod2],
-    ] as const) {
-      const spin = map.get(`${k}:spin`)
-      if (spin) w.addChild(doc.createNode(`wheel_${k}_spin_${suffix}`).setMesh(makeMesh(`wheel_${k}_spin_${suffix}`, spin)))
-    }
+    const spin0 = lod0.get(`${k}:spin`)
+    if (spin0) w.addChild(doc.createNode(`wheel_${k}_spin_lod0`).setMesh(makeMesh(`wheel_${k}_spin_lod0`, spin0)))
+    const spin1 = wheels1.get(k)
+    if (spin1) w.addChild(doc.createNode(`wheel_${k}_spin_lod1`).setMesh(makeMesh(`wheel_${k}_spin_lod1`, spin1)))
     const fixed = lod0.get(`${k}:fixed`)
-    if (fixed) w.addChild(doc.createNode(`wheel_${k}_fixed`).setMesh(makeMesh(`wheel_${k}_fixed`, fixed)))
+    if (fixed) w.addChild(pivotNode(`wheel_${k}_fixed`, fixed))
   }
   const boxCentre = (bs: [V3, V3][]): V3 | null => {
     if (!bs.length) return null
@@ -544,6 +987,11 @@ async function build(def: ModelDef) {
     credit: { title: asset.extras?.title ?? '', author: asset.extras?.author ?? '', license: asset.extras?.license ?? '', source: asset.extras?.source ?? '' },
   })
   await doc.transform(prune())
+
+  // ---- textures: single-colour images become factors, the rest are sized to the finest detail a
+  //      camera can see on the parts that use them
+  await constantTextures(doc)
+  await textureBudget(doc)
 
   // ---- textures: name them by use. The livery stays sharp; surface data (normals, roughness and
   //      metalness, clear coat) keeps the source's resolution, in near-lossless WebP (lossy WebP
@@ -566,7 +1014,8 @@ async function build(def: ModelDef) {
   }
   await doc.transform(
     textureCompress({ encoder: sharp, targetFormat: 'webp', quality: 82, pattern: /^noisy\d+$/ }),
-    meshopt({ encoder: MeshoptEncoder, level: 'medium' }),
+    // (the baked levels' linear vertex colours in 12 bits: 8 bits band the dark paints)
+    meshopt({ encoder: MeshoptEncoder, level: 'medium', quantizeColor: 12 }),
   )
   mkdirSync('public/models', { recursive: true })
   const out = `public/models/${def.id}.glb`

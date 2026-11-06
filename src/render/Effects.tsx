@@ -119,6 +119,11 @@ export function Effects() {
     skids.frustumCulled = false
     skids.receiveShadow = true
     skids.renderOrder = 1
+    // drawn once there are marks, only as many quads as were laid; decals on the road are not in the
+    // reflection probes
+    skids.visible = false
+    skidGeo.setDrawRange(0, 0)
+    skids.userData.noProbe = true
     return {
       smoke,
       attrs: { aPuff, aTint },
@@ -128,6 +133,9 @@ export function Effects() {
       skidPos,
       skidA,
       skidHead: 0,
+      /** quads laid so far (up to MAX_SKID), and this frame's first new one */
+      skidCount: 0,
+      skidFrom: -1,
       puffs: [] as Puff[],
       sparkP: [] as Spark[],
       // fractional emission carried between frames, per wheel
@@ -246,7 +254,9 @@ export function Effects() {
               const lift = 0.012
               sys.skidPos.set([prev.x - prev.lx, prev.y + lift, prev.z - prev.lz, prev.x + prev.lx, prev.y + lift, prev.z + prev.lz, cp.x - lx, cp.y + lift, cp.z - lz, cp.x + lx, cp.y + lift, cp.z + lz], b)
               sys.skidA.set([alpha, alpha, alpha, alpha], i * 4)
+              if (!skidDirty) sys.skidFrom = i
               sys.skidHead = (i + 1) % MAX_SKID
+              sys.skidCount = Math.min(MAX_SKID, sys.skidCount + 1)
               skidDirty = true
               sys.lastContact.set(key, { x: cp.x, y: cp.y, z: cp.z, lx, lz, on: true })
             }
@@ -389,8 +399,24 @@ export function Effects() {
     sys.sparkAlpha.needsUpdate = true
 
     if (skidDirty) {
-      ;(sys.skids.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true
-      ;(sys.skids.geometry.getAttribute('aAlpha') as THREE.BufferAttribute).needsUpdate = true
+      // upload only the quads laid this frame (the ring buffer may have wrapped)
+      const from = sys.skidFrom,
+        to = sys.skidHead
+      for (const [name, per] of [
+        ['position', 12],
+        ['aAlpha', 4],
+      ] as const) {
+        const a = sys.skids.geometry.getAttribute(name) as THREE.BufferAttribute
+        a.clearUpdateRanges()
+        if (to > from) a.addUpdateRange(from * per, (to - from) * per)
+        else {
+          a.addUpdateRange(from * per, (MAX_SKID - from) * per)
+          if (to > 0) a.addUpdateRange(0, to * per)
+        }
+        a.needsUpdate = true
+      }
+      sys.skids.visible = true
+      sys.skids.geometry.setDrawRange(0, sys.skidCount * 6)
     }
   }, 0)
 

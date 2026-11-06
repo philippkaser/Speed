@@ -3,12 +3,19 @@
 // Each car clones the shared template (geometry and most materials are shared between all cars) and
 // gets its own livery material: the model's livery texture is recoloured in the shader to the team's
 // colours (navy base -> team colour, red accents -> team accent), keeping logos, numbers and shading.
-// Levels of detail: the full model near the camera, a simplified one (no interior) further away and
-// for the shadow passes. Wheels are separate pivots (spin, steer, suspension travel, camber).
+// Levels of detail (CarLOD): the full model near the camera; further away a simplified one (no
+// interior; the livery keeps its material, everything else is baked into vertex attributes: a handful
+// of draws); far away two draws. One decision per car switches the body, the wheels, the calipers, the
+// steering wheel and the driver together. Shadow maps draw the simplified level at most (the car in
+// focus included: its own map is a few millimetres per texel, where the simplified level's 4 mm
+// tolerance does not show), reflection probes the far one. Wheels are separate pivots (spin, steer,
+// suspension travel, camber).
 import * as THREE from 'three/webgpu'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
-import { abs, float, Fn, min, mix, normalViewGeometry, positionViewDirection, pow, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
+import { abs, attribute, float, Fn, min, mix, normalViewGeometry, output, positionViewDirection, pow, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
+import { HERO_LAYER } from '../render/sunShadow'
 import type { CarSpec } from '../physics/spec'
 import type { Vehicle } from '../physics/vehicle'
 import type { CarModel } from './carModel'
@@ -54,43 +61,92 @@ export const gltfState = { ready: false, failed: '' }
 const LOD_DISTANCES = [0, 24, 80]
 const REF_TAN = Math.tan((50 * Math.PI) / 360)
 
-class ScreenLOD extends THREE.LOD {
+/**
+ * One level-of-detail decision per car, applied to all of its parts (the body, wheels, calipers,
+ * steering wheel and driver switch together: a wheel never shows a different level from the body it
+ * hangs on). Called by the renderer for every camera that draws the car:
+ *  - the main camera: by the car's size on screen, with hysteresis (remembered as the car's level);
+ *  - shadow cameras (orthographic): the car's level, but never the full model (the shadow of the
+ *    simplified one is indistinguishable, and the full one is dozens of draws per shadow map);
+ *  - reflection probes: the far level.
+ * It carries the hero's layer as well, so the hero's own shadow map (which draws nothing else) updates
+ * it too.
+ */
+const _fwd = new THREE.Vector3()
+const _rel = new THREE.Vector3()
+
+class CarLOD extends THREE.LOD {
+  /** the level the main camera picked, and the car's depth in its view (m) */
+  mainLevel = 0
+  depth = 0
+  private shown = -1
   private _camPos = new THREE.Vector3()
   private _objPos = new THREE.Vector3()
+  constructor(private parts: THREE.Object3D[][]) {
+    super()
+    this.layers.enable(HERO_LAYER)
+    this.show(0)
+  }
+  private show(level: number) {
+    if (level === this.shown) return
+    this.shown = level
+    this.parts.forEach((list, k) => {
+      for (const o of list) o.visible = k === level
+    })
+    ;(this as unknown as { _currentLevel: number })._currentLevel = level
+  }
   update(camera: THREE.Camera) {
-    const levels = this.levels
-    if (levels.length < 2) return
-    // reflection probes see cars at their simplest level of detail
-    if (camera.userData.probe) {
-      for (let k = 0; k < levels.length; k++) levels[k].object.visible = k === levels.length - 1
-      ;(this as unknown as { _currentLevel: number })._currentLevel = levels.length - 1
-      return
+    const last = this.parts.length - 1
+    if (camera.userData.probe) return this.show(last)
+    if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
+      // a cascade whose receivers this car's shadow cannot reach (sunShadow.ts tagCascadeDepths)
+      const r = camera.userData.cascadeDepth as [number, number] | undefined
+      if (r && (this.depth < r[0] || this.depth > r[1])) return this.show(-1)
+      // cascades whose texels are coarser than the far level's tolerance (8 cm) draw that
+      const far = ((camera.userData.cascadeTexel as number | undefined) ?? 0) > 0.08 ? last : 1
+      return this.show(Math.min(last, Math.max(this.mainLevel, far)))
     }
     this._camPos.setFromMatrixPosition(camera.matrixWorld)
     this._objPos.setFromMatrixPosition(this.matrixWorld)
+    // view depth (for the cascades), then the distance scaled by the lens
+    this.depth = _fwd.set(0, 0, -1).transformDirection(camera.matrixWorld).dot(_rel.subVectors(this._objPos, this._camPos))
     let d = this._camPos.distanceTo(this._objPos)
     const pc = camera as THREE.PerspectiveCamera
     if (pc.isPerspectiveCamera) d *= Math.tan((pc.fov * Math.PI) / 360) / REF_TAN / pc.zoom
-    let i = 1
-    for (; i < levels.length; i++) {
-      let ld = levels[i].distance
-      if (levels[i].object.visible) ld -= ld * levels[i].hysteresis
-      if (d < ld) break
-    }
-    for (let k = 0; k < levels.length; k++) levels[k].object.visible = k === i - 1
-    ;(this as unknown as { _currentLevel: number })._currentLevel = i - 1
+    let level = 0
+    // switch to a coarser level beyond its distance, back to a finer one 10% inside it
+    while (level < last && d >= LOD_DISTANCES[level + 1] * (level + 1 <= this.mainLevel ? 0.9 : 1)) level++
+    this.mainLevel = level
+    this.show(level)
   }
 }
 
-export function loadCarModels(): Promise<void> {
-  if (loading) return loading
-  const loader = new GLTFLoader()
-  loader.setMeshoptDecoder(MeshoptDecoder)
+/** Models the cars on the track use (requestCarModel): they load first. */
+const wanted = new Set<GltfCarId>()
+const loads = new Map<GltfCarId, Promise<void>>()
+let loader: GLTFLoader | null = null
+
+/** A car with this model is drawn (CarVisual): the model loads before the others. */
+export function requestCarModel(id: GltfCarId) {
+  wanted.add(id)
+  // the session can change after the first load (a race after practice): load it now
+  if (loader) loadModel(id)
+}
+
+function loadModel(id: GltfCarId): Promise<void> {
+  let p = loads.get(id)
+  if (p) return p
+  if (!loader) {
+    loader = new GLTFLoader()
+    // geometry decodes in workers, off the main thread
+    ;(MeshoptDecoder as unknown as { useWorkers?: (n: number) => void }).useWorkers?.(2)
+    loader.setMeshoptDecoder(MeshoptDecoder)
+  }
   const base = (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/'
-  loading = Promise.all(
-    GLTF_CARS.map(async ({ id }) => {
-      const t0 = performance.now()
-      const gltf = await loader.loadAsync(`${base}models/${id}.glb`)
+  const t0 = performance.now()
+  p = loader
+    .loadAsync(`${base}models/${id}.glb`)
+    .then((gltf) => {
       const car = gltf.scene.getObjectByName('car') ?? gltf.scene
       const meta = car.userData as Meta
       car.traverse((o) => {
@@ -102,22 +158,42 @@ export function loadCarModels(): Promise<void> {
           const s = mat as THREE.MeshStandardMaterial
           // keep the glass and decals out of the shadow maps' alpha blending trouble
           if (s.transparent) m.castShadow = false
+          // Double-sided transparent materials draw twice (back faces, then front faces) so that the far
+          // side of a glass shape shows through the near one. Decals, stickers and grilles lie on a
+          // surface whose back nobody sees: one pass (glass and lamps keep both).
+          if (s.transparent && s.side === THREE.DoubleSide && !/glass|window|windshield|lamp|light/i.test(s.name ?? '')) s.forceSinglePass = true
         }
       })
       const box = new THREE.Box3().setFromObject(car.getObjectByName('body_lod0') ?? car)
       splitLights(car, box)
       templates.set(id, { meta, car, zFront: box.max.z, zRear: box.min.z })
       console.info(`[car] ${meta.name} model loaded in ${(performance.now() - t0).toFixed(0)} ms`)
-    }),
-  )
-    .then(() => {
-      gltfState.ready = true
     })
     .catch((e) => {
       gltfState.failed = String(e?.message ?? e)
-      console.warn('[car] detailed car models unavailable, using procedural bodies:', e)
+      console.warn(`[car] detailed car model ${id} unavailable, using procedural bodies:`, e)
     })
     .finally(() => {
+      for (const l of listeners) l()
+    })
+  loads.set(id, p)
+  return p
+}
+
+/**
+ * Loads the detailed car models. Resolves once the models the cars on the track use are in (all of
+ * them if none was requested yet); the others load after them, in the background (a practice
+ * session waits for one model instead of three).
+ */
+export function loadCarModels(): Promise<void> {
+  if (loading) return loading
+  const all = GLTF_CARS.map((c) => c.id)
+  const now = all.filter((id) => wanted.has(id))
+  loading = Promise.all((now.length ? now : all).map(loadModel)).then(() => undefined)
+  loading
+    .then(() => Promise.all(all.map(loadModel)))
+    .then(() => {
+      gltfState.ready = true
       for (const l of listeners) l()
     })
   return loading
@@ -322,6 +398,56 @@ function normaliseMaterial(mat: THREE.Material) {
   return mat
 }
 
+/** Emission in the baked levels is stored over this scale (scripts/build-car-models.ts EMIT_SCALE). */
+const EMIT_SCALE = 8
+
+/**
+ * The simplified levels' material (scripts/build-car-models.ts bakes every material but the livery and
+ * the decals into vertex attributes): colour and opacity, roughness, metalness, emission, and the
+ * brake-light and brake-disc masks, lit by this car's brakes. Glass is alpha blended in one pass,
+ * its reflection kept at full strength (blending scales it by the opacity: the stored compensation).
+ */
+function bakedMaterial(glass: boolean, u: { brake: any; heat: any }) {
+  const m = new THREE.MeshStandardNodeMaterial()
+  m.name = glass ? 'lod:glass:car' : 'lod:opaque:car'
+  const col = attribute('color', 'vec4')
+  const pbr = attribute('_pbr', 'vec4')
+  m.colorNode = col.rgb
+  m.roughnessNode = pbr.x
+  m.metalnessNode = pbr.y
+  const emit = attribute('_emit', 'vec3').mul(EMIT_SCALE)
+  if (glass) {
+    m.emissiveNode = emit
+    m.transparent = true
+    m.depthWrite = false
+    m.side = THREE.DoubleSide
+    m.forceSinglePass = true
+    m.opacityNode = col.a
+    m.outputNode = vec4(output.rgb.div(pbr.w.max(0.25)), output.a)
+  } else m.emissiveNode = emit.add(vec3(u.brake).mul(pbr.z)).add(vec3(u.heat).mul(pbr.w))
+  return m
+}
+
+/** The driver for the simplified level: one low-poly mesh with baked attributes (see bakedMaterial). */
+function lowDriverGeometry(torso: THREE.Mesh, helmet: THREE.Mesh, visor: THREE.Mesh, suit: THREE.Color, helmetColour: THREE.Color) {
+  const part = (g: THREE.BufferGeometry, from: THREE.Object3D, c: THREE.Color, rough: number, metal: number) => {
+    from.updateMatrix()
+    g.applyMatrix4(from.matrix)
+    g.deleteAttribute('uv')
+    const n = g.getAttribute('position').count
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 4).map((_, i) => [c.r, c.g, c.b, 1][i % 4]), 4))
+    g.setAttribute('_pbr', new THREE.BufferAttribute(new Float32Array(n * 4).map((_, i) => [rough, metal, 0, 0][i % 4]), 4))
+    g.setAttribute('_emit', new THREE.BufferAttribute(new Float32Array(n * 3), 3))
+    return g
+  }
+  const merged = mergeGeometries([
+    part(new THREE.CapsuleGeometry(0.17, 0.3, 2, 8), torso, suit, 0.85, 0),
+    part(new THREE.SphereGeometry(0.135, 10, 7), helmet, helmetColour, 0.22, 0.1),
+    part(new THREE.SphereGeometry(0.137, 6, 3, -0.9, 1.8, 1.1, 0.7), visor, new THREE.Color(0x050505), 0.05, 0.9),
+  ])
+  return merged
+}
+
 // ------------------------------------------------------------------------------------------------ cars
 
 const heat = new THREE.Color()
@@ -357,6 +483,8 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
   let livery: ReturnType<typeof liveryMaterial> | null = null
   const rearLights: THREE.MeshStandardMaterial[] = []
   const discs: THREE.MeshStandardMaterial[] = []
+  // the simplified levels' brake lights and discs (bakedMaterial)
+  const bakedU = { brake: uniform(new THREE.Color(0, 0, 0)), heat: uniform(new THREE.Color(0, 0, 0)) }
   const swap = (mat: THREE.Material): THREE.Material => {
     const hit = own.get(mat)
     if (hit) return hit
@@ -365,6 +493,8 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
     if (name === meta.livery && (mat as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial) {
       livery = liveryMaterial(mat as THREE.MeshPhysicalMaterial, meta.paint, primary, accent)
       out = livery.material
+    } else if (name === 'lod:opaque' || name === 'lod:glass') {
+      out = bakedMaterial(name === 'lod:glass', bakedU)
     } else if (/Light_Rear/i.test(name) || /Disc/i.test(name) || opts.uniqueMaterials !== false) {
       // every car its own materials: each car carries its own reflection probe
       out = normaliseMaterial(mat.clone())
@@ -385,12 +515,18 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
     return o
   }
 
-  const bodyLod = new ScreenLOD()
-  LOD_DISTANCES.forEach((d, i) => {
+  // levels of detail: what each level shows (CarLOD switches them together)
+  const levels: THREE.Object3D[][] = LOD_DISTANCES.map(() => [])
+  // the body's levels and the steering wheel (setVisibleParts hides them all)
+  const bodyParts = new THREE.Group()
+  bodyGroup.add(bodyParts)
+  LOD_DISTANCES.forEach((_, i) => {
     const o = tpl.car.getObjectByName(`body_lod${i}`)
-    if (o) bodyLod.addLevel(adopt(o.clone(true)), d, 0.1)
+    if (!o) return
+    const c = adopt(o.clone(true))
+    bodyParts.add(c)
+    levels[i].push(c)
   })
-  bodyGroup.add(bodyLod)
 
   // wheels
   const corners = ['FL', 'FR', 'RL', 'RR'] as const
@@ -400,30 +536,35 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
     const pivot = new THREE.Group()
     const spin = new THREE.Group()
     pivot.add(spin)
-    const lod = new ScreenLOD()
-    LOD_DISTANCES.forEach((d, i) => {
+    // (the far level has the wheels merged into the body)
+    LOD_DISTANCES.forEach((_, i) => {
       const o = node.getObjectByName(`wheel_${k}_spin_lod${i}`)
-      if (o) lod.addLevel(adopt(o.clone(true)), d, 0.1)
+      if (!o) return
+      const c = adopt(o.clone(true))
+      spin.add(c)
+      levels[i].push(c)
     })
-    lod.position.set(0, 0, 0)
-    spin.add(lod)
+    // calipers: steer, do not spin; full model only
     const fixed = node.getObjectByName(`wheel_${k}_fixed`)
     if (fixed) {
       const f = adopt(fixed.clone(true))
-      f.position.set(0, 0, 0)
       pivot.add(f)
+      levels[0].push(f)
     }
     root.add(pivot)
     return { k, pivot, spin, x: meta.wheels[k].centre[0], index: physIndex[k] }
   })
 
-  // steering wheel: turns about its own column axis
+  // steering wheel: turns about its own column axis (full model only)
   const steerTpl = tpl.car.getObjectByName('steering')
   const steering = steerTpl ? adopt(steerTpl.clone(true)) : null
   const steerAxis = new THREE.Vector3(...(meta.steeringAxis ?? [0, 0.35, -0.94])).normalize()
   const steerRest = steering ? steering.quaternion.clone() : null
   const _sq = new THREE.Quaternion()
-  if (steering) bodyGroup.add(steering)
+  if (steering) {
+    bodyParts.add(steering)
+    levels[0].push(steering)
+  }
 
   // driver: suit in the team colour, helmet in the accent
   const driver = new THREE.Group()
@@ -442,11 +583,28 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
   helmet.position.copy(helmetPos)
   const visor = new THREE.Mesh(new THREE.SphereGeometry(0.137, 24, 12, -0.9, 1.8, 1.1, 0.7), visorMat)
   visor.position.copy(helmetPos)
+  const driverFull = new THREE.Group()
   for (const m of [torso, helmet, visor]) {
     m.castShadow = true
-    driver.add(m)
+    driverFull.add(m)
+  }
+  driver.add(driverFull)
+  levels[0].push(driverFull)
+  // the simplified level's driver: one low-poly mesh in the baked material (the far level has opaque
+  // windows and no driver)
+  const lowOpaque = [...own.values()].find((m) => m.name === 'lod:opaque:car')
+  const driverLow = lowOpaque ? new THREE.Mesh(lowDriverGeometry(torso, helmet, visor, suit.color, accent), lowOpaque) : null
+  if (driverLow) {
+    driverLow.castShadow = true
+    driverLow.receiveShadow = true
+    driver.add(driverLow)
+    levels[1].push(driverLow)
   }
   bodyGroup.add(driver)
+  // the level of detail is decided once per car, before its parts are drawn (first child)
+  const carLod = new CarLOD(levels)
+  root.add(carLod)
+  root.children.unshift(root.children.pop()!)
 
   const bodyOffset = new THREE.Vector3()
   const cockpitEye = new THREE.Vector3()
@@ -478,15 +636,18 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
       m.emissive.copy(heat)
       m.emissiveIntensity = glow
     }
+    ;(bakedU.brake.value as THREE.Color).setRGB(1, 0.02, 0.02).multiplyScalar(0.6 + v.brake * 7)
+    ;(bakedU.heat.value as THREE.Color).copy(heat).multiplyScalar(glow)
   }
 
   const setVisibleParts = (o: { body?: boolean; interior?: boolean; driver?: boolean }) => {
-    if (o.body !== undefined) bodyLod.visible = o.body
+    if (o.body !== undefined) bodyParts.visible = o.body
     if (o.driver !== undefined) driver.visible = o.driver
   }
 
   const dispose = () => {
     for (const m of disposables) m.dispose()
+    driverLow?.geometry.dispose()
     torso.geometry.dispose()
     helmet.geometry.dispose()
     visor.geometry.dispose()
