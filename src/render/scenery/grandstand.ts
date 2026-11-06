@@ -86,10 +86,12 @@ export function buildGrandstand(o: StandOpts, kits: { arch: Kit; seats: Kit; sig
   }
   // big sponsor panels on the end walls, framed
   {
-    const w = Math.min(R * DEPTH * 0.8, 14),
+    // within the stepped wall: the panel's top below the terraces at its front edge
+    const w = R * DEPTH * 0.55,
       h = w / 4
-    const zc = zBack * 0.55,
-      yc = Math.max(h / 2 + 0.8, yTop(Math.floor(R * 0.45)) - h / 2)
+    const zc = zBack * 0.62
+    const rowFront = Math.floor(-(zc + w / 2) / DEPTH)
+    const yc = Math.max(h / 2 + 0.8, yTop(rowFront) - h / 2 - 0.3)
     for (const [x, f] of [
       [x1 + 0.02, 1],
       [x0 - 0.02, -1],
