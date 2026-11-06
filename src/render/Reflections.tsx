@@ -205,6 +205,11 @@ export function Reflections() {
     const prevTarget = renderer.getRenderTarget()
     const prevFace = renderer.getActiveCubeFace()
     const prevMip = renderer.getActiveMipmapLevel()
+    // the scene's world matrices once for all the faces (each render would traverse the whole scene
+    // graph again: the largest part of a probe face's own cost)
+    const autoMatrices = scene.matrixWorldAutoUpdate
+    scene.updateMatrixWorld()
+    scene.matrixWorldAutoUpdate = false
     try {
       for (const { p, faces } of work) {
         const pose = p.owner ? carPoses.get(p.owner) : undefined
@@ -235,6 +240,7 @@ export function Reflections() {
         }
       }
     } finally {
+      scene.matrixWorldAutoUpdate = autoMatrices
       renderer.setRenderTarget(prevTarget, prevFace, prevMip)
       sys.hidden.forEach((o, i) => (o.visible = hiddenState[i]))
       // back as they were; cascades created during the probes render in the main pass
