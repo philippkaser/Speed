@@ -19,7 +19,7 @@ function finish(pos: number[], uv: number[], idx: number[], extra?: Record<strin
 }
 
 /** Generic ribbon along s with columns at lateral offsets returned by `cols(i)` */
-function ribbon(track: Track, step: number, cols: (i: number) => number[] | null, lift = 0, extraFn?: (i: number, d: number, c: number) => number[], extraSize = 0, planarUV = 4) {
+function ribbon(track: Track, step: number, cols: (i: number) => number[] | null, lift = 0, extraFn?: (i: number, d: number, c: number, unwrapped: number) => number[], extraSize = 0, planarUV = 4) {
   const pos: number[] = []
   const uv: number[] = []
   const idx: number[] = []
@@ -39,7 +39,7 @@ function ribbon(track: Track, step: number, cols: (i: number) => number[] | null
       track.pointAt(i * DS, c[k], tmp)
       pos.push(tmp.x, tmp.y + lift, tmp.z)
       uv.push(tmp.x / planarUV, tmp.z / planarUV)
-      if (extraFn) ex.push(...extraFn(ii, c[k], k))
+      if (extraFn) ex.push(...extraFn(ii, c[k], k, i))
     }
     if (prevRow >= 0 && prevCount === c.length) {
       // columns increasing in d (towards the left) give upward-facing CCW triangles
@@ -59,8 +59,44 @@ function ribbon(track: Track, step: number, cols: (i: number) => number[] | null
   return finish(pos, uv, idx, extraFn ? { aTrack: { data: ex, size: extraSize } } : undefined)
 }
 
+/**
+ * Where tyres leave their marks: braking zones (the physics' own weights) and traction zones (hard
+ * acceleration out of slow corners: wheelspin), per centreline sample.
+ */
+function skidZones(track: Track) {
+  const n = track.n
+  const traction = new Float32Array(n)
+  for (let i = 0; i < n; i++) {
+    const v = track.speed[i]
+    const dv = track.speed[(i + 4) % n] - v
+    traction[i] = clamp(dv / 0.9, 0, 1) * (1 - smoothstep(24, 46, v))
+  }
+  // spread over ~15 m
+  const out = new Float32Array(n)
+  for (let i = 0; i < n; i++) {
+    let s = 0
+    for (let k = -8; k <= 8; k++) s += traction[(i + k + n) % n]
+    out[i] = Math.min(1, (s / 17) * 1.6)
+  }
+  return out
+}
+
 export function buildRoad(track: Track) {
-  // aTrack = (d, s, racingLineOffset, halfWidth)
+  // aTrack = (d, s, racingLineOffset, halfWidth); aTrack2 = (braking zone, traction zone, 0, 0)
+  const g = buildRoadRibbon(track)
+  const tr = g.getAttribute('aTrack') as THREE.BufferAttribute
+  const zones = skidZones(track)
+  const a2 = new Float32Array(tr.count * 4)
+  for (let v = 0; v < tr.count; v++) {
+    const i = track.idx(tr.getY(v))
+    a2[v * 4] = track.brakeZone[i]
+    a2[v * 4 + 1] = zones[i]
+  }
+  g.setAttribute('aTrack2', new THREE.BufferAttribute(a2, 4))
+  return g
+}
+
+function buildRoadRibbon(track: Track) {
   return ribbon(
     track,
     2,
@@ -72,7 +108,8 @@ export function buildRoad(track: Track) {
       return c
     },
     0,
-    (i, d) => [d, i * DS, track.racing[i], track.hw[i]],
+    // s unwrapped: continuous across the start line (the last row is s = length, not 0)
+    (i, d, _c, u) => [d, u * DS, track.racing[i], track.hw[i]],
     4,
   )
 }
@@ -96,7 +133,7 @@ export function buildKerbs(track: Track) {
           return c
         },
         0.002,
-        (i, d) => [(Math.abs(d) - track.hw[i]) / Math.max(S.kerb[i], 0.01), i * DS, side, S.kerb[i]],
+        (i, d, _c, u) => [(Math.abs(d) - track.hw[i]) / Math.max(S.kerb[i], 0.01), u * DS, side, S.kerb[i]],
         4,
       ),
     )
@@ -119,7 +156,7 @@ export function buildRunoff(track: Track) {
           return [side * (e - 0.05), side * (e + p * 0.5), side * (e + p)]
         },
         -0.002,
-        (i, d) => [d, i * DS, side, track.hw[i] + S.kerb[i]],
+        (i, d, _c, u) => [d, u * DS, side, track.hw[i] + S.kerb[i]],
         4,
       ),
     )
@@ -359,47 +396,8 @@ export function buildTerrain(track: Track, res = 6, margin = 650) {
   return { geometry: g, heights: th, bounds: { x0, x1, z0, z1 } }
 }
 
-/** Distant mountain ring for the horizon. */
-export function buildMountains(center: THREE.Vector3, inner: number, outer: number, seed = 3) {
-  const segs = 220,
-    rings = 18
-  const pos: number[] = [],
-    idx: number[] = []
-  for (let r = 0; r <= rings; r++) {
-    const t = r / rings
-    const rad = lerp(inner, outer, t)
-    for (let s = 0; s <= segs; s++) {
-      const a = (s / segs) * Math.PI * 2
-      const x = center.x + Math.cos(a) * rad,
-        z = center.z + Math.sin(a) * rad
-      let ridge = 0,
-        amp = 1,
-        f = 1 / 900
-      for (let o = 0; o < 6; o++) {
-        const n = valueNoise2(x * f + seed * 17, z * f - seed * 5)
-        ridge += (1 - Math.abs(n * 2 - 1)) ** 2 * amp
-        amp *= 0.5
-        f *= 2.1
-      }
-      const env = Math.sin(t * Math.PI) ** 0.7 * (0.6 + 0.4 * valueNoise2(a * 2.5, 7.1))
-      const y = -10 + ridge * 520 * env * smoothstep(0, 0.25, t)
-      pos.push(x, y, z)
-    }
-  }
-  for (let r = 0; r < rings; r++)
-    for (let s = 0; s < segs; s++) {
-      const a = r * (segs + 1) + s,
-        b = a + 1,
-        c = a + segs + 1,
-        d = c + 1
-      idx.push(a, b, c, b, d, c)
-    }
-  const g = new THREE.BufferGeometry()
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
-  g.setIndex(idx)
-  g.computeVertexNormals()
-  return g
-}
+/** The mountains around the valley (scenery/mountains.ts). */
+export { buildMountains, type MountainSet } from './scenery/mountains'
 
 // ------------------------------------------------------------------------------------ barriers
 

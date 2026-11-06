@@ -5,7 +5,8 @@ import type { Track } from '../track/track'
 import { rubberTexture, armcoMaterial, concreteWallMaterial, fenceMaterial, kerbMaterial, markingMaterial, mountainMaterial, roadMaterial, runoffMaterial, terrainMaterial, tyreWallMaterial, vergeMaterial } from './materials'
 import { Scenery } from './Scenery'
 import { debugFlag } from '../util/debug'
-import { buildBarriers, buildKerbs, buildMarkings, buildMountains, buildRoad, buildRunoff, buildTerrain, buildVerge } from './trackGeometry'
+import { buildBarriers, buildKerbs, buildMarkings, buildMountains, buildRoad, buildRunoff, buildTerrain, buildVerge, type MountainSet } from './trackGeometry'
+import { sunState } from './Environment'
 
 function mesh(geo: THREE.BufferGeometry, mat: THREE.Material, opts: { cast?: boolean; receive?: boolean; name?: string } = {}) {
   const m = new THREE.Mesh(geo, mat)
@@ -48,8 +49,23 @@ export function TrackScene({ track }: { track: Track }) {
     g.add(mesh(terrain.geometry, terrainMaterial(), { name: 'terrain' }))
     const center = new THREE.Vector3((track.minX + track.maxX) / 2, 0, (track.minZ + track.maxZ) / 2)
     const radius = Math.max(track.maxX - track.minX, track.maxZ - track.minZ) * 0.5
-    const mountains = mesh(buildMountains(center, radius + 900, radius + 7000), mountainMaterial(), { name: 'mountains', receive: false })
+    // within ~7.6 km of any camera on the circuit: the sky dome (8 km) would cut anything beyond
+    const mset = buildMountains(center, radius + 900, radius + 6000)
+    const mMat = mountainMaterial()
+    const mountains = new THREE.Group()
+    mountains.name = 'mountains'
+    for (const geo of mset.sectors) {
+      // receives the sun's shadow only for its own baked term (beyond the cascades the maps are lit)
+      const sector = mesh(geo, mMat, { name: 'mountains', receive: true })
+      // the cars' reflection probes draw the coarse mesh
+      sector.onBeforeRender = (_r, _s, camera) => {
+        const [start, count] = camera.userData.probe ? mset.coarse : mset.fine
+        geo.setDrawRange(start, count)
+      }
+      mountains.add(sector)
+    }
     g.add(mountains)
+    g.userData.mountains = mset
     const b = buildBarriers(track)
     g.add(mesh(b.armco, armcoMaterial(), { cast: true, name: 'armco' }))
     g.add(mesh(b.concrete, concreteWallMaterial(), { cast: true, name: 'concrete' }))
@@ -76,11 +92,18 @@ export function TrackScene({ track }: { track: Track }) {
 
   // the racing line darkens as the field lays rubber (refresh a few times a minute)
   const acc = useRef(0)
+  // the mountains' sun visibility is baked for the sun's direction (again when it has moved ~1.5 deg)
+  const bakedSun = useRef(new THREE.Vector3())
   useFrame((_, dt) => {
     acc.current += dt
     if (acc.current > 4 && track.rubberDirty) {
       acc.current = 0
       group.userData.rubber.refresh()
+    }
+    const mset = group.userData.mountains as MountainSet
+    if (mset && sunState.dir.y > 0 && bakedSun.current.dot(sunState.dir) < 0.99966) {
+      bakedSun.current.copy(sunState.dir)
+      mset.bakeSun(sunState.dir)
     }
   })
 
