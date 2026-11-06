@@ -52,10 +52,12 @@ export const MAX_LEVELS = 10
 
 /** The lens's point-spread function. */
 export const SCATTER = {
-  /** share of all light the lens scatters (taken from the image, spread over the PSF) */
-  k: 0.12,
+  /** share of all light the lens scatters (taken from the image, spread over the PSF). A modern
+   *  multi-coated broadcast or cinema lens: enough for the sky to glow over a roof line, not the milky
+   *  veil over the whole frame that 12% gave */
+  k: 0.05,
   /** power-law slope of the PSF's energy density (r^-slope): smaller = a longer veil */
-  slope: 2.35,
+  slope: 2.45,
   /** share of the scattered light in a glow at medium radii (diffusion), and its radius in image heights */
   glow: 0.45,
   glowSigma: 0.015,
@@ -457,7 +459,7 @@ export function sunGlare(visible: N, ghosts: boolean): N {
 // ------------------------------------------------------------------------------------------ optics
 
 /** Lateral chromatic aberration: red and blue sampled at slightly different radii. */
-export function lateralCA(exposed: N, strength = 0.0018): N {
+export function lateralCA(exposed: N, strength = 0.0009): N {
   const p = uv()
   const d = p.sub(0.5)
   const r2 = d.mul(vec2(lensU.aspect, 1)).dot(d.mul(vec2(lensU.aspect, 1))).div(lensU.aspect.mul(lensU.aspect).add(1).mul(0.25))

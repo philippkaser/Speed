@@ -6,6 +6,7 @@ import { clamp } from '../../physics/math'
 import { useGameStore } from '../../state/gameStore'
 import { useSettings } from '../../state/settings'
 import { fmtDelta, fmtTime } from '../components'
+import { dynRes } from '../../render/dynamicRes'
 
 const TACH_W = 470,
   TACH_CX = 235,
@@ -93,7 +94,11 @@ export function HUD() {
         fpsN = 0
         fpsLast = now
         const f = r.current.fps
-        if (f) f.textContent = `${fpsAcc.toFixed(0)} fps · ${useGameStore.getState().rendererInfo}`
+        if (f) {
+          const gpu = dynRes.timestamps && dynRes.gpuMs > 0 ? ` · GPU ${dynRes.gpuMs.toFixed(1)} ms` : ''
+          const res = dynRes.outW ? ` · ${dynRes.inW}×${dynRes.inH} → ${dynRes.outW}×${dynRes.outH}` : ''
+          f.textContent = `${fpsAcc.toFixed(0)} fps · ${useGameStore.getState().rendererInfo}${gpu}${res}`
+        }
       }
       if (now - last < 33) return
       last = now

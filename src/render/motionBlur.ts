@@ -79,7 +79,7 @@ export const motionBlurUniforms = {
   /** exposure as a fraction of one frame (exposure time / frame time) */
   shutter: uniform(0.5),
   /** longest half streak as a fraction of the image height */
-  maxRadius: uniform(0.08),
+  maxRadius: uniform(0.05),
   /** 1: camera shake does not blur (see markCameraPath), 0: it does */
   ignoreShake: uniform(1),
   frame: uniform(0),

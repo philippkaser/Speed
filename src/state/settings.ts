@@ -6,7 +6,21 @@ export type QualityPreset = 'low' | 'medium' | 'high' | 'ultra'
 
 export interface GraphicsSettings {
   preset: QualityPreset
-  resolutionScale: number // 0.5 .. 1 (of device pixel ratio, capped)
+  /** the cap on the internal render scale (0.5 .. 1 of the native output, per axis) */
+  resolutionScale: number
+  /** dynamic resolution: the internal scale follows the GPU's frame time (default on) */
+  dynamicRes?: boolean
+  /** the frame rate dynamic resolution holds */
+  targetFps?: number
+  /** RCAS sharpening after the temporal upscaler, 0..1 */
+  sharpness?: number
+  /** the sensor's noise as film grain (off by default: it costs clarity) */
+  filmGrain?: boolean
+  /** HDR output on HDR displays (WebGPU, extended-range canvas); applies on reload */
+  hdr?: boolean
+  /** the display's peak brightness and its paper white (nits), for the HDR tone curve */
+  hdrPeakNits?: number
+  hdrPaperWhite?: number
   ssgi: boolean
   ssr: boolean
   ao: boolean
@@ -76,10 +90,10 @@ export interface SettingsState {
 }
 
 export const PRESETS: Record<QualityPreset, Omit<GraphicsSettings, 'fov' | 'cameraShake' | 'showFps' | 'preset' | 'backend' | 'backendNote' | 'sky'>> = {
-  low: { resolutionScale: 0.7, autoExposure: false, ssgi: false, ssr: false, ao: false, motionBlur: 0, bloom: true, taa: false, shadows: 1, trees: 0.35, envProbe: false, reflections: 1 },
-  medium: { resolutionScale: 1, autoExposure: true, ssgi: false, ssr: false, ao: true, motionBlur: 1, bloom: true, taa: true, shadows: 2, trees: 0.7, envProbe: true, reflections: 1 },
-  high: { resolutionScale: 1, autoExposure: true, ssgi: true, ssr: false, ao: true, motionBlur: 1, bloom: true, taa: true, shadows: 2, trees: 1, envProbe: true, reflections: 2 },
-  ultra: { resolutionScale: 1, autoExposure: true, ssgi: true, ssr: false, ao: true, motionBlur: 1, bloom: true, taa: true, shadows: 3, trees: 1.4, envProbe: true, reflections: 3 },
+  low: { resolutionScale: 0.75, autoExposure: false, ssgi: false, ssr: false, ao: false, motionBlur: 0, bloom: true, taa: false, shadows: 1, trees: 0.35, envProbe: false, reflections: 1, sharpness: 0.3 },
+  medium: { resolutionScale: 1, autoExposure: true, ssgi: false, ssr: false, ao: true, motionBlur: 0.5, bloom: true, taa: true, shadows: 2, trees: 0.7, envProbe: true, reflections: 1, sharpness: 0.55 },
+  high: { resolutionScale: 1, autoExposure: true, ssgi: true, ssr: false, ao: true, motionBlur: 0.5, bloom: true, taa: true, shadows: 2, trees: 1, envProbe: true, reflections: 2, sharpness: 0.5 },
+  ultra: { resolutionScale: 1, autoExposure: true, ssgi: true, ssr: false, ao: true, motionBlur: 0.5, bloom: true, taa: true, shadows: 3, trees: 1.4, envProbe: true, reflections: 3, sharpness: 0.45 },
 }
 
 function defaultPreset(): QualityPreset {
@@ -124,7 +138,7 @@ export const useSettings = create<SettingsState>()(
     }),
     {
       name: 'speed-settings-v1',
-      version: 4,
+      version: 5,
       // v3: motion blur is a shutter angle relative to each frame, 360 degrees by default (streaks
       // join from frame to frame). Earlier preset defaults move to it; custom values stay.
       migrate: (persisted, version) => {
@@ -136,6 +150,13 @@ export const useSettings = create<SettingsState>()(
         if (version < 4 && p.graphics) {
           const pr = (p.graphics.preset ?? 'high') as QualityPreset
           p.graphics = { ...p.graphics, ssr: false, reflections: PRESETS[pr]?.reflections ?? 2 }
+        }
+        // v5: native output resolution with temporal upscaling and sharpening; a 180 degree shutter
+        // (the 360 degree default smeared the picture) and no film grain by default
+        if (version < 5 && p.graphics) {
+          const pr = (p.graphics.preset ?? 'high') as QualityPreset
+          if (p.graphics.motionBlur === 1) p.graphics = { ...p.graphics, motionBlur: PRESETS[pr]?.motionBlur ?? 0.5 }
+          if (p.graphics.resolutionScale !== undefined && p.graphics.resolutionScale < 0.75) p.graphics = { ...p.graphics, resolutionScale: PRESETS[pr]?.resolutionScale ?? 1 }
         }
         return p as SettingsState
       },

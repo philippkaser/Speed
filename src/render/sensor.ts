@@ -27,7 +27,7 @@ import * as tsl from 'three/tsl'
 
 type N = any
 
-const { Fn, hash, max, min, mix, pow, screenCoordinate, step, uint, uniform, vec3 } = tsl as N
+const { Fn, float, hash, max, min, mix, pow, screenCoordinate, step, uint, uniform, vec3 } = tsl as N
 
 /** Tone curve: contrast, shoulder sharpness, and its anchor (exposed value -> display-linear value). */
 export const CURVE = { contrast: 1.62, shoulder: 1.4, keyIn: 0.13, keyOut: 0.11 }
@@ -38,7 +38,19 @@ export const sensorU = {
   /** relative noise at the key (shot noise; 0 = none) */
   noise: uniform(0.02),
   frame: uniform(0),
+  /** HDR output: the display's peak over its paper white (1 = SDR) */
+  hdrPeak: uniform(1),
 }
+
+/**
+ * HDR output (an extended-range rgba16float canvas, Settings -> HDR): the same picture, its tone
+ * curve re-targeted to the display's peak. Shadows and mid-tones land exactly where the SDR picture
+ * puts them relative to paper white (sunlit asphalt at the same brightness); only the shoulder opens
+ * up, so highlights (the sun, glints on the clear coat, sunlit clouds) keep their colour and detail
+ * up to `peak` times paper white instead of rolling into white. Values above 1 are brighter than SDR
+ * white, encoded with the extended sRGB curve (sign-preserving), as the canvas expects.
+ */
+export const hdrState = { active: false, peakNits: 1000, paperWhiteNits: 203 }
 
 /** The key that the sensor noise is relative to (exposed units, ~ sunlit asphalt). */
 const NOISE_KEY = 0.15
@@ -64,6 +76,25 @@ const curveNode = (x: N) => {
   const k = c.keyIn * (c.keyOut ** -c.shoulder - 1) ** (1 / cd)
   const u = pow(max(x, vec3(1e-6)).div(k), vec3(-cd))
   return pow(u.add(1), vec3(-1 / c.shoulder))
+}
+
+/**
+ * The tone curve with its asymptote at P (HDR): y = P (1 + (k_P / x)^(c d))^(-1 / d), k_P chosen so
+ * the key still lands at keyOut. P = 1 is the SDR curve exactly.
+ */
+const curveNodeHDR = (x: N, P: N) => {
+  const c = CURVE
+  const cd = c.contrast * c.shoulder
+  const kP = pow(pow(float(c.keyOut).div(P), float(-c.shoulder)).sub(1), float(1 / cd)).mul(c.keyIn)
+  const u = pow(max(x, vec3(1e-6)).div(kP), vec3(-cd))
+  return pow(u.add(1), vec3(-1 / c.shoulder)).mul(P)
+}
+
+/** The HDR tone curve on plain numbers (asymptote P times paper white; P = 1 is toneCurve). */
+export function toneCurveHDR(x: number, P: number, c = CURVE) {
+  const cd = c.contrast * c.shoulder
+  const k = c.keyIn * ((c.keyOut / P) ** -c.shoulder - 1) ** (1 / cd)
+  return P * (1 + (k / Math.max(x, 1e-6)) ** cd) ** (-1 / c.shoulder)
 }
 
 const mul3n = (m: number[], v: number[]) => [0, 1, 2].map((i) => m[i * 3] * v[0] + m[i * 3 + 1] * v[1] + m[i * 3 + 2] * v[2])
@@ -94,6 +125,36 @@ export const displayTransform = Fn(([rgb]: [N]) => {
   const lin = pow(max(e, vec3(0)), vec3(2.2))
   return min(max(mul3(POST, lin), vec3(0)), vec3(1))
 })
+
+/**
+ * HDR: scene-linear exposed Rec.709 -> display-linear Rec.709 in [0, peak] (1 = paper white). The
+ * inset/outset run on the curve normalised to [0, 1], so colours desaturate towards the HDR peak the
+ * way the SDR picture does towards white.
+ */
+export const displayTransformHDR = Fn(([rgb]: [N]) => {
+  const P = max(sensorU.hdrPeak, float(1))
+  const L = rgb.dot(vec3(0.2126, 0.7152, 0.0722))
+  const sat = max(mix(vec3(L), rgb, SATURATION), vec3(0))
+  const inset = max(mul3(PRE, sat), vec3(0))
+  const y = curveNodeHDR(inset, P).div(P)
+  const e = mul3(OUTSET, pow(y, vec3(1 / 2.2)))
+  const lin = pow(max(e, vec3(0)), vec3(2.2))
+  return min(max(mul3(POST, lin), vec3(0)), vec3(1)).mul(P)
+})
+
+/** Display-linear [0, peak] -> extended sRGB code values (the HDR canvas), with dither. */
+export function encodeDisplayHDR(y: N): N {
+  return Fn(() => {
+    const c = max(y, vec3(0))
+    const lo = c.mul(12.92)
+    const hi = pow(c, vec3(1 / 2.4)).mul(1.055).sub(0.055)
+    const e = mix(hi, lo, step(c, vec3(0.0031308)))
+    const r = rand3()
+    // half floats have ~11 bits of mantissa: a quarter of an 8-bit step hides any banding
+    const d = r.x.add(r.y).sub(1).div(1020)
+    return max(e.add(d), vec3(0))
+  })()
+}
 
 /** Three independent uniform random numbers per pixel and frame. */
 const rand3 = () => {

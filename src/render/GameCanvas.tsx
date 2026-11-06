@@ -1,5 +1,4 @@
 import { Canvas, extend, useFrame, useThree } from '@react-three/fiber'
-import { PerformanceMonitor } from '@react-three/drei'
 import { useEffect, useState } from 'react'
 import * as THREE from 'three/webgpu'
 import { audio } from '../audio/audio'
@@ -21,6 +20,7 @@ import { debugFlag } from '../util/debug'
 import { loadCarModels } from '../car/gltfCars'
 import { loadWorldAssets } from './worldAssets'
 import { installGpuErrorHook, rendererStarted, switchToWebGL } from './gpuHealth'
+import { hdrState } from './sensor'
 
 extend(THREE as any)
 
@@ -45,12 +45,21 @@ async function createRenderer(props: { canvas: HTMLCanvasElement | OffscreenCanv
       forceWebGL = true
     }
   }
+  // HDR output (opt-in): an extended-range half-float canvas on HDR displays (sensor.ts)
+  const g = useSettings.getState().graphics
+  const hdr = !forceWebGL && !!g.hdr && !OFFSCREEN && typeof matchMedia !== 'undefined' && matchMedia('(dynamic-range: high)').matches
+  hdrState.active = hdr
+  hdrState.peakNits = g.hdrPeakNits ?? 1000
+  hdrState.paperWhiteNits = g.hdrPaperWhite ?? 203
   const renderer = new THREE.WebGPURenderer({
     canvas: props.canvas as HTMLCanvasElement,
+    ...(hdr ? { outputType: THREE.HalfFloatType } : {}),
     antialias: false,
     powerPreference: 'high-performance',
     forceWebGL,
     alpha: false,
+    // GPU timestamps: dynamic resolution steers by the GPU's own frame time (dynamicRes.ts)
+    trackTimestamp: !forceWebGL,
     ...(requiredLimits ? { requiredLimits } : {}),
   } as ConstructorParameters<typeof THREE.WebGPURenderer>[0])
   try {
@@ -266,11 +275,14 @@ function CaptureHook() {
   return null
 }
 
+/**
+ * The canvas is the display's native resolution (up to 2x device pixels): the HUD, the lens and the
+ * picture are drawn there, while the scene renders at an internal scale that dynamic resolution
+ * steers and the temporal upscaler reconstructs (PostFX.tsx, dynamicRes.ts, taa.ts). Shrinking the
+ * canvas itself (the old approach) blurred everything, the edges of the HUD's 3D tags included.
+ */
 export function GameCanvas() {
-  const scale = useSettings((s) => s.graphics.resolutionScale)
-  // adaptive resolution: drei's PerformanceMonitor trims the render scale when the frame rate drops
-  const [dyn, setDyn] = useState(1)
-  const dpr = Math.min(window.devicePixelRatio || 1, 1.5) * scale * dyn
+  const dpr = Math.min(window.devicePixelRatio || 1, 2)
   return (
     <Canvas
       className="game-canvas"
@@ -281,12 +293,6 @@ export function GameCanvas() {
       frameloop={OFFSCREEN ? 'never' : 'always'}
       onCreated={(state) => configureRenderer(state.gl as unknown as THREE.WebGPURenderer)}
     >
-      <PerformanceMonitor
-        bounds={() => [50, 58]}
-        flipflops={6}
-        onDecline={() => setDyn((d) => Math.max(0.6, +(d - 0.1).toFixed(2)))}
-        onIncline={() => setDyn((d) => Math.min(1, +(d + 0.1).toFixed(2)))}
-      />
       <GameLoop />
       <World />
       <CameraRig />

@@ -94,3 +94,22 @@ test('diffraction star: spikes only (no core), unit mean, point symmetric', () =
   expect(core).toBe(0)
   expect(asym / tot).toBeLessThan(0.05)
 })
+
+test('HDR tone curve: the SDR curve at P = 1, the same mid-tones, highlights up to the peak', async () => {
+  const { toneCurve, toneCurveHDR, CURVE } = await import('../src/render/sensor')
+  for (const x of [0.001, 0.01, 0.13, 1, 10, 100]) expect(toneCurveHDR(x, 1)).toBeCloseTo(toneCurve(x), 10)
+  for (const P of [2, 4.9, 10]) {
+    // the key (sunlit asphalt) lands exactly where SDR puts it
+    expect(toneCurveHDR(CURVE.keyIn, P)).toBeCloseTo(CURVE.keyOut, 8)
+    // shadows within 15% of SDR, the shoulder opens up, never beyond the peak, monotonic
+    expect(Math.abs(toneCurveHDR(0.01, P) / toneCurve(0.01) - 1)).toBeLessThan(0.15)
+    expect(toneCurveHDR(8, P)).toBeGreaterThan(toneCurve(8) * 1.2)
+    let prev = 0
+    for (let x = 1e-4; x < 1e4; x *= 1.2) {
+      const y = toneCurveHDR(x, P)
+      expect(y).toBeGreaterThanOrEqual(prev)
+      expect(y).toBeLessThanOrEqual(P)
+      prev = y
+    }
+  }
+})

@@ -10,13 +10,14 @@
 // The temporal AA rejects history by motion, not by depth, so in tracking shots (a car still on
 // screen, the track sliding past) the road never takes the car's history (see taa.ts).
 import { useFrame, useThree } from '@react-three/fiber'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import * as THREE from 'three/webgpu'
 import { ao as gtao } from 'three/addons/tsl/display/GTAONode.js'
 import { ssgi } from 'three/addons/tsl/display/SSGINode.js'
 import { ssr } from 'three/addons/tsl/display/SSRNode.js'
 import { smaa } from 'three/addons/tsl/display/SMAANode.js'
 import { fxaa } from 'three/addons/tsl/display/FXAANode.js'
+import { dof } from 'three/addons/tsl/display/DepthOfFieldNode.js'
 import {
   diffuseColor,
   float,
@@ -40,13 +41,45 @@ import { reportGpuError } from './gpuHealth'
 import { debugFlag } from '../util/debug'
 import { ae, exposureMeter, stepAutoExposure } from './autoExposure'
 import { motionBlur, motionBlurUniforms } from './motionBlur'
-import { temporalAA } from './taa'
+import { renderScale, temporalAA } from './taa'
+import { stepDynamicRes } from './dynamicRes'
+import { rcas, sharpenU } from './sharpen'
 import { contactShadows, contactShadowsOff, updateContactShadows } from './contactShadows'
 import { beginMotionFrame, motionBlendMode, motionVelocityOutput } from './motionHistory'
 import { particleScene, particleU, sceneDepth } from './particles'
 import { lateralCA, lensScatter, naturalVignette, SCATTER, scatterUpsample, sunGlare, sunVisibility, updateLens } from './lens'
-import { displayTransform, encodeDisplay, sensorNoise, sensorU } from './sensor'
+import { displayTransform, displayTransformHDR, encodeDisplay, encodeDisplayHDR, hdrState, sensorNoise, sensorU } from './sensor'
 import { sunState } from './Environment'
+import { game } from '../game/game'
+import { cameraFocus } from './CameraRig'
+
+/**
+ * Depth of field of the cinematic cameras (the menu's attract shots, the showroom, the TV broadcast,
+ * replays): a physical lens. The circle of confusion of a point at distance z with the lens focused at
+ * zf is c = f^2 / (N (zf - f)) * |z - zf| / z on the sensor; f follows from the camera's field of view
+ * and the sensor's height, N is the f-number. The driving cameras never get it (GT7 doesn't either):
+ * the road ahead must stay sharp. Other code (a replay director) may set `lensDof.force`.
+ */
+export const lensDof = {
+  /** sensor height (m): full frame for the showroom, Super 35 for the TV cameras */
+  sensorH: 0.024,
+  fStop: 2.8,
+  /** focus distance (m), < 0: auto-focus on the car in focus (CameraRig.cameraFocus) */
+  focus: -1,
+  /** largest blur radius (output pixels at 1080p) */
+  maxRadius: 14,
+  /** turn the depth of field on outside the cinematic modes (e.g. replays) */
+  force: false,
+}
+const CINEMATIC_MODES = new Set(['attract', 'showroom', 'team'])
+const dofU = {
+  /** blur radius in output pixels per unit of (z - zf) / z */
+  k: uniform(0),
+  focus: uniform(10),
+  maxPx: uniform(14),
+}
+const _toFocus = new THREE.Vector3()
+const _camDir = new THREE.Vector3()
 
 /** Set frames > 0 when the camera jumps (a cut): the frame it is set on is not motion blurred. */
 export const cameraCut = { frames: 0 }
@@ -56,7 +89,7 @@ let lastCutFrames = 0
 export const postUniforms = {
   motionBlur: uniform(0.6),
   /** share of the natural (cos^4) vignetting the lens leaves uncorrected */
-  vignette: uniform(0.4),
+  vignette: uniform(0.22),
   exposure: uniform(1),
   /** auto exposure x exposure compensation (a multiplier: 2^stops) */
   adapt: uniform(1),
@@ -86,6 +119,7 @@ const _size = new THREE.Vector2()
 const texelFull = uniform(new THREE.Vector2(1 / 1920, 1 / 1080))
 
 const aeDebug = debugFlag('aedebug')
+const OFFSCREEN = typeof location !== 'undefined' && new URLSearchParams(location.search).has('offscreen')
 
 /**
  * Debug (window.__wantHdr = true): the exposed linear frame (half floats, base64) into window.__hdr;
@@ -128,11 +162,20 @@ export function PostFX() {
   const useAE = gfx.autoExposure ?? false
   // screen-space contact shadows of the sun (contactShadows.ts), Medium and up, with shadows on
   const useContact = (gfx.contactShadows ?? gfx.preset !== 'low') && gfx.shadows > 0 && !debugFlag('nocontact')
+  // RCAS after the tone curve (sharpen.ts); film grain (the sensor's noise) only when asked for
+  const useSharpen = (gfx.sharpness ?? 0.5) > 0 && !debugFlag('nosharpen')
+  const useGrain = !!gfx.filmGrain
+  // depth of field in the cinematic modes only (rebuilt when the game changes mode)
+  const [mode, setMode] = useState(game.mode)
+  useEffect(() => game.on((e) => e.type === 'session' && setMode(game.mode)), [])
+  const useDof = (CINEMATIC_MODES.has(mode) || lensDof.force) && gfx.preset !== 'low' && !debugFlag('nodof')
 
   const pipeline = useMemo(() => {
     aoForAll.on = useTAA
     const rp = new THREE.RenderPipeline(renderer)
     const scenePass = pass(scene, camera)
+    // the scene renders at the internal resolution (dynamicRes.ts); the TAA upscales to the output
+    scenePass.setResolutionScale(renderScale.value)
     // G-buffer layout. WebGPU's default limit is 32 bytes of colour attachments per sample and every
     // RGBA8 / RGBA16F target counts as 8, so at most four targets: roughness rides in the normal
     // target's alpha and metalness in the albedo target's alpha (or a target of its own without SSGI).
@@ -177,6 +220,9 @@ export function PostFX() {
       gi.aoIntensity.value = 1.15
       gi.thickness.value = 0.8
       gi.useTemporalFiltering = useTAA
+      // half of the internal resolution below Ultra (sized from the output each frame, see useFrame)
+      gi.resolutionScale = renderScale.value * (gfx.preset === 'ultra' ? 1 : 0.5)
+      ;(rp as any).__gi = gi
       const diffuse = scenePass.getTextureNode('diffuseColor')
       // (cars excluded without TAA, see aoWeight)
       const w = useSSR ? float(1) : normalTex!.a
@@ -184,7 +230,8 @@ export function PostFX() {
     } else if (useAO && sceneNormal) {
       const a = gtao(depth, sceneNormal, camera)
       a.radius.value = 1.2
-      a.resolutionScale = 0.5
+      a.resolutionScale = 0.5 * renderScale.value
+      ;(rp as any).__gtao = a
       a.useTemporalFiltering = useTAA
       const w = useSSR ? float(1) : normalTex!.a
       composite = vec4(color.rgb.mul(mix(float(1), a.getTextureNode().r, w)), color.a)
@@ -227,8 +274,16 @@ export function PostFX() {
     particleU.soft.value = 1
     const particlePass = pass(particleScene, camera)
     particlePass.setResolutionScale(gfx.preset === 'high' || gfx.preset === 'ultra' ? 0.75 : 0.5)
+    ;(rp as any).__particles = particlePass
     const parts = particlePass.getTextureNode('output')
     out = vec4(out.rgb.mul(parts.a).add(parts.rgb), 1)
+    if (useDof) {
+      // the physical circle of confusion, signed (far > 0), normalised to the largest blur radius; three's
+      // DOF node takes it as its "distance from the focal plane" with the focal plane at 0
+      const z = scenePass.getViewZNode().negate().max(0.01)
+      const coc = z.sub(dofU.focus).div(z).mul(dofU.k).div(dofU.maxPx).clamp(-1, 1)
+      out = dof(out, coc.negate(), float(0), float(1), dofU.maxPx)
+    }
     // the sun's contact shadows, from this frame's depth, for the materials of the next
     const contact = useContact ? contactShadows(depth, vel, camera, gfx.preset === 'ultra' ? 20 : gfx.preset === 'high' ? 16 : 12, gfx.preset === 'ultra' ? 1 : 0.5) : (contactShadowsOff(), null)
     // ---- the camera: exposure, then the lens (lens.ts), the sensor and the picture (sensor.ts)
@@ -249,8 +304,14 @@ export function PostFX() {
     }
     // natural vignetting (cos^4 of the off-axis angle, partly corrected)
     img = img.mul(naturalVignette(postUniforms.vignette))
-    // the sensor's noise, the picture, the display's encoding (with dither)
-    let toned: any = encodeDisplay(displayTransform(sensorNoise(img)))
+    // the picture, sharpened (RCAS on the display-referred image, sharpen.ts), the display's encoding
+    // (with dither). The sensor's noise only as optional film grain: it costs clarity
+    const hdr = hdrState.active
+    const graded = useGrain ? sensorNoise(img) : img
+    let disp: any = hdr ? displayTransformHDR(graded) : displayTransform(graded)
+    // RCAS works on [0, 1]: the HDR picture is normalised to its peak around it
+    if (useSharpen) disp = hdr ? rcas(convertToTexture(disp.div(sensorU.hdrPeak))).mul(sensorU.hdrPeak) : rcas(convertToTexture(disp))
+    let toned: any = hdr ? encodeDisplayHDR(disp) : encodeDisplay(disp)
     // keep the meter and the contact shadows in the graph (their contribution is scaled by a zero
     // uniform): they render every frame, but nothing in this image reads them
     if (meter) toned = toned.add(meter.sample(vec2(0.5, 0.5)).r.mul(postUniforms.meterTap))
@@ -266,8 +327,9 @@ export function PostFX() {
     ;(rp as any).__meter = meter
     ;(rp as any).__taa = taaNode
     ;(rp as any).__exposed = exposedTex
+    ;(rp as any).__scene = scenePass
     return rp
-  }, [renderer, scene, camera, useSSGI, useSSR, useAO, useSMAA, useTAA, useMB, useBloom, gfx.preset, useAE, useContact])
+  }, [renderer, scene, camera, useSSGI, useSSR, useAO, useSMAA, useTAA, useMB, useBloom, gfx.preset, useAE, useContact, useSharpen, useGrain, useDof])
 
   useEffect(() => () => pipeline.dispose(), [pipeline])
 
@@ -293,6 +355,36 @@ export function PostFX() {
     particleU.far.value = camera.far
     const size = renderer.getDrawingBufferSize(_size)
     texelFull.value.set(1 / Math.max(1, size.x), 1 / Math.max(1, size.y))
+    // the internal resolution for this frame (dynamic resolution, within the preset's pixel budget)
+    const rs = stepDynamicRes(renderer, frameDt, size.x, size.y, {
+      preset: gfx.preset,
+      maxScale: gfx.resolutionScale ?? 1,
+      dynamic: (gfx.dynamicRes ?? true) && !OFFSCREEN,
+      targetFps: gfx.targetFps ?? 60,
+      temporal: useTAA,
+    })
+    const pl = pipeline as any
+    if (pl.__scene && pl.__scene.getResolutionScale() !== rs) pl.__scene.setResolutionScale(rs)
+    if (pl.__gi) pl.__gi.resolutionScale = rs * (gfx.preset === 'ultra' ? 1 : 0.5)
+    if (pl.__gtao) pl.__gtao.resolutionScale = 0.5 * rs
+    if (pl.__particles) pl.__particles.setResolutionScale(Math.min(gfx.preset === 'high' || gfx.preset === 'ultra' ? 0.75 : 0.5, rs))
+    sharpenU.amount.value = Math.max(0, Math.min(1, gfx.sharpness ?? 0.5))
+    if (useDof) {
+      // the lens: focal length from the field of view on the sensor, focused on the car in focus
+      const fovRad = (camera.fov * Math.PI) / 180 / Math.max(camera.zoom, 1e-3)
+      const f = lensDof.sensorH / 2 / Math.tan(fovRad / 2)
+      camera.getWorldDirection(_camDir)
+      const auto = _toFocus.copy(cameraFocus).sub(camera.position).dot(_camDir)
+      const zf = Math.max(f * 4, lensDof.focus > 0 ? lensDof.focus : auto > 0.5 ? auto : 10)
+      // a TV camera's long lens stops down: a wide shot keeps its depth, a telephoto isolates the car
+      const N = mode === 'team' ? Math.max(lensDof.fStop, 4) : lensDof.fStop
+      const cocSensor = (f * f) / (N * Math.max(zf - f, 1e-3))
+      dofU.focus.value = zf
+      dofU.k.value = ((cocSensor / lensDof.sensorH) * size.y) / 2
+      dofU.maxPx.value = (lensDof.maxRadius * size.y) / 1080
+    }
+    sensorU.noise.value = gfx.filmGrain ? 0.02 : 0
+    sensorU.hdrPeak.value = hdrState.active ? Math.max(1, (gfx.hdrPeakNits ?? hdrState.peakNits) / Math.max(80, gfx.hdrPaperWhite ?? hdrState.paperWhiteNits)) : 1
     sensorU.frame.value = (sensorU.frame.value + 1) % 65536
     updateContactShadows(camera, sunState.dir)
     // the lens sees the sun (its glare) at the camera's total exposure

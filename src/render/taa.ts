@@ -32,11 +32,18 @@ const { Fn, If, abs, clamp, context, float, floor, int, ivec2, length, max, min,
 export const taaU = {
   /** 1 on the frame of a camera cut: the history is dropped */
   reset: uniform(0),
-  /** weight of the current frame where the history is trusted and still */
+  /** weight of the current frame where the history is trusted and still (at native resolution) */
   alpha: uniform(0.1),
   /** variance clipping width (standard deviations) */
   gamma: uniform(1.0),
 }
+
+/**
+ * Internal render scale (per axis) of the scene and everything drawn from the G-buffer; the TAA
+ * reconstructs the output resolution from it (temporal upscaling). Owned by the dynamic resolution
+ * controller (dynamicRes.ts) and the scene pass in PostFX.
+ */
+export const renderScale = { value: 1 }
 
 /** Halton (2, 3) sub-pixel offsets in [-0.5, 0.5] px. */
 function halton(i: number, b: number) {
@@ -49,7 +56,13 @@ function halton(i: number, b: number) {
   }
   return r
 }
-const JITTER = Array.from({ length: 16 }, (_, i) => [halton(i + 1, 2) - 0.5, halton(i + 1, 3) - 0.5])
+const JITTER = Array.from({ length: 64 }, (_, i) => [halton(i + 1, 2) - 0.5, halton(i + 1, 3) - 0.5])
+/**
+ * Phases of the jitter sequence: 8 per output pixel's share of an input pixel (as FSR 2 and UE's
+ * TSR do), so at any upscale ratio every output pixel sees a sample close to its centre within the
+ * sequence.
+ */
+const jitterPhases = (scale: number) => Math.max(8, Math.min(64, Math.ceil(8 / (scale * scale))))
 
 let _state: any
 const _size = new THREE.Vector2()
@@ -88,8 +101,14 @@ class TemporalAANode extends THREE.Node {
   private _flip = 0
   private _materials: THREE.NodeMaterial[] = []
   private _quad = new (THREE.QuadMesh as N)() as THREE.QuadMesh
-  private _size = uniform(new THREE.Vector2(1, 1))
+  /** output (history) size, input (scene) size, this frame's jitter in input pixels */
+  private _outSize = uniform(new THREE.Vector2(1, 1))
+  private _inSize = uniform(new THREE.Vector2(1, 1))
+  private _jitterPx = uniform(new THREE.Vector2(0, 0))
+  /** output pixels per input pixel (>= 1 when upscaling) */
+  private _ratio = uniform(1)
   private _jitter = 0
+  private _phases = 8
   private _unjittered = new THREE.Matrix4()
   /** frames since the history (re)started: the first frame has nothing to blend with */
   private _frames = 0
@@ -113,35 +132,53 @@ class TemporalAANode extends THREE.Node {
     this._frames = 0
   }
 
-  private jitter(width: number, height: number) {
+  /**
+   * Jitters the projection by a sub-pixel offset of the INPUT grid (the scene renders at the internal
+   * resolution): the sample of input pixel i lies at i + 0.5 + jitter (y down, as uv).
+   */
+  private jitter(outW: number, outH: number) {
     const c = this.camera
     c.updateProjectionMatrix()
     this._unjittered.copy(c.projectionMatrix)
     // the motion vectors are drawn with the unjittered projection
     ;(velocity as N).setProjectionMatrix(this._unjittered)
-    const [jx, jy] = JITTER[this._jitter]
-    c.setViewOffset(width, height, jx, jy, width, height)
+    const s = renderScale.value
+    const inW = Math.max(1, Math.floor(outW * s)),
+      inH = Math.max(1, Math.floor(outH * s))
+    this._phases = jitterPhases(s)
+    const [jx, jy] = JITTER[this._jitter % this._phases]
+    this._jitterPx.value.set(jx, jy)
+    c.setViewOffset(inW, inH, jx, jy, inW, inH)
   }
 
   private unjitter() {
     this.camera.clearViewOffset()
     ;(velocity as N).setProjectionMatrix(null)
-    this._jitter = (this._jitter + 1) % JITTER.length
+    this._jitter = (this._jitter + 1) % this._phases
   }
 
   updateBefore(frame: THREE.NodeFrame): boolean | undefined {
     const renderer = frame.renderer as THREE.WebGPURenderer
     const color = this.colorNode.value as THREE.Texture
-    const W = Math.max(1, (color.image as { width: number }).width)
-    const H = Math.max(1, (color.image as { height: number }).height)
+    const inW = Math.max(1, (color.image as { width: number }).width)
+    const inH = Math.max(1, (color.image as { height: number }).height)
+    const out = renderer.getDrawingBufferSize(_size)
+    const W = Math.max(1, out.x),
+      H = Math.max(1, out.y)
     const cur = this._flip,
       prev = 1 - cur
     this._flip = prev
     if (this._history[cur].width !== W || this._history[cur].height !== H) {
-      for (const rt of [...this._history, this._prevVel]) rt.setSize(W, H)
+      for (const rt of this._history) rt.setSize(W, H)
       this._frames = 0
     }
-    this._size.value.set(W, H)
+    if (this._prevVel.width !== inW || this._prevVel.height !== inH) {
+      this._prevVel.setSize(inW, inH)
+      this._frames = 0
+    }
+    this._outSize.value.set(W, H)
+    this._inSize.value.set(inW, inH)
+    this._ratio.value = Math.max(1, W / inW)
     taaU.reset.value = this._frames === 0 ? 1 : 0
     this._read.value = this._history[prev].texture
     this._out.value = this._history[cur].texture
@@ -153,7 +190,7 @@ class TemporalAANode extends THREE.Node {
     THREE.RendererUtils.restoreRendererState(renderer, _state)
     // keep this frame's motion for next frame's rejection test
     const vel = this.velocityNode.value as THREE.Texture
-    if ((vel.image as { width: number }).width === W && (vel.image as { height: number }).height === H) renderer.copyTextureToTexture(vel, this._prevVel.texture)
+    if ((vel.image as { width: number }).width === inW && (vel.image as { height: number }).height === inH) renderer.copyTextureToTexture(vel, this._prevVel.texture)
     this._frames++
     return undefined
   }
@@ -176,10 +213,14 @@ class TemporalAANode extends THREE.Node {
     const vel = this.velocityNode
     const prevVel = texture(this._prevVel.texture)
     const hist = this._read
-    const size = this._size
+    const outSize = this._outSize
+    const inSize = this._inSize
+    const jitterPx = this._jitterPx
+    const ratio = this._ratio
 
     /** 5-tap Catmull-Rom (bilinear taps at the 1D filters' merged centres; corners dropped). */
     const catmullRom = (p: N) => {
+      const size = outSize
       const sp = p.mul(size)
       const t1 = floor(sp.sub(0.5)).add(0.5)
       const f = sp.sub(t1)
@@ -203,8 +244,11 @@ class TemporalAANode extends THREE.Node {
 
     const resolve = Fn(() => {
       const p = uv()
-      const ip = ivec2(floor(p.mul(size)))
-      const maxI = ivec2(int(size.x).sub(1), int(size.y).sub(1))
+      // this output pixel's centre on the input grid, and the input pixel whose (jittered) sample is
+      // nearest to it: input pixel i is sampled at i + 0.5 + jitter
+      const inPos = p.mul(inSize)
+      const ip = ivec2(floor(inPos.sub(jitterPx)))
+      const maxI = ivec2(int(inSize.x).sub(1), int(inSize.y).sub(1))
       const at = (dx: number, dy: number) => clamp(ip.add(ivec2(dx, dy)), ivec2(0), maxI)
       // neighbourhood statistics (tonemapped YCoCg) and the closest surface
       const m1 = vec3(0).toVar(),
@@ -213,14 +257,21 @@ class TemporalAANode extends THREE.Node {
         hi = vec3(-1e9).toVar()
       const closest = float(2).toVar()
       const closestAt = ivec2(ip).toVar()
-      const center = vec3(0).toVar()
-      // tent-filtered neighbourhood (tonemapped YCoCg): stands in for the raw sample where there is no
-      // usable history, so disoccluded edges are smoothed instead of showing one jittered sample. Only
-      // neighbours that move like this pixel count: never road into a car's outline, or car into road
+      // the current frame reconstructed at this output pixel: the 3 x 3 input samples weighted by a
+      // Blackman-Harris-like kernel of their real (jittered) distance from the pixel centre, in input
+      // pixels (Karis 2014, UE4 TAAU). `nearW` is the weight of the nearest sample in OUTPUT pixels:
+      // how much this frame tells us about this output pixel (all of it at native resolution, little
+      // when the nearest sample is half an input pixel away at a high upscale ratio)
+      const recon = vec3(0).toVar()
+      const reconW = float(0).toVar()
+      const nearW = float(0).toVar()
+      // tent-filtered neighbourhood (tonemapped YCoCg): stands in for the reconstruction where there is
+      // no usable history, so disoccluded edges are smoothed instead of showing one jittered sample.
+      // Only neighbours that move like this pixel count: never road into a car's outline, or car into road
       const tent = vec3(0).toVar()
       const tentW = float(0).toVar()
       const vOwn = vel.load(ip).xy
-      const pxs = size.mul(0.5)
+      const pxs = inSize.mul(0.5)
       for (const [dx, dy] of [
         [0, 0],
         [-1, -1],
@@ -234,12 +285,18 @@ class TemporalAANode extends THREE.Node {
       ]) {
         const q = at(dx, dy)
         const c = finite(color.load(q).rgb)
-        if (dx === 0 && dy === 0) center.assign(c)
         const y = toYCoCg(compress(c))
+        // the sample's offset from this output pixel's centre (input pixels)
+        const off = vec2(ip.add(ivec2(dx, dy))).add(0.5).add(jitterPx).sub(inPos)
+        const d2 = off.dot(off)
+        const w = tsl.exp(d2.mul(-2.29))
+        recon.addAssign(y.mul(w))
+        reconW.addAssign(w)
+        nearW.assign(max(nearW, tsl.exp(max(d2.mul(ratio).mul(ratio).sub(0.25), 0).mul(-2.29))))
         m1.addAssign(y)
         m2.addAssign(y.mul(y))
         const same = float(1).sub(smoothstep(1, 3, length(vel.load(q).xy.sub(vOwn).mul(pxs))))
-        const tw = same.mul(((dx === 0 ? 2 : 1) * (dy === 0 ? 2 : 1)) / 16)
+        const tw = same.mul(w)
         tent.addAssign(y.mul(tw))
         tentW.addAssign(tw)
         lo.assign(min(lo, y))
@@ -252,9 +309,9 @@ class TemporalAANode extends THREE.Node {
       }
       const v = vel.load(closestAt).xy
       const histUV = p.sub(v.mul(vec2(0.5, -0.5)))
-      // motion of whatever was at the history position last frame vs the motion here now (pixels)
-      const vPrev = prevVel.load(clamp(ivec2(floor(histUV.mul(size))), ivec2(0), maxI)).xy
-      const px = size.mul(0.5)
+      // motion of whatever was at the history position last frame vs the motion here now (input pixels)
+      const vPrev = prevVel.load(clamp(ivec2(floor(histUV.mul(inSize))), ivec2(0), maxI)).xy
+      const px = inSize.mul(0.5)
       const speed = length(v.mul(px))
       const dv = length(v.sub(vPrev).mul(px))
       const reject = smoothstep(1, 3, dv.div(speed.mul(0.08).add(1)))
@@ -270,13 +327,16 @@ class TemporalAANode extends THREE.Node {
       const off = h.sub(centre)
       const k = max(max(abs(off.x).div(ext.x), abs(off.y).div(ext.y)), abs(off.z).div(ext.z))
       const hc = select(k.greaterThan(1), centre.add(off.div(k)), h)
-      // weight of this frame: more where the history is doubtful, or the pixel moves fast. Where the
-      // motion test fails, a quarter of the (clipped) history stays and the current sample is
-      // tent-filtered: the pixel is anti-aliased spatially instead of crawling with the jitter, and no
-      // more than a trace of another surface's history can survive
+      // weight of this frame: more where the history is doubtful, or the pixel moves fast; scaled by
+      // how close this frame's nearest sample is (upscaling: the history carries the detail between
+      // the samples). Where the motion test fails, a quarter of the (clipped) history stays and the
+      // current frame is tent-filtered: the pixel is anti-aliased spatially instead of crawling with
+      // the jitter, and no more than a trace of another surface's history can survive
       const bad = max(reject, offscreen)
-      const a = max(max(mix(taaU.alpha, float(0.3), smoothstep(8, 40, speed)), bad.mul(0.75)), taaU.reset)
-      const cur = mix(toYCoCg(compress(center)), tent.div(max(tentW, 1e-4)), max(bad, taaU.reset).mul(0.6))
+      const base = mix(taaU.alpha, float(0.3), smoothstep(8, 40, speed)).mul(mix(float(0.25), float(1), nearW))
+      const a = max(max(base, bad.mul(0.75)), taaU.reset)
+      const reconY = recon.div(max(reconW, 1e-5))
+      const cur = mix(reconY, tent.div(max(tentW, 1e-5)), max(bad, taaU.reset).mul(0.6))
       const outY = mix(hc, cur, a)
       return vec4(finite(expand(max(fromYCoCg(outY), vec3(0)))), 1)
     })()
@@ -303,7 +363,11 @@ class TemporalAANode extends THREE.Node {
 }
 
 /**
- * @param color    texture node of the HDR image (output resolution)
+ * Temporal anti-aliasing and upscaling: the scene renders at renderScale of the output resolution
+ * with a sub-pixel jitter of the input grid; the resolve reconstructs every output pixel from the
+ * nearby jittered samples and the reprojected, clipped history at the output resolution.
+ *
+ * @param color    texture node of the HDR image (internal resolution)
  * @param depth    the scene pass's depth texture node
  * @param velocity the scene pass's velocity texture node (motionHistory.ts)
  */

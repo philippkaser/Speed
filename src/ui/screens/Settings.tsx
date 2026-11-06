@@ -46,7 +46,22 @@ export function SettingsPanel({ onClose, inGame = false }: { onClose: () => void
               />
             </FieldRow>
             <RendererRow />
-            <Slider label="Resolution scale" value={gfx.resolutionScale} min={0.5} max={1} step={0.05} unit="%" format={(v) => Math.round(v * 100) + ''} onChange={(v) => s.setGraphics({ resolutionScale: v })} />
+            <Slider label="Render resolution" sub="The most the 3D scene renders at, of your display's native resolution; the temporal upscaler reconstructs the rest. The picture and HUD are always native" value={gfx.resolutionScale} min={0.5} max={1} step={0.05} unit="%" format={(v) => Math.round(v * 100) + ''} onChange={(v) => s.setGraphics({ resolutionScale: v })} />
+            <Toggle label="Dynamic resolution" sub="Lowers the render resolution a little when the GPU falls behind, to hold the frame rate (never below 60%). Needs temporal anti-aliasing" value={gfx.dynamicRes ?? true} onChange={(v) => s.setGraphics({ dynamicRes: v })} />
+            <FieldRow label="Target frame rate" sub="What dynamic resolution holds">
+              <Segmented
+                options={[
+                  { value: 30, label: '30' },
+                  { value: 60, label: '60' },
+                  { value: 90, label: '90' },
+                  { value: 120, label: '120' },
+                  { value: 144, label: '144' },
+                ]}
+                value={gfx.targetFps ?? 60}
+                onChange={(v) => s.setGraphics({ targetFps: v as number })}
+              />
+            </FieldRow>
+            <Slider label="Sharpening" sub="Contrast-adaptive sharpening (FSR RCAS) after the temporal upscaler: restores fine detail without halos" value={gfx.sharpness ?? 0.5} min={0} max={1} step={0.05} unit="%" format={(v) => Math.round(v * 100) + ''} onChange={(v) => s.setGraphics({ sharpness: v })} />
             <div className="section-title">Lighting</div>
             <FieldRow label="Sky" sub="Photographic: a real sky (HDRI) with its own sun, mid-afternoon. Dynamic: procedural sky that follows the time of day">
               <Segmented
@@ -91,7 +106,23 @@ export function SettingsPanel({ onClose, inGame = false }: { onClose: () => void
             <Toggle label="Contact shadows" sub="Screen-space shadows of the sun for what the shadow maps are too coarse for: grass on the ground, tyres on the road, small parts of the cars" value={gfx.contactShadows ?? gfx.preset !== 'low'} onChange={(v) => s.setGraphics({ contactShadows: v })} />
             <Toggle label="Temporal anti-aliasing" sub="Smooth edges, fences, grass and leaves, and a clean, noise-free picture: each frame adds a slightly shifted sample to the previous ones (off: SMAA)" value={gfx.taa ?? gfx.preset !== 'low'} onChange={(v) => s.setGraphics({ taa: v })} />
             <Toggle label="Lens glare" sub="Light scattered in the lens: bright sky and highlights glow, the sun gets its halo, its star and (High, Ultra) the lens's ghosts" value={gfx.bloom} onChange={(v) => s.setGraphics({ bloom: v })} />
-            <Slider label="Motion blur (shutter)" sub="How much of each frame the shutter is open. 360° = motion is continuous from frame to frame (smooth pans, no double images); 180° = the film look. 0 = off" value={gfx.motionBlur} min={0} max={1} step={1 / 24} unit="°" format={(v) => Math.round(v * 360) + ''} onChange={(v) => s.setGraphics({ motionBlur: v })} />
+            <Toggle
+              label="HDR output"
+              sub={typeof matchMedia !== 'undefined' && matchMedia('(dynamic-range: high)').matches ? 'For HDR displays (WebGPU): highlights (the sun, glints, sunlit clouds) up to the display\'s peak brightness. Reloads the game' : 'Needs an HDR display with HDR enabled in the operating system (WebGPU)'}
+              value={gfx.hdr ?? false}
+              onChange={(v) => {
+                s.setGraphics({ hdr: v })
+                setTimeout(() => location.reload(), 80)
+              }}
+            />
+            {gfx.hdr && (
+              <>
+                <Slider label="HDR peak brightness" sub="Your display's peak (nits)" value={gfx.hdrPeakNits ?? 1000} min={400} max={4000} step={50} unit=" nits" format={(v) => String(Math.round(v))} onChange={(v) => s.setGraphics({ hdrPeakNits: v })} />
+                <Slider label="HDR paper white" sub="How bright SDR white (and the HUD) should look (nits)" value={gfx.hdrPaperWhite ?? 203} min={80} max={400} step={5} unit=" nits" format={(v) => String(Math.round(v))} onChange={(v) => s.setGraphics({ hdrPaperWhite: v })} />
+              </>
+            )}
+            <Toggle label="Film grain" sub="The camera sensor's noise. Off for the cleanest picture" value={gfx.filmGrain ?? false} onChange={(v) => s.setGraphics({ filmGrain: v })} />
+            <Slider label="Motion blur (shutter)" sub="How much of each frame the shutter is open. 180° (default) = the film look; 360° = continuous streaks, smoother at low frame rates but softer. 0 = off" value={gfx.motionBlur} min={0} max={1} step={1 / 24} unit="°" format={(v) => Math.round(v * 360) + ''} onChange={(v) => s.setGraphics({ motionBlur: v })} />
             <Slider label="Vegetation density" sub="Trees and the 3D grass on the verges (grass from 0.5)" value={gfx.trees} min={0.2} max={1.6} step={0.1} format={(v) => v.toFixed(1)} unit="×" onChange={(v) => s.setGraphics({ trees: v })} />
             <div className="section-title">Camera</div>
             <Slider label="Field of view" value={gfx.fov} min={45} max={80} step={1} unit="°" onChange={(v) => s.setGraphics({ fov: v })} />
