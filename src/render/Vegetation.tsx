@@ -138,7 +138,8 @@ function placeTrees(track: Track, heights: TerrainHeight, density: number) {
 function placeGrass(track: Track, density: number) {
   const r = rng(track.def.seed * 7 + 3)
   const out: number[] = []
-  const step = 1.0 / Math.sqrt(Math.max(density, 0.2))
+  // a sward: ~1.8 patches per square metre (the cards draw only part of them, see keep)
+  const step = 0.74 / Math.sqrt(Math.max(density, 0.2))
   const p = { x: 0, y: 0, z: 0 }
   const lane = pitLane(track)
   const L = track.length
@@ -192,7 +193,7 @@ function grassCards() {
     uvs: number[] = [],
     wind: number[] = [],
     idx: number[] = []
-  const H = 0.4
+  const H = 0.3
   const cards: [number, number, number, number][] = [
     // sprite, angle, offset x, offset z
     [0, 0.2, -0.15, 0.1],
@@ -1030,11 +1031,11 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
           ...opts,
           name: 'grass-cards',
           geometry: grassCards(),
-          material: vegMaterial({ ...common, fadeIn: [near - 2.5, near], fadeOut: [reach * 0.72, reach], widen: 0.7 }),
+          material: vegMaterial({ ...common, fadeIn: [near - 2.5, near], fadeOut: [reach * 0.72, reach], widen: 0.7, tintA: new THREE.Color(0.7, 0.74, 0.68), tintB: new THREE.Color(0.82, 0.85, 0.75) }),
           cell: 24,
           maxDist: reach,
-          // full density to ~25 m, thinning beyond (the cards widen to keep the cover)
-          keep: (d) => Math.max(0.3, Math.min(1, (26 / Math.max(d, 1)) ** 1.25)),
+          // about every other patch to ~25 m, thinning beyond (the cards widen to keep the cover)
+          keep: (d) => 0.55 * Math.max(0.3, Math.min(1, (26 / Math.max(d, 1)) ** 1.25)),
         }),
       )
       console.info(`[veg] ${g.length / STRIDE} grass patches`)
