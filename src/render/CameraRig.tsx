@@ -74,15 +74,7 @@ export function CameraRig() {
     dragging: false,
     lastX: 0,
     lastY: 0,
-    headX: 0,
-    headY: 0,
     lastMode: '' as string,
-    fovKick: 0,
-    wasLookBack: false,
-    // g forces for the camera, low-passed: the physics values change abruptly from frame to frame
-    // (gear changes, kerbs), and a camera that follows them twitches by centimetres every frame
-    gLong: 0,
-    gLat: 0,
     /** the player's driving cameras (chase, cockpit...) and the car state they follow */
     drive: new DriveCamera(),
     car: makeDriveCarState(),
@@ -244,7 +236,6 @@ export function CameraRig() {
     // --------------------------------------------------------------- driving cameras
     const model = pose.model
     const lookBack = input.lookBack()
-    const inside = camMode === 'cockpit' || camMode === 'hood' || camMode === 'bumper'
     model?.setVisibleParts({ body: camMode !== 'hood' && camMode !== 'bumper', interior: true, driver: camMode !== 'cockpit' || lookBack })
     const car = s.car
     car.pos.copy(carPos)
@@ -258,7 +249,6 @@ export function CameraRig() {
     const r = s.drive.update(cam, car, dt, { mode: camMode, fov: gfx.fov, shake: gfx.cameraShake, lookBack, side: input.lookSide(), model })
     if (r.cut) cameraCut.frames = 3
     cameraFocus.copy(carPos)
-    void inside
   }, -2)
 
   return null
@@ -275,13 +265,19 @@ export class Spring {
     this.v = 0
     return x
   }
-  /** omega: natural frequency (rad/s); settles to the target in about 4.7 / omega seconds */
-  step(target: number, omega: number, dt: number) {
-    const d = this.x - target
+  /**
+   * omega: natural frequency (rad/s); settles to the target in about 4.7 / omega seconds.
+   * targetVel: how fast the target itself moves (feed-forward): a steadily moving target (a road
+   * climbing, a car turning) is followed without lag, and only what moves on top of that is smoothed.
+   */
+  step(target: number, omega: number, dt: number, targetVel = 0) {
+    // in the frame moving with the target (where it was at the start of the step)
+    const d = this.x - (target - targetVel * dt)
+    const dv = this.v - targetVel
     const e = Math.exp(-omega * dt)
-    const t = (this.v + omega * d) * dt
+    const t = (dv + omega * d) * dt
     this.x = target + (d + t) * e
-    this.v = (this.v - omega * t) * e
+    this.v = targetVel + (dv - omega * t) * e
     return this.x
   }
 }
@@ -323,12 +319,17 @@ export interface DriveCamOptions {
 export const CHASE = {
   /** yaw follows the car's heading (rad/s natural frequency): a slight lag shows rotation */
   yawW: 7,
+  /** share of the heading's turn rate fed forward: the rest lags (in a 60 deg/s hairpin by 2 x 0.5 x 60 / yawW = 8.6 deg) */
+  yawFF: 0.5,
   /** share of the slide angle (heading vs velocity) the camera turns with: slides show on screen */
   slipShare: 0.4,
-  /** vertical follow: kerbs and bumps do not jolt the frame */
-  heightW: 5.5,
-  /** share of the car's own (unsmoothed) vertical motion the aim follows: the car bobs a little in a steady frame */
-  aimRaw: 0.15,
+  /** vertical follow of the camera's position: kerbs and bumps do not jolt the frame */
+  heightW: 4,
+  /**
+   * share of the car's own (unsmoothed) vertical motion the aim follows: all of it, so the car stays
+   * put on screen; with the position smoothed that takes a rotation of hundredths of a degree
+   */
+  aimRaw: 1,
   /** road pitch follow and its share (the body's dive and squat are not the road's slope) */
   pitchW: 2.2,
   pitchShare: 0.8,
@@ -373,6 +374,10 @@ export class DriveCamera {
   private headX = new Spring()
   private headY = new Spring()
   private t = 0
+  /** the car's vertical speed and the heading's turn rate, smoothed (feed-forward of the springs) */
+  private vy = 0
+  private yawRate = 0
+  private prevYawTarget = 0
   /** the camera's path this frame (before shake), for tests */
   readonly pathPos = new THREE.Vector3()
 
@@ -403,6 +408,9 @@ export class DriveCamera {
       this.pitch.reset(roadPitch)
       this.dist.reset((near ? 4.6 : 6.2) + car.speed * 0.004)
       this.lat.reset(0)
+      this.vy = car.vel.y
+      this.yawRate = 0
+      this.prevYawTarget = yawTarget
       this.gLong.reset(clamp(car.accelLong, -2, 2))
       this.gLat.reset(clamp(car.accelLat, -2.5, 2.5))
       this.headX.reset(0)
@@ -422,8 +430,14 @@ export class DriveCamera {
       shy = (valueNoise2(t * 13, 7.1) - 0.5) * shakeMag
 
     if (!inside) {
-      const yaw = this.yaw.step(this.yaw.x + angleDiff(yawTarget, this.yaw.x), A.yawW, dt)
-      const y = this.height.step(car.pos.y, A.heightW, dt)
+      // the road's climb and the car's turning are followed without lag; bumps and kerbs, and part
+      // of the turn rate, are smoothed
+      const lp = (tau: number) => 1 - Math.exp(-dt / tau)
+      this.vy += (car.vel.y - this.vy) * lp(0.3)
+      if (dt > 0) this.yawRate += (angleDiff(yawTarget, this.prevYawTarget) / dt - this.yawRate) * lp(0.12)
+      this.prevYawTarget = yawTarget
+      const yaw = this.yaw.step(this.yaw.x + angleDiff(yawTarget, this.yaw.x), A.yawW, dt, this.yawRate * A.yawFF)
+      const y = this.height.step(car.pos.y, A.heightW, dt, this.vy)
       const pitch = this.pitch.step(roadPitch, A.pitchW, dt)
       const dist = this.dist.step((near ? 4.6 : 6.2) + clamp(gl, -1.5, 1.2) * 0.22 + car.speed * 0.004, A.gW, dt)
       const lat = this.lat.step(clamp(gt, -2, 2) * 0.12, A.gW, dt)
