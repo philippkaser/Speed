@@ -329,7 +329,8 @@ const casterReach = (sunDir: THREE.Vector3 | undefined) => 3 + 1.4 / Math.max(0.
  * Tags every cascade camera with the main camera's view depths (m) whose shadows it holds
  * (`userData.cascadeDepth`, CSM's fade margins included), widened by how far a car's shadow reaches:
  * a car outside that range casts nothing any receiver looks up in that cascade (gltfCars.ts CarLOD
- * leaves it out of that cascade's pass).
+ * leaves it out of that cascade's pass). Also its texel size (`userData.cascadeTexel`, m): CarLOD
+ * picks the cars' level of detail by it.
  */
 function tagCascadeDepths(csm: CascadeSource | null, sunDir?: THREE.Vector3) {
   const cs = csm?._cascades
@@ -344,8 +345,10 @@ function tagCascadeDepths(csm: CascadeSource | null, sunDir?: THREE.Vector3) {
     // as CSMShadowNode's fade: the cascade covers [x - m(x) / 2, y + m(y) / 2], m(e) = e^2 / 4 (linear depth)
     const x0 = Math.max(0, x - (0.25 * x * x) / 2)
     const y1 = i === lights.length - 1 ? y : y + (0.25 * y * y) / 2
-    const ud = lights[i].shadow.camera.userData as { cascadeDepth?: [number, number]; cascadeIndex?: number }
-    ud.cascadeIndex = i
+    const sc = lights[i].shadow.camera as THREE.OrthographicCamera
+    const ud = sc.userData as { cascadeDepth?: [number, number]; cascadeTexel?: number }
+    // (m per shadow texel)
+    ud.cascadeTexel = (sc.right - sc.left) / Math.max(1, (lights[i].shadow as unknown as { mapSize: THREE.Vector2 }).mapSize.x)
     const r = (ud.cascadeDepth ??= [0, 0])
     r[0] = near + x0 * (far - near) - reach
     r[1] = near + y1 * (far - near) + reach
