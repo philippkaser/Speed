@@ -146,3 +146,81 @@ test('a long practice keeps only its last 15 minutes', () => {
   expect(R.end).toBeCloseTo((R.maxSamples + 599) / REPLAY_HZ, 6)
   game.stop()
 })
+
+test('the replay director films the recording: cuts between shots, holds still when paused', async () => {
+  const THREE = await import('three/webgpu')
+  const { carPoses } = await import('../src/render/CarVisual')
+  const { director, replayBroadcast } = await import('../src/render/broadcastCam')
+  game.start({ mode: 'race', trackId: 'valle-alta', carId: 'vanta-gt3', color: '#c00', opponents: 4, laps: 1, aiSkill: 0.95, playerName: 'Test' })
+  const p = game.player!
+  p.ai = new AIDriver(p.sim.vehicle, game.track, 0.97)
+  p.ai.id = 'player'
+  for (let i = 0; i < 50 * 60; i++) game.update(1 / 60)
+  expect(game.startReplay()).toBe(true)
+  const rp = game.replay!
+  rp.speed = 4
+  const cam = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 12000)
+  const focus = new THREE.Vector3()
+  const poses = () => {
+    for (const c of game.cars) {
+      const v = c.sim.vehicle
+      let pose = carPoses.get(c.id)
+      if (!pose) carPoses.set(c.id, (pose = { pos: new THREE.Vector3(), quat: new THREE.Quaternion() }))
+      pose.pos.set(v.pos.x, v.pos.y, v.pos.z)
+      pose.quat.set(v.q.x, v.q.y, v.q.z, v.q.w)
+    }
+  }
+  const field = (jumped: boolean) => ({
+    cars: rp.views.map((v) => ({ id: v.id, position: v.position, s: v.s, distance: v.distance, speed: v.speed, finished: v.finished, incident: v.sliding || v.offTrack, isPlayer: v.isPlayer })),
+    now: rp.t,
+    raceTime: rp.raceTime,
+    lastLap: false,
+    focus: '',
+    jumped,
+  })
+  const cuts0 = director.cut
+  const shots = new Set<string>()
+  let aimed = 0,
+    frames = 0
+  for (let i = 0; i < 12 * 60; i++) {
+    game.update(1 / 60)
+    poses()
+    replayBroadcast(cam, rp.lastAdvance, focus, field(i === 0))
+    cam.updateMatrixWorld()
+    expect(Number.isFinite(cam.position.x + cam.position.y + cam.position.z)).toBe(true)
+    if (rp.raceTime > 1) {
+      shots.add(director.shot)
+      // onboard shots ride on the car (the rear cam looks back at the chaser)
+      if (director.shot === 'onboard' || director.shot === 'rear') continue
+      // the car on air is in the picture
+      const pose = carPoses.get(director.target)!
+      const ndc = pose.pos.clone().project(cam)
+      frames++
+      if (Math.abs(ndc.x) < 1 && Math.abs(ndc.y) < 1 && ndc.z < 1) aimed++
+    }
+  }
+  expect(director.cut - cuts0).toBeGreaterThan(4)
+  expect(shots.size).toBeGreaterThan(2)
+  expect(aimed / frames).toBeGreaterThan(0.9)
+  // paused: the picture holds
+  rp.playing = false
+  game.update(1 / 60)
+  poses()
+  replayBroadcast(cam, rp.lastAdvance, focus, field(false))
+  const held = cam.position.clone()
+  for (let i = 0; i < 30; i++) {
+    game.update(1 / 60)
+    poses()
+    replayBroadcast(cam, rp.lastAdvance, focus, field(false))
+  }
+  expect(cam.position.distanceTo(held)).toBeLessThan(1e-9)
+  // a jump is a fresh shot
+  const c = director.cut
+  rp.seek(rp.start + 20)
+  poses()
+  replayBroadcast(cam, rp.lastAdvance, focus, field(true))
+  expect(director.cut).toBeGreaterThan(c)
+  game.endReplay()
+  carPoses.clear()
+  game.stop()
+})
