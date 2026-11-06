@@ -438,7 +438,7 @@ export class Game {
     // player controls
     if (this.player && !this.player.isRemote && !this.player.ai) {
       const v = this.player.sim.vehicle
-      const c = input.update(dt, v.speed)
+      const c = input.update(dt, v.speed, v.bodySlip)
       const inp = this.player.sim.input
       inp.steer = c.steer
       inp.throttle = c.throttle
