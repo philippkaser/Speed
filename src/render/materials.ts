@@ -114,7 +114,9 @@ export function grassGroundColour(xz: N) {
 function lawnTone(xz: N): N {
   const n = mx_noise_float(vec3(xz.x.mul(0.006), 0.5, xz.y.mul(0.006))).mul(0.5).add(0.5)
   const n2 = mx_noise_float(vec3(xz.x.mul(0.035), 4.5, xz.y.mul(0.035))).mul(0.5).add(0.5)
-  return mix(vec3(0.86, 0.95, 0.8), vec3(1.1, 1.05, 0.86), n).mul(mix(float(0.88), float(1.1), n2))
+  // and patches a few metres across: clover, thinner and lusher spots
+  const n3 = mx_noise_float(vec3(xz.x.mul(0.21), 7.5, xz.y.mul(0.21))).mul(0.5).add(0.5)
+  return mix(vec3(0.84, 0.93, 0.8), vec3(1.08, 1.03, 0.84), n).mul(mix(float(0.84), float(1.08), n2)).mul(mix(vec3(0.86, 0.9, 0.86), vec3(1.06, 1.04, 0.94), n3))
 }
 
 /** Grass ground (photo-scanned), a little greener than the dry scan, with patches of leafy ground. */
@@ -186,7 +188,7 @@ function trackAsphalt(uvMetres: N) {
  *
  * aTrack: d (lateral, + left), s, racing line offset, half width; aTrack2: braking zone, traction zone.
  */
-export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }) {
+export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, track?: { length: number }) {
   const m = new THREE.MeshStandardNodeMaterial()
   const tr = aTrack()
   const tr2 = attribute('aTrack2', 'vec4')
@@ -227,12 +229,15 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }) {
   const ld = fract(lanePos).mul(laneW)
   const a0 = h1.mul(5).add(1.5),
     a1 = float(15.5).sub(h0.mul(6))
-  const e = min(min(ls.sub(a0), a1.sub(ls)), min(ld.sub(0.3), laneW.sub(0.3).sub(ld)))
-  const hasPatch = step(0.9, h0).mul(inner.add(step(lanePos, 0.5)).add(step(2.5, lanePos)).min(1))
-  const patch = smoothstep(-0.01, 0.01, e).mul(hasPatch)
-  albedo = mix(albedo, albedo.mul(0.72).mul(mix(float(0.9), float(1.1), h1)), patch)
-  rough = mix(rough, rough.mul(0.94), patch)
-  seal = max(seal, line(e, 0.03).mul(hasPatch))
+  // ragged edges (hand-cut), never on the start straight (where every frame of a race begins)
+  const rag = mx_noise_float(vec3(s.mul(0.9), d.mul(0.9), 6.1)).mul(0.12)
+  const e = min(min(ls.sub(a0), a1.sub(ls)), min(ld.sub(0.3), laneW.sub(0.3).sub(ld))).add(rag)
+  const offStraight = step(460, s).mul(step(s, float((track?.length ?? 1e6) - 430)))
+  const hasPatch = step(0.93, h0).mul(offStraight)
+  const patch = smoothstep(-0.02, 0.02, e).mul(hasPatch)
+  albedo = mix(albedo, albedo.mul(0.86).mul(mix(float(0.94), float(1.06), h1)), patch)
+  rough = mix(rough, rough.mul(0.96), patch)
+  seal = max(seal, line(e, 0.025).mul(hasPatch).mul(0.7))
 
   // tar snakes: crack sealant along the iso-lines of a slow noise, in some stretches only
   const cn = mx_noise_float(vec3(s.mul(0.17), d.mul(0.45), 5.1))

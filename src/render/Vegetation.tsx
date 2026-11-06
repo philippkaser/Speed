@@ -218,10 +218,10 @@ function grassCards() {
       const lx = (u - 0.5) * w
       pos.push(ox + lx * c, v * H, oz + lx * s)
       // lit mostly from above, like the patches' blades
-      const nx = -s * 0.45,
-        nz = c * 0.45
-      const l = Math.hypot(nx, 0.9, nz)
-      nrm.push(nx / l, 0.9 / l, nz / l)
+      const nx = -s * 0.6,
+        nz = c * 0.6
+      const l = Math.hypot(nx, 0.75, nz)
+      nrm.push(nx / l, 0.75 / l, nz / l)
       uvs.push((x0 + u * (x1 - x0)) / 1024, (y1 - v * (y1 - y0)) / 1024)
       wind.push(v, 1)
     }
@@ -1034,7 +1034,7 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
           ...opts,
           name: 'grass-cards',
           geometry: grassCards(),
-          material: vegMaterial({ ...common, fadeIn: [near - 2.5, near], fadeOut: [reach * 0.72, reach], widen: 0.7, tintA: new THREE.Color(0.7, 0.74, 0.68), tintB: new THREE.Color(0.82, 0.85, 0.75) }),
+          material: vegMaterial({ ...common, fadeIn: [near - 2.5, near], fadeOut: [reach * 0.72, reach], widen: 0.7, tintA: new THREE.Color(0.5, 0.54, 0.5), tintB: new THREE.Color(0.7, 0.7, 0.58) }),
           cell: 24,
           maxDist: reach,
           // about every other patch to ~25 m, thinning beyond (the cards widen to keep the cover)
