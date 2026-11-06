@@ -5,7 +5,7 @@ import * as THREE from 'three/webgpu'
 import type { CarEntry } from '../game/game'
 import { game } from '../game/game'
 import { buildCarModel, type CarModel } from '../car/carModel'
-import { buildGltfCar, gltfState, hasGltfCar, onCarModels } from '../car/gltfCars'
+import { buildGltfCar, hasGltfCar, onCarModels, requestCarModel } from '../car/gltfCars'
 import { getCar } from '../physics/spec'
 import { registerWheels } from './motionHistory'
 
@@ -22,8 +22,14 @@ function autoAccent(color: string) {
 }
 
 export function CarVisual({ entry, lod = 0 }: { entry: CarEntry; lod?: number }) {
-  const [modelsReady, setModelsReady] = useState(gltfState.ready)
-  useEffect(() => onCarModels(() => setModelsReady(gltfState.ready)), [])
+  // this car's detailed model: requested as the car is first drawn (the models in use load first),
+  // swapped in when it arrives
+  useMemo(() => entry.model && requestCarModel(entry.model), [entry.model])
+  const [modelsReady, setModelsReady] = useState(() => hasGltfCar(entry.model))
+  useEffect(() => {
+    setModelsReady(hasGltfCar(entry.model))
+    return onCarModels(() => setModelsReady(hasGltfCar(entry.model)))
+  }, [entry.model])
   const model = useMemo(
     () =>
       modelsReady && hasGltfCar(entry.model)

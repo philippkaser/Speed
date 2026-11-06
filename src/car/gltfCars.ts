@@ -119,17 +119,32 @@ class CarLOD extends THREE.LOD {
   }
 }
 
-export function loadCarModels(): Promise<void> {
-  if (loading) return loading
-  const loader = new GLTFLoader()
-  // geometry decodes in workers, off the main thread
-  ;(MeshoptDecoder as unknown as { useWorkers?: (n: number) => void }).useWorkers?.(2)
-  loader.setMeshoptDecoder(MeshoptDecoder)
+/** Models the cars on the track use (requestCarModel): they load first. */
+const wanted = new Set<GltfCarId>()
+const loads = new Map<GltfCarId, Promise<void>>()
+let loader: GLTFLoader | null = null
+
+/** A car with this model is drawn (CarVisual): the model loads before the others. */
+export function requestCarModel(id: GltfCarId) {
+  wanted.add(id)
+  // the session can change after the first load (a race after practice): load it now
+  if (loader) loadModel(id)
+}
+
+function loadModel(id: GltfCarId): Promise<void> {
+  let p = loads.get(id)
+  if (p) return p
+  if (!loader) {
+    loader = new GLTFLoader()
+    // geometry decodes in workers, off the main thread
+    ;(MeshoptDecoder as unknown as { useWorkers?: (n: number) => void }).useWorkers?.(2)
+    loader.setMeshoptDecoder(MeshoptDecoder)
+  }
   const base = (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? '/'
-  loading = Promise.all(
-    GLTF_CARS.map(async ({ id }) => {
-      const t0 = performance.now()
-      const gltf = await loader.loadAsync(`${base}models/${id}.glb`)
+  const t0 = performance.now()
+  p = loader
+    .loadAsync(`${base}models/${id}.glb`)
+    .then((gltf) => {
       const car = gltf.scene.getObjectByName('car') ?? gltf.scene
       const meta = car.userData as Meta
       car.traverse((o) => {
@@ -151,16 +166,32 @@ export function loadCarModels(): Promise<void> {
       splitLights(car, box)
       templates.set(id, { meta, car, zFront: box.max.z, zRear: box.min.z })
       console.info(`[car] ${meta.name} model loaded in ${(performance.now() - t0).toFixed(0)} ms`)
-    }),
-  )
-    .then(() => {
-      gltfState.ready = true
     })
     .catch((e) => {
       gltfState.failed = String(e?.message ?? e)
-      console.warn('[car] detailed car models unavailable, using procedural bodies:', e)
+      console.warn(`[car] detailed car model ${id} unavailable, using procedural bodies:`, e)
     })
     .finally(() => {
+      for (const l of listeners) l()
+    })
+  loads.set(id, p)
+  return p
+}
+
+/**
+ * Loads the detailed car models. Resolves once the models the cars on the track use are in (all of
+ * them if none was requested yet); the others load after them, in the background (a practice
+ * session waits for one model instead of three).
+ */
+export function loadCarModels(): Promise<void> {
+  if (loading) return loading
+  const all = GLTF_CARS.map((c) => c.id)
+  const now = all.filter((id) => wanted.has(id))
+  loading = Promise.all((now.length ? now : all).map(loadModel)).then(() => undefined)
+  loading
+    .then(() => Promise.all(all.map(loadModel)))
+    .then(() => {
+      gltfState.ready = true
       for (const l of listeners) l()
     })
   return loading
