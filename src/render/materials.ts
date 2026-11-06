@@ -211,7 +211,7 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }) {
   const wob = mx_noise_float(vec3(s.mul(0.31), 1.1, lane)).mul(0.04)
   const jointD = lanePos.sub(lanePos.round()).mul(laneW).add(wob)
   const inner = step(0.5, lanePos).mul(step(lanePos, 2.5))
-  let seal: N = line(jointD, 0.035).mul(inner)
+  let seal: N = line(jointD, 0.025).mul(inner).mul(0.6)
   // transverse expansion joints (every 47.3 m, where the physics has its little bump)
   const sj = fract(s.div(47.3).add(0.002)).sub(0.5).abs().sub(0.5).abs().mul(47.3)
   seal = max(seal, line(sj, 0.025))

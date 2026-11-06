@@ -901,8 +901,8 @@ function impostorMaterial(imp: Impostors, fadeIn: [number, number], maxDist: num
 
 // ------------------------------------------------------------------------------------- component
 
-const NEAR_TREES = 170
-const FADE: [number, number] = [140, 170]
+const NEAR_TREES = 125
+const FADE: [number, number] = [100, 125]
 const FAR_TREES = 2600
 
 export function Vegetation({ track, heights }: { track: Track; heights: TerrainHeight }) {
