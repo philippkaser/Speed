@@ -269,8 +269,10 @@ export class ReplayPlayer {
   playing = true
   /** camera: the TV director, or chase / onboard of the focused car */
   cam: ReplayCamMode = 'tv'
-  /** the car the chase / onboard cameras follow ('' = the player's, or the leader) */
+  /** the car the chase / onboard cameras follow (the player's at first) */
   focus = ''
+  /** the car the TV director is asked to follow ('' = its own choice) */
+  tvFocus = ''
   /** set on a jump (seek, restart): the camera rig cuts */
   jumped = true
   private swaps: Swap[] = []

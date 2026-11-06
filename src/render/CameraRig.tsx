@@ -11,7 +11,8 @@ import { useGameStore } from '../state/gameStore'
 import { carPoses } from './CarVisual'
 import { cameraPose } from '../audio/cameraPose'
 import { cameraCut } from './PostFX'
-import { broadcastCamera } from './broadcastCam'
+import { broadcastCamera, replayBroadcast, type ReplayField } from './broadcastCam'
+import type { ReplayPlayer } from '../game/replay'
 import { markCameraPath } from './motionHistory'
 
 export const CAMERA_MODES = ['chase', 'chaseNear', 'cockpit', 'hood', 'bumper'] as const
@@ -78,6 +79,10 @@ export function CameraRig() {
     /** the player's driving cameras (chase, cockpit...) and the car state they follow */
     drive: new DriveCamera(),
     car: makeDriveCarState(),
+    /** replays: their own chase / onboard camera, and what was shown last frame (a change is a cut) */
+    replayDrive: new DriveCamera(),
+    replayCam: '',
+    replayFocus: '',
   })
 
   // orbit drag in showroom
@@ -123,6 +128,18 @@ export function CameraRig() {
     const camMode = useGameStore.getState().camera
     s.shakeT += dt
 
+    // --------------------------------------------------------------- replay
+    if (game.replay) {
+      replayCamera(cam, s, game.replay, gfx.fov)
+      return
+    }
+    if (s.replayCam) {
+      // back from a replay: whoever's driver the onboard camera hid is shown again, the view cuts
+      for (const c of game.cars) carPoses.get(c.id)?.model?.setVisibleParts({ body: true, interior: true, driver: true })
+      s.replayCam = s.replayFocus = ''
+      s.drive.reset()
+      cameraCut.frames = 3
+    }
     // --------------------------------------------------------------- team race: TV broadcast
     if (mode === 'team') {
       broadcastCamera(cam, dt, cameraFocus)
@@ -252,6 +269,59 @@ export function CameraRig() {
   }, -2)
 
   return null
+}
+
+// ------------------------------------------------------------------------------- replay cameras
+
+/**
+ * Replays: the TV director (broadcastCam.ts, shots chosen from the recording) or a chase / onboard
+ * camera on the car being followed. Camera time is replay time, so a paused replay holds its shot and
+ * the springs and the operator's pans keep their pace at any playback speed. A jump in the recording,
+ * a change of camera or of the car followed is a cut (no blur across it, fresh TAA history).
+ */
+function replayCamera(cam: THREE.PerspectiveCamera, s: { replayDrive: DriveCamera; replayCam: string; replayFocus: string; car: DriveCarState }, rp: ReplayPlayer, fov: number) {
+  const adv = rp.lastAdvance
+  const focus = rp.cam === 'tv' ? rp.tvFocus : rp.focus
+  const cut = rp.jumped || s.replayCam !== rp.cam || s.replayFocus !== focus
+  s.replayCam = rp.cam
+  s.replayFocus = focus
+  rp.jumped = false
+  if (cut) {
+    cameraCut.frames = 3
+    s.replayDrive.reset()
+  }
+  // every car complete, except the driver of the car the onboard camera rides in
+  for (const c of game.cars) carPoses.get(c.id)?.model?.setVisibleParts({ body: true, interior: true, driver: !(rp.cam === 'onboard' && c.id === rp.focus) })
+  if (rp.cam === 'tv') {
+    const laps = rp.replay.header.laps
+    const lead = rp.views.find((v) => v.position === 1)
+    const field: ReplayField = {
+      cars: rp.views.map((v) => ({ id: v.id, position: v.position, s: v.s, distance: v.distance, speed: v.speed, finished: v.finished, incident: v.sliding || v.offTrack, isPlayer: v.isPlayer })),
+      now: rp.t,
+      raceTime: rp.replay.goAt >= 0 ? rp.raceTime : 1e3,
+      lastLap: rp.replay.header.mode !== 'practice' && !!lead && lead.lap >= laps - 1,
+      focus,
+      jumped: cut,
+    }
+    replayBroadcast(cam, adv, cameraFocus, field)
+    return
+  }
+  const e = game.cars.find((c) => c.id === rp.focus) ?? game.cars[0]
+  const pose = e && carPoses.get(e.id)
+  if (!pose) return
+  const v = e.sim.vehicle
+  const car = s.car
+  car.pos.copy(pose.pos)
+  car.quat.copy(pose.quat)
+  car.vel.set(v.vel.x, v.vel.y, v.vel.z)
+  car.speed = v.speed
+  car.accelLong = v.accelLong
+  car.accelLat = v.accelLat
+  car.kerb = v.wheels.reduce((a, w) => a + (w.surface === 1 || w.surface === 2 || w.surface === 3 ? 1 : 0), 0) / 4
+  car.scrape = v.scrape
+  const r = s.replayDrive.update(cam, car, adv, { mode: rp.cam === 'onboard' ? 'cockpit' : 'chase', fov, shake: 0, lookBack: false, side: 0, model: pose.model })
+  if (r.cut) cameraCut.frames = 3
+  cameraFocus.copy(pose.pos)
 }
 
 // ------------------------------------------------------------------------------- driving cameras
