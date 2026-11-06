@@ -234,9 +234,9 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }) {
   // tar snakes: crack sealant along the iso-lines of a slow noise, in some stretches only
   const cn = mx_noise_float(vec3(s.mul(0.17), d.mul(0.45), 5.1))
   // sparse stretches, and broken into short runs within them
-  const snakeZone = smoothstep(0.35, 0.6, mx_noise_float(vec3(s.mul(0.011), d.mul(0.04), 9.7))).mul(smoothstep(0.0, 0.25, mx_noise_float(vec3(s.mul(0.5), d.mul(0.8), 2.3))))
+  const snakeZone = smoothstep(0.5, 0.7, mx_noise_float(vec3(s.mul(0.009), d.mul(0.04), 9.7))).mul(smoothstep(0.0, 0.25, mx_noise_float(vec3(s.mul(0.5), d.mul(0.8), 2.3))))
   const snake = float(1).sub(smoothstep(0.004, fwidth(cn).mul(1.2).add(0.007), abs(cn))).mul(snakeZone)
-  seal = max(seal, snake.mul(0.9))
+  seal = max(seal, snake.mul(0.7))
 
   // rubbered-in racing line: from the simulation's rubber map (or the static racing line)
   const rl = rubber
