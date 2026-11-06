@@ -47,6 +47,9 @@ const TARGET_WHEELBASE = 2.72
 const EMIT_SCALE = 8
 /** Texture resolution the baked vertex attributes are sampled from (a box-filtered copy). */
 const BAKE_SIZE = 64
+/** Simplification of the levels of detail: target share of the triangles, and the error allowed (m). */
+const LOD1 = { body: 0.07, wheel: 0.15, error: 0.008 }
+const LOD2 = { body: 0.02, wheel: 0.04, error: 0.05, bakedTris: 8000 }
 /** Alpha-blended decals smaller than this (m^2, one side) are left out of the middle level. */
 const DECAL_MIN_AREA = 0.01
 
@@ -240,10 +243,31 @@ function merge(parts: Part[]): Part {
   return { material: first.material, group: first.group, sig: first.sig, attrs, indices, min, max }
 }
 
-function simplifyPart(p: Part, ratio: number, error: number, lockBorder = true): Part | null {
+/**
+ * Simplifies a part to `ratio` of its triangles, within `error`: metres when `absolute` (what a level
+ * of detail can afford: a fraction of a pixel where it is used), else relative to the part's size.
+ */
+function simplifyPart(p: Part, ratio: number, error: number, lockBorder = true, absolute = false): Part | null {
   const target = Math.max(3, Math.floor((p.indices.length * ratio) / 3) * 3)
-  const [ind] = MeshoptSimplifier.simplify(p.indices, p.attrs.POSITION.data, 3, target, error, lockBorder ? ['LockBorder'] : [])
+  const flags: ('LockBorder' | 'ErrorAbsolute' | 'Prune')[] = []
+  if (lockBorder) flags.push('LockBorder')
+  if (absolute) flags.push('ErrorAbsolute', 'Prune')
+  const [ind] = MeshoptSimplifier.simplify(p.indices, p.attrs.POSITION.data, 3, target, error, flags)
   if (ind.length < 3) return null
+  const c = compact(p.attrs, Array.from(ind))
+  const [min, max] = bounds(c.attrs.POSITION.data)
+  return { ...p, ...c, min, max }
+}
+
+/**
+ * Sloppy simplification (topology ignored: parts merge, small ones vanish) to a triangle budget within
+ * `error` metres: the far level, where the car is a few dozen pixels long.
+ */
+function sloppy(p: Part, targetTris: number, error: number): Part {
+  if (p.indices.length / 3 <= targetTris) return p
+  const scale = MeshoptSimplifier.getScale(p.attrs.POSITION.data, 3)
+  const [ind] = MeshoptSimplifier.simplifySloppy(p.indices, p.attrs.POSITION.data, 3, null, targetTris * 3, error / scale)
+  if (ind.length < 3) return p
   const c = compact(p.attrs, Array.from(ind))
   const [min, max] = bounds(c.attrs.POSITION.data)
   return { ...p, ...c, min, max }
@@ -899,7 +923,8 @@ async function build(def: ModelDef) {
     const corner = body ? '' : g.split(':')[0]
     const keep1 = body ? list.filter((p) => !cabin(p) && !tiny(p)) : list
     if (keep1.length) {
-      const s1 = simplifyPart(merge(keep1), body ? 0.14 : 0.2, body ? 0.004 : 0.01)
+      // (from 24 m at a 50 degree lens: a pixel is 2 cm at 1080p, 1 cm at 4K)
+      const s1 = simplifyPart(merge(keep1), body ? LOD1.body : LOD1.wheel, LOD1.error, true, true)
       if (s1 && !body) lod1.wheels.set(corner, [...(lod1.wheels.get(corner) ?? []), bake(s1, src, 'opaque', rearZ)])
       else if (s1 && route === 'livery') lod1.livery.push(s1)
       else if (s1 && route === 'decal') {
@@ -910,7 +935,8 @@ async function build(def: ModelDef) {
     // far level: silhouette and paint only (the windows opaque, the wheels merged in, no decals)
     const keep2 = body ? list.filter((p) => !cabin(p) && !small(p)) : list
     if (keep2.length) {
-      const s2 = simplifyPart(merge(keep2), body ? 0.04 : 0.06, 0.08, false)
+      // (from 80 m: a pixel is 7 cm at 1080p; the probes' faces are coarser still)
+      const s2 = simplifyPart(merge(keep2), body ? LOD2.body : LOD2.wheel, LOD2.error, false, true)
       if (!s2) continue
       if (!body) lod2.opaque.push(bake(translated(s2, wheel[corner].centre), src, 'opaque', rearZ))
       else if (route === 'livery') lod2.livery.push(s2)
@@ -923,14 +949,16 @@ async function build(def: ModelDef) {
     }
   }
   if (dropped.length) console.log(`  middle level leaves out the decals ${dropped.join(', ')}`)
-  const body1 = [...mergeBySig(lod1.livery), ...mergeBySig(lod1.opaque, lodOpaque), ...mergeBySig(lod1.glass, lodGlass), ...mergeBySig(lod1.decals)]
-  const body2 = [...mergeBySig(lod2.livery), ...mergeBySig(lod2.opaque, lodOpaque)]
+  // the merged opaque part once more as a whole (its material seams no longer limit it)
+  const again = (p: Part) => simplifyPart(p, 0.4, LOD1.error, true, true) ?? p
+  const body1 = [...mergeBySig(lod1.livery), ...mergeBySig(lod1.opaque, lodOpaque).map(again), ...mergeBySig(lod1.glass, lodGlass), ...mergeBySig(lod1.decals)]
+  const body2 = [...mergeBySig(lod2.livery), ...mergeBySig(lod2.opaque, lodOpaque).map((p) => sloppy(p, LOD2.bakedTris, LOD2.error))]
   const wheels1 = new Map([...lod1.wheels].map(([k, l]) => [k, mergeBySig(l, lodOpaque)]))
   const tris = (l: Part[]) => l.reduce((s, p) => s + p.indices.length / 3, 0)
   const tris0 = [...lod0.values()].reduce((s, l) => s + tris(l), 0)
   const tris1 = tris(body1) + [...wheels1.values()].reduce((s, l) => s + tris(l), 0)
   const tris2 = tris(body2)
-  console.log(`  primitives: LOD0 body ${lod0.get('body')!.length}, steering ${lod0.get('steer')?.length ?? 0}; LOD1 body ${body1.length} (${body1.map((p) => p.material?.getName()).join(', ')}), wheels 1 each; LOD2 body ${body2.length}, wheels merged in`)
+  console.log(`  primitives: LOD0 body ${lod0.get('body')!.length}, steering ${lod0.get('steer')?.length ?? 0}; LOD1 body ${body1.length} (${body1.map((p) => `${p.material?.getName()} ${p.indices.length / 3}`).join(', ')}), wheels 1 each (${tris(wheels1.get('FL') ?? [])}); LOD2 body ${body2.length} (${body2.map((p) => p.indices.length / 3).join(', ')}), wheels merged in`)
 
   // ---- new scene
   const root = doc.getRoot()

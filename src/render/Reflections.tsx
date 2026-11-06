@@ -185,9 +185,9 @@ export function Reflections() {
     if (sys.version !== game.version || performance.now() - sys.hiddenAt > 3000) {
       sys.hidden.length = 0
       scene.traverse((o) => {
-        // (the grass has no instances within the probes' range, yet three still prepares its render
-        // object for every face: ~1.5 ms each)
-        if (o.userData[PROBE_HIDDEN] || o.name === 'veg:grass') sys.hidden.push(o)
+        // (the grass layers have no instances within the probes' range, yet three still prepares
+        // their render objects for every face: ~1.5 to 5 ms each)
+        if (o.userData[PROBE_HIDDEN] || o.name.startsWith('veg:grass')) sys.hidden.push(o)
       })
       sys.hiddenAt = performance.now()
       sys.version = game.version

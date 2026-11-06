@@ -17,7 +17,7 @@ import { RacingLine } from './RacingLine'
 import { Ghost } from './Ghost'
 import { Reflections } from './Reflections'
 import { debugFlag } from '../util/debug'
-import { loadCarModels } from '../car/gltfCars'
+import { loadCarModels, requestCarModel } from '../car/gltfCars'
 import { loadWorldAssets } from './worldAssets'
 import { installGpuErrorHook, rendererStarted, switchToWebGL } from './gpuHealth'
 import { hdrState } from './sensor'
@@ -25,6 +25,10 @@ import { hdrState } from './sensor'
 extend(THREE as any)
 
 async function createRenderer(props: { canvas: HTMLCanvasElement | OffscreenCanvas }) {
+  // the downloads start now, alongside the renderer's start-up and the scene's construction: the
+  // world's textures and vegetation, and the car models this session uses (the others follow them)
+  loadWorldAssets()
+  for (const c of game.cars) if (c.model) requestCarModel(c.model)
   installGpuErrorHook()
   const params = new URLSearchParams(location.search)
   const pref = useSettings.getState().graphics.backend ?? 'auto'
@@ -198,8 +202,9 @@ function SceneReady() {
       if (++frames > 3) useGameStore.getState().set({ sceneReady: true })
       else raf = requestAnimationFrame(tick)
     }
-    // the detailed car models, the sky, ground textures and vegetation are part of the first
-    // impression: wait for them (at most 25 s)
+    // the detailed car models the cars use (gltfCars.ts loadCarModels: the session's, not all of
+    // them), the sky, ground textures and vegetation are part of the first impression: wait for them
+    // (at most 25 s)
     Promise.race([Promise.all([loadCarModels(), loadWorldAssets()]), new Promise((r) => setTimeout(r, 25000))]).then(() => {
       if (alive) raf = requestAnimationFrame(tick)
     })
