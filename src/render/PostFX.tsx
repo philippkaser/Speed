@@ -61,9 +61,12 @@ import { cameraFocus } from './CameraRig'
  * the road ahead must stay sharp. Other code (a replay director) may set `lensDof.force`.
  */
 export const lensDof = {
-  /** sensor height (m): full frame for the showroom, Super 35 for the TV cameras */
-  sensorH: 0.024,
-  fStop: 2.8,
+  /** sensor height (m): a large-format cinema camera (the showroom, the menu's shots); the TV
+   *  cameras use a full-frame sensor (tvSensorH) and stop down */
+  sensorH: 0.048,
+  tvSensorH: 0.024,
+  fStop: 1.4,
+  tvFStop: 4,
   /** focus distance (m), < 0: auto-focus on the car in focus (CameraRig.cameraFocus) */
   focus: -1,
   /** largest blur radius (output pixels at 1080p) */
@@ -72,6 +75,7 @@ export const lensDof = {
   force: false,
 }
 const CINEMATIC_MODES = new Set(['attract', 'showroom', 'team'])
+if (typeof window !== 'undefined') (window as unknown as { __lensDof?: object }).__lensDof = lensDof
 const _toFocus = new THREE.Vector3()
 const _camDir = new THREE.Vector3()
 
@@ -361,15 +365,17 @@ export function PostFX() {
     if (useDof) {
       // the lens: focal length from the field of view on the sensor, focused on the car in focus
       const fovRad = (camera.fov * Math.PI) / 180 / Math.max(camera.zoom, 1e-3)
-      const f = lensDof.sensorH / 2 / Math.tan(fovRad / 2)
+      const tv = mode === 'team'
+      const sensorH = tv ? lensDof.tvSensorH : lensDof.sensorH
+      const f = sensorH / 2 / Math.tan(fovRad / 2)
       camera.getWorldDirection(_camDir)
       const auto = _toFocus.copy(cameraFocus).sub(camera.position).dot(_camDir)
       const zf = Math.max(f * 4, lensDof.focus > 0 ? lensDof.focus : auto > 0.5 ? auto : 10)
       // a TV camera's long lens stops down: a wide shot keeps its depth, a telephoto isolates the car
-      const N = mode === 'team' ? Math.max(lensDof.fStop, 4) : lensDof.fStop
+      const N = tv ? lensDof.tvFStop : lensDof.fStop
       const cocSensor = (f * f) / (N * Math.max(zf - f, 1e-3))
       dofU.focus.value = zf
-      dofU.k.value = ((cocSensor / lensDof.sensorH) * size.y) / 2
+      dofU.k.value = ((cocSensor / sensorH) * size.y) / 2
       dofU.maxPx.value = (lensDof.maxRadius * size.y) / 1080
       dofU.near.value = camera.near
       dofU.far.value = camera.far
