@@ -155,13 +155,44 @@ function PauseMenu() {
   )
 }
 
+/** The classification: the winner's time, gaps for the other finishers, laps down for lapped cars. */
+export function classification() {
+  const list = game.standings()
+  const winner = list.find((c) => c.timing.finished)
+  const fastest = Math.min(...list.map((c) => (c.timing.best > 0 ? c.timing.best : Infinity)))
+  const L = game.track.length
+  return list.map((c) => {
+    const t = c.timing
+    let time: string
+    if (t.finished && winner) time = c === winner ? fmtTime(t.finishTime) : '+' + gap(t.finishTime - winner.timing.finishTime)
+    else {
+      // still running: laps down only if the winner really is a lap or more ahead
+      const down = winner ? Math.floor((winner.timing.distance - t.distance) / L) : 0
+      time = down >= 1 ? `+${down} lap${down > 1 ? 's' : ''}` : 'On last lap'
+    }
+    return { pos: t.position, name: c.name, time, best: fmtTime(t.best), fastest: t.best > 0 && t.best === fastest, me: c.isPlayer, color: c.color }
+  })
+}
+
+function gap(d: number) {
+  if (d < 60) return d.toFixed(3)
+  const m = Math.floor(d / 60)
+  return `${m}:${(d - m * 60).toFixed(3).padStart(6, '0')}`
+}
+
 function Results() {
   const g = useGameStore()
   const netResults = useNet((s) => s.results)
   const online = g.sessionKind === 'online'
+  // the field keeps finishing behind the results
+  const [, tick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => tick((x) => x + 1), 500)
+    return () => clearInterval(id)
+  }, [])
   const rows = online && netResults
-    ? netResults.map((r, i) => ({ pos: i + 1, name: r.name, time: r.dnf ? 'DNF' : fmtTime(r.time), best: fmtTime(r.bestLap), me: r.id === useNet.getState().myId, color: game.cars.find((c) => c.id === r.id)?.color ?? '#e4002b' }))
-    : game.standings().map((c) => ({ pos: c.timing.position, name: c.name, time: c.timing.finished ? fmtTime(c.timing.finishTime) : '+' + Math.max(0, game.totalLaps - c.timing.lap) + ' lap', best: fmtTime(c.timing.best), me: c.isPlayer, color: c.color }))
+    ? netResults.map((r, i) => ({ pos: i + 1, name: r.name, time: r.dnf ? 'DNF' : fmtTime(r.time), best: fmtTime(r.bestLap), fastest: false, me: r.id === useNet.getState().myId, color: game.cars.find((c) => c.id === r.id)?.color ?? '#e4002b' }))
+    : classification()
   const me = rows.find((r) => r.me)
   return (
     <div className="overlay">
@@ -189,7 +220,9 @@ function Results() {
                     {r.name}
                   </td>
                   <td className="num">{r.time}</td>
-                  <td className="num">{r.best}</td>
+                  <td className="num" style={r.fastest ? { color: 'var(--purple)', fontWeight: 700 } : undefined} title={r.fastest ? 'Fastest lap' : undefined}>
+                    {r.best}
+                  </td>
                 </tr>
               ))}
             </tbody>
