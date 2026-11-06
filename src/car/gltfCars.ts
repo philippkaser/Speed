@@ -102,7 +102,9 @@ class CarLOD extends THREE.LOD {
       // a cascade whose receivers this car's shadow cannot reach (sunShadow.ts tagCascadeDepths)
       const r = camera.userData.cascadeDepth as [number, number] | undefined
       if (r && (this.depth < r[0] || this.depth > r[1])) return this.show(-1)
-      return this.show(Math.min(last, Math.max(this.mainLevel, 1)))
+      // the far cascades' texels (10 cm and up) are coarser than the far level's tolerance (8 cm)
+      const far = ((camera.userData.cascadeIndex as number | undefined) ?? 0) >= 2 ? last : 1
+      return this.show(Math.min(last, Math.max(this.mainLevel, far)))
     }
     this._camPos.setFromMatrixPosition(camera.matrixWorld)
     this._objPos.setFromMatrixPosition(this.matrixWorld)

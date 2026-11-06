@@ -344,7 +344,8 @@ function tagCascadeDepths(csm: CascadeSource | null, sunDir?: THREE.Vector3) {
     // as CSMShadowNode's fade: the cascade covers [x - m(x) / 2, y + m(y) / 2], m(e) = e^2 / 4 (linear depth)
     const x0 = Math.max(0, x - (0.25 * x * x) / 2)
     const y1 = i === lights.length - 1 ? y : y + (0.25 * y * y) / 2
-    const ud = lights[i].shadow.camera.userData as { cascadeDepth?: [number, number] }
+    const ud = lights[i].shadow.camera.userData as { cascadeDepth?: [number, number]; cascadeIndex?: number }
+    ud.cascadeIndex = i
     const r = (ud.cascadeDepth ??= [0, 0])
     r[0] = near + x0 * (far - near) - reach
     r[1] = near + y1 * (far - near) + reach
