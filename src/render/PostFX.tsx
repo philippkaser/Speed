@@ -17,7 +17,7 @@ import { ssgi } from 'three/addons/tsl/display/SSGINode.js'
 import { ssr } from 'three/addons/tsl/display/SSRNode.js'
 import { smaa } from 'three/addons/tsl/display/SMAANode.js'
 import { fxaa } from 'three/addons/tsl/display/FXAANode.js'
-import { dof } from 'three/addons/tsl/display/DepthOfFieldNode.js'
+import { bokehDof, dofU } from './dof'
 import {
   diffuseColor,
   float,
@@ -72,12 +72,6 @@ export const lensDof = {
   force: false,
 }
 const CINEMATIC_MODES = new Set(['attract', 'showroom', 'team'])
-const dofU = {
-  /** blur radius in output pixels per unit of (z - zf) / z */
-  k: uniform(0),
-  focus: uniform(10),
-  maxPx: uniform(14),
-}
 const _toFocus = new THREE.Vector3()
 const _camDir = new THREE.Vector3()
 
@@ -277,13 +271,8 @@ export function PostFX() {
     ;(rp as any).__particles = particlePass
     const parts = particlePass.getTextureNode('output')
     out = vec4(out.rgb.mul(parts.a).add(parts.rgb), 1)
-    if (useDof) {
-      // the physical circle of confusion, signed (far > 0), normalised to the largest blur radius; three's
-      // DOF node takes it as its "distance from the focal plane" with the focal plane at 0
-      const z = scenePass.getViewZNode().negate().max(0.01)
-      const coc = z.sub(dofU.focus).div(z).mul(dofU.k).div(dofU.maxPx).clamp(-1, 1)
-      out = dof(out, coc.negate(), float(0), float(1), dofU.maxPx)
-    }
+    // the lens's depth of field (dof.ts): a physical circle of confusion, one gather pass
+    if (useDof) out = bokehDof(convertToTexture(out), depth)
     // the sun's contact shadows, from this frame's depth, for the materials of the next
     const contact = useContact ? contactShadows(depth, vel, camera, gfx.preset === 'ultra' ? 20 : gfx.preset === 'high' ? 16 : 12, gfx.preset === 'ultra' ? 1 : 0.5) : (contactShadowsOff(), null)
     // ---- the camera: exposure, then the lens (lens.ts), the sensor and the picture (sensor.ts)
@@ -382,6 +371,9 @@ export function PostFX() {
       dofU.focus.value = zf
       dofU.k.value = ((cocSensor / lensDof.sensorH) * size.y) / 2
       dofU.maxPx.value = (lensDof.maxRadius * size.y) / 1080
+      dofU.near.value = camera.near
+      dofU.far.value = camera.far
+      dofU.texel.value.set(1 / Math.max(1, size.x), 1 / Math.max(1, size.y))
     }
     sensorU.noise.value = gfx.filmGrain ? 0.02 : 0
     sensorU.hdrPeak.value = hdrState.active ? Math.max(1, (gfx.hdrPeakNits ?? hdrState.peakNits) / Math.max(80, gfx.hdrPaperWhite ?? hdrState.paperWhiteNits)) : 1
