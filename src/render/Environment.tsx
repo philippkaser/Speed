@@ -14,7 +14,8 @@ import { setTrackTemp } from '../physics/tyre'
 import { postUniforms } from './PostFX'
 import { makeEnvScene, makeSkyDome, photoRotationFor, photoSkyHorizon, photoSkyU, photoSunDir } from './photoSky'
 import { skyMeta, skyReady } from './worldAssets'
-import { cascadesFar, cascadesWithoutHero, pickHero, seeHero, SunShadowNode, updateHeroShadow } from './sunShadow'
+import { cascadesFar, cascadesWithoutHero, heroShadowLight, pickHero, seeHero, SunShadowNode, updateHeroShadow } from './sunShadow'
+import { particleScene } from './particles'
 import { carPoses } from './CarVisual'
 
 export interface SunState {
@@ -114,9 +115,16 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
 
   const light = useMemo(() => {
     const l = new THREE.DirectionalLight(0xffffff, 3)
+    l.name = 'sun'
     l.castShadow = true
     return l
   }, [])
+
+  // ?perfprobe: what scripts/perf-probe.cjs needs to attribute every draw of a frame to its pass
+  useEffect(() => {
+    if (!debugFlag('perfprobe')) return
+    ;(window as unknown as { __perfHook?: object }).__perfHook = { renderer, scene, camera: () => camera, csm: () => csmState.csm, heroLight: heroShadowLight, particleScene }
+  }, [renderer, scene, camera])
 
   // shadows: cascaded shadow maps around the camera
   useEffect(() => {
