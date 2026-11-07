@@ -404,15 +404,52 @@ export function buildTerrain(track: Track, res = 6, margin = 650) {
 }
 
 /**
- * Cuts a regular grid mesh (nx x nz vertices, rows along x) into square chunks of `cells` cells, each
- * its own geometry (frustum culled per pass), plus a coarse version of each (every `step`-th vertex,
- * sharing the chunk's vertex buffers) for low-resolution passes such as the cars' reflection probes.
- * Chunks share their border vertices and the coarse ones sample the same border columns and rows,
- * so neither level cracks along the seams.
+ * A compact coarse copy of a regular grid mesh (nx x nz vertices, rows along x): every `step`-th
+ * vertex each way (and the last row and column), its own small vertex buffers. One draw for low
+ * resolution passes such as the cars' reflection probes.
  */
-export function chunkGrid(src: THREE.BufferGeometry, nx: number, nz: number, cells = 80, step = 4) {
-  const fine: THREE.BufferGeometry[] = [],
-    coarse: THREE.BufferGeometry[] = []
+export function coarseGrid(src: THREE.BufferGeometry, nx: number, nz: number, step = 6) {
+  const cols: number[] = [],
+    rows: number[] = []
+  for (let i = 0; i < nx - 1; i += step) cols.push(i)
+  cols.push(nx - 1)
+  for (let j = 0; j < nz - 1; j += step) rows.push(j)
+  rows.push(nz - 1)
+  const w = cols.length,
+    h = rows.length
+  const g = new THREE.BufferGeometry()
+  for (const name of Object.keys(src.attributes)) {
+    const a = src.getAttribute(name) as THREE.BufferAttribute
+    const n = a.itemSize
+    const arr = a.array as Float32Array
+    const out = new Float32Array(w * h * n)
+    for (let b = 0; b < h; b++)
+      for (let c = 0; c < w; c++) {
+        const s = (rows[b] * nx + cols[c]) * n
+        for (let k = 0; k < n; k++) out[(b * w + c) * n + k] = arr[s + k]
+      }
+    g.setAttribute(name, new THREE.BufferAttribute(out, n))
+  }
+  const idx: number[] = []
+  for (let b = 0; b < h - 1; b++)
+    for (let c = 0; c < w - 1; c++) {
+      const p = b * w + c,
+        q = p + 1,
+        r = p + w,
+        d = r + 1
+      idx.push(p, r, q, q, r, d)
+    }
+  g.setIndex(idx)
+  g.computeBoundingSphere()
+  return g
+}
+
+/**
+ * Cuts a regular grid mesh (nx x nz vertices, rows along x) into square chunks of `cells` cells, each
+ * its own geometry, frustum culled per pass. Chunks share their border vertices: no cracks.
+ */
+export function chunkGrid(src: THREE.BufferGeometry, nx: number, nz: number, cells = 120) {
+  const fine: THREE.BufferGeometry[] = []
   const names = Object.keys(src.attributes)
   for (let j0 = 0; j0 < nz - 1; j0 += cells)
     for (let i0 = 0; i0 < nx - 1; i0 += cells) {
@@ -448,14 +485,9 @@ export function chunkGrid(src: THREE.BufferGeometry, nx: number, nz: number, cel
       }
       g.setIndex(quads(1))
       g.computeBoundingSphere()
-      const cg = new THREE.BufferGeometry()
-      for (const name of names) cg.setAttribute(name, g.getAttribute(name))
-      cg.setIndex(quads(step))
-      cg.boundingSphere = g.boundingSphere!.clone()
       fine.push(g)
-      coarse.push(cg)
     }
-  return { fine, coarse }
+  return { fine }
 }
 
 /** The mountains around the valley (scenery/mountains.ts). */
