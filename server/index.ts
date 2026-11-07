@@ -243,7 +243,54 @@ setInterval(() => {
   }
 }, 1000 / STATE_HZ)
 
-const MIME: Record<string, string> = { html: 'text/html', js: 'text/javascript', css: 'text/css', svg: 'image/svg+xml', png: 'image/png', json: 'application/json', woff2: 'font/woff2', woff: 'font/woff', ico: 'image/x-icon', wasm: 'application/wasm' }
+const MIME: Record<string, string> = {
+  html: 'text/html',
+  js: 'text/javascript',
+  css: 'text/css',
+  svg: 'image/svg+xml',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  glb: 'model/gltf-binary',
+  bin: 'application/octet-stream',
+  json: 'application/json',
+  woff2: 'font/woff2',
+  woff: 'font/woff',
+  ico: 'image/x-icon',
+  wasm: 'application/wasm',
+}
+/** Types worth gzipping (images and fonts are compressed already). */
+const COMPRESSIBLE = new Set(['html', 'js', 'css', 'svg', 'json', 'glb', 'bin', 'wasm'])
+/**
+ * Compressed copies, made once per file version (the car models are tens of MB: meshopt geometry
+ * gzips well, their WebP textures don't, so it saves 10-15% there and far more on the code).
+ */
+const gzCache = new Map<string, { tag: string; body: Blob | null }>()
+
+async function serveStatic(req: Request, path: string) {
+  const file = Bun.file(DIST + path.slice(1))
+  if (!(await file.exists())) return new Response('Not found', { status: 404 })
+  const ext = path.split('.').pop()?.toLowerCase() ?? ''
+  // weak validator from size and modification time: unhashed assets (models, world textures)
+  // revalidate instead of being downloaded again
+  const tag = `W/"${file.size.toString(36)}-${Math.floor(file.lastModified).toString(36)}"`
+  const headers: Record<string, string> = { 'Content-Type': MIME[ext] ?? 'application/octet-stream', ETag: tag, Vary: 'Accept-Encoding' }
+  headers['Cache-Control'] = path.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : path === '/index.html' ? 'no-cache' : 'public, max-age=3600, must-revalidate'
+  if (req.headers.get('if-none-match') === tag) return new Response(null, { status: 304, headers })
+  if (COMPRESSIBLE.has(ext) && /\bgzip\b/.test(req.headers.get('accept-encoding') ?? '')) {
+    let c = gzCache.get(path)
+    if (!c || c.tag !== tag) {
+      const raw = new Uint8Array(await file.arrayBuffer())
+      const gz = Bun.gzipSync(raw, { level: 6 })
+      // keep it only where it saves something worth the decompression
+      c = { tag, body: gz.length < raw.length * 0.95 ? new Blob([gz]) : null }
+      gzCache.set(path, c)
+    }
+    if (c.body) return new Response(c.body, { headers: { ...headers, 'Content-Encoding': 'gzip' } })
+  }
+  return new Response(file, { headers })
+}
 
 const server = Bun.serve<Conn>({
   port: PORT,
@@ -261,12 +308,7 @@ const server = Bun.serve<Conn>({
     let path = decodeURIComponent(url.pathname)
     if (path.includes('..')) return new Response('Bad request', { status: 400 })
     if (path === '/' || !path.includes('.')) path = '/index.html'
-    const file = Bun.file(DIST + path.slice(1))
-    if (!(await file.exists())) return new Response('Not found', { status: 404 })
-    const ext = path.split('.').pop() ?? ''
-    const headers: Record<string, string> = { 'Content-Type': MIME[ext] ?? 'application/octet-stream' }
-    if (path.startsWith('/assets/')) headers['Cache-Control'] = 'public, max-age=31536000, immutable'
-    return new Response(file, { headers })
+    return serveStatic(req, path)
   },
   websocket: {
     idleTimeout: 60,
