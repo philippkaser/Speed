@@ -413,7 +413,12 @@ export function terrainMaterial() {
   const rockMask = smoothstep(0.62, 0.8, rock).mul(farRock).mul(0.7).mul(float(1).sub(cover))
   // under the canopy little skylight reaches the ground (the trees' own shadows do the sun)
   m.aoNode = mix(float(1), float(0.45), cover)
-  m.colorNode = mix(g.color, vec3(0.16, 0.15, 0.13).mul(rock.add(0.5)), rockMask).mul(mix(float(1), float(0.7), cover))
+  // the lawns around the circuit are mown in wide stripes that follow the track (aTrack.x: distance
+  // past the barrier), fading out into the wilder meadows further away
+  const stripe = smoothstep(-0.35, 0.35, sin(tr.x.mul(Math.PI / 4.5)))
+  const mown = float(1).sub(smoothstep(60, 170, tr.x)).mul(float(1).sub(cover))
+  const lawn = mix(float(1), mix(float(0.86), float(1.1), stripe), mown)
+  m.colorNode = mix(g.color.mul(lawn), vec3(0.16, 0.15, 0.13).mul(rock.add(0.5)), rockMask).mul(mix(float(1), float(0.7), cover))
   m.roughnessNode = max(g.rough, 0.85)
   m.normalNode = normalMap(normalFromXY(g.nxy), vec2(0.7))
   return m
