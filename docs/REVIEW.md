@@ -36,24 +36,44 @@ See the sections below (filled in as each part lands) and the commit history on 
 - **Physical depth of field** for the cinematic cameras only (menu backdrop, showroom, TV broadcast, `lensDof.force` for replays): the circle of confusion of a real lens (focal length from the field of view on a full-frame sensor, an f-number, auto-focus on the car in focus). The driving cameras never get it.
 - In-game overlay (Settings → Show frame rate): fps, GPU ms per frame (timestamp queries) and internal → output resolution.
 
-### Measured after merging the first round (High, 960x540, same views as the baseline)
+### Measured (High, 960x540, same views as the baseline)
 
-| | Before | After |
-|---|---|---|
-| Practice, chase cam: draw calls | 635 | 317 |
-| Practice: triangles per frame | 13.0M | 11.0M |
-| Practice: grass triangles | 1.89M | 0.20M (+8k for distant grass cards) |
-| Race grid, 12 cars: draw calls | 2,177 | 423 |
-| Race grid: triangles per frame | 15.9M | 13.3M (still too high: being attributed per pass) |
+| | Before (`20f2e58`) | After the first merge | Now |
+|---|---|---|---|
+| Practice, chase cam: draw calls | 635 | 317 | 239 |
+| Practice: triangles per frame | 13.0M | 11.0M | 3.67M |
+| Practice: grass triangles | 1.89M | 0.20M | 0.20M (8k of it distant grass cards) |
+| Race grid, 12 cars: draw calls | 2,177 | 423 | 399 |
+| Race grid: triangles per frame | 15.9M | 13.3M | 5.22M |
+| Race grid: main-thread render CPU (perf probe) | 67.8 ms | 54.1 ms | ~30 ms |
+| Car model downloads | 69.3 MB | | 63.8 MB, ~10% less again with the server's gzip |
 
-### World art (first round)
+Where the triangles went: 4,386 trackside tyres drawn unculled into every shadow cascade (~5.6M per frame); grass (1.9M); cars at full detail in the shadow maps and probes; the terrain and tree meshes in every cascade and probe face. Where the CPU went: ~2,000 draws, and vegetation instance buffers marked dynamic, which three re-uploaded (4 MB) in every pass that drew them.
+
+### World art
 Pit building with a glazed curtain wall, mullions, a control tower, a cantilevered roof and team boards over the garages; a grandstand with a steel-truss cantilever roof and a dense crowd; floodlight towers; a live timing screen; sponsor boards along the barriers; a start gantry with flags; alpine mountains in 12 sectors with real silhouettes, rock and snow; race tarmac with sealant lines, tar snakes and patching; grass in two levels of detail (meshes near, cards far) and denser forests with a forest floor.
 
-### Gameplay (first round)
+### Gameplay
 - Drive feel measured with a headless harness (`scripts/feel-probe.ts`, `tests/feel.test.ts`): keyboard and pad pipelines rebuilt, and a steering assist that damps yaw instead of feeding it.
 - The chase camera runs on critically damped springs (`tests/drivecam.test.ts`): a steady frame, the car still on screen, +4 degrees of FOV at speed (was +13).
 - **Replays:** every car recorded at 30 Hz in compact typed arrays and played back without physics. The TV director picks shots from the recording, plus chase and onboard cameras on any car, a broadcast overlay and transport controls. Watch from the pause menu or the results screen (`tests/replay.test.ts`).
 - Results show gaps to the winner, laps down only when really lapped, and the fastest lap, live as the field finishes.
 
-### Performance (first round)
+### Performance
 Baked car levels of detail built for draw calls, one level-of-detail decision per car, cheap shadow and probe versions, cars left out of cascades their shadow cannot reach, the far cascades drawing the cars' far level, reflection probes without grass and with one matrix update for all faces, skid marks drawn only where laid, car textures on a texel-density budget, and car models loaded in order of need. `scripts/perf-probe.cjs` reports draw calls, triangles and render CPU time per pass.
+
+Later in the performance pass: trackside tyres in culled 150 m cells with a coarse torus for shadows and far cells; the pit lane's roads, paint and team boxes merged (4 draws instead of ~75); car levels of detail simplified to an absolute error; world assets and the session's car models downloading while the renderer starts, and a practice session waiting for one car model instead of three. Fixed on the way: calipers drawn 16 cm off, the steering wheel turning about its bounding box instead of the column, and the hero car's shadow map drawing the far car model.
+
+Later in the world-art pass: terrain and mountains in culled chunks/sectors with one coarse stand-in per reflection-probe face (a probe-only layer); tree meshes cast into the near cascades only (impostors in the far ones and the probes); small props in the near cascades only; the vegetation upload fix above; 27 garages with lit interiors and roller doors, rooms behind the glazed floors, race control at the start line; grandstands with seats, aisles, railings, end-wall panels and a crowd of 64 painted variants with idle motion (motion vectors kept right); lattice start gantry, bridge, braking boards, marshal posts, floodlight masts, TV towers, a big screen, pit-wall stations; mountains carved by simulated drainage with baked ridge shadows; kerbs with faded, chipped paint and shaded rumble ridges; skid marks in braking and traction zones.
+
+### Server
+The production server gzips code and models once (cached), revalidates unhashed assets with ETags (304) and sends proper MIME types for .glb, .webp, .jpg and .bin.
+
+## Still behind GT7 (honest list)
+
+- **Vegetation variety:** two tree models; tree lines read as rows of the same tree up close, no bushes or forest edges. Grass cards can look hedge-like at mid distance.
+- **Crowd and interiors:** flat cards up close; garage interiors glow rather than being lit.
+- **Cars:** no damage, dirt or rain; ~1 GB of uncompressed textures in GPU memory (KTX2/Basis would fix it; not done).
+- **Weather and time of day:** the photographic sky fixes mid-afternoon; the dynamic sky has no volumetric clouds and no rain.
+- **Audio:** synthesised engines, behind recorded samples.
+- **Verification:** everything here was rendered with SwiftShader (software WebGPU) at 960x540; nothing was measured on a real GPU, and HDR output could not be checked on an HDR display. The WebGL2 fallback was rendered once (by the performance pass), not after the world-art pass.
