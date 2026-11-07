@@ -3,9 +3,8 @@
 // along the steepest descent cuts gullies and valleys whose depth grows with the area they drain: the
 // look of fluvial erosion), the high range standing behind forested foothills.
 //
-// Built as 12 sectors (frustum culling: the main view draws about a third of the ring), each also as a
-// coarse mesh over the same vertex buffers (every 4th vertex each way) for the cars' reflection
-// probes.
+// Built as 12 sectors (frustum culling: the main view draws about a third of the ring), and the whole
+// ring once more at every 4th vertex each way as one small mesh for the cars' reflection probes.
 //
 // aMtn per vertex: x drainage (0 on ridges .. 1 in the main valleys), y sun visibility (baked by
 // marching the height field towards the sun: ridges cast their shadows into the valleys), z sky
@@ -16,8 +15,8 @@ import { fbm2, ridged2, smooth } from './noise'
 
 export interface MountainSet {
   sectors: THREE.BufferGeometry[]
-  /** the same sectors, every 4th vertex each way (sharing the vertex buffers): the probes' level */
-  coarseSectors: THREE.BufferGeometry[]
+  /** the whole ring at every 4th vertex each way, one compact mesh: the reflection probes' level */
+  probe: THREE.BufferGeometry
   /** re-bakes the sun visibility (aMtn.y) for a sun direction (towards the sun) */
   bakeSun(dir: { x: number; y: number; z: number }): void
   heightAt(x: number, z: number): number
@@ -215,21 +214,8 @@ export function buildMountains(center: THREE.Vector3, inner: number, outer: numb
         d = c + 1
       fineIdx.push(p, q, c, q, d, c)
     }
-  const coarseIdx: number[] = []
-  for (let k = 0; k < K; k += 4)
-    for (let a = 0; a < per; a += 4) {
-      const k1 = Math.min(K, k + 4),
-        a1 = Math.min(per, a + 4)
-      const p = k * vpr + a,
-        q = k * vpr + a1,
-        c = k1 * vpr + a,
-        d = k1 * vpr + a1
-      coarseIdx.push(p, q, c, q, d, c)
-    }
   const index = new THREE.BufferAttribute(new Uint32Array(fineIdx), 1)
-  const coarseIndex = new THREE.BufferAttribute(new Uint32Array(coarseIdx), 1)
-  const sectors: THREE.BufferGeometry[] = [],
-    coarseSectors: THREE.BufferGeometry[] = []
+  const sectors: THREE.BufferGeometry[] = []
   const attrs: THREE.BufferAttribute[] = []
   for (let sct = 0; sct < SECT; sct++) {
     const nv = vpr * (K + 1)
@@ -260,13 +246,41 @@ export function buildMountains(center: THREE.Vector3, inner: number, outer: numb
     g.setIndex(index)
     g.computeBoundingSphere()
     sectors.push(g)
-    // the coarse mesh shares the vertex buffers
-    const cg = new THREE.BufferGeometry()
-    for (const name of ['position', 'normal', 'aMtn']) cg.setAttribute(name, g.getAttribute(name))
-    cg.setIndex(coarseIndex)
-    cg.boundingSphere = g.boundingSphere!.clone()
-    coarseSectors.push(cg)
   }
+
+  // ---- the probes' ring: every 4th vertex each way, one compact mesh (one draw per probe face)
+  const CA = A / 4,
+    CK = K / 4
+  const pv = (CA + 1) * (CK + 1)
+  const ppos = new Float32Array(pv * 3),
+    pnr = new Float32Array(pv * 3),
+    pmt = new Float32Array(pv * 4)
+  const probeSrc = new Int32Array(pv)
+  for (let k = 0; k <= CK; k++)
+    for (let a = 0; a <= CA; a++) {
+      const v = k * (CA + 1) + a
+      const i = k * 4 * A + ((a * 4) % A)
+      probeSrc[v] = i
+      ppos.set([X[i], H[i], Z[i]], v * 3)
+      pnr.set([nrm[i * 3], nrm[i * 3 + 1], nrm[i * 3 + 2]], v * 3)
+      pmt.set([drain[i], 1, ao[i], (radius[k * 4] - inner) / (outer - inner)], v * 4)
+    }
+  const pidx: number[] = []
+  for (let k = 0; k < CK; k++)
+    for (let a = 0; a < CA; a++) {
+      const p = k * (CA + 1) + a,
+        q = p + 1,
+        c = p + CA + 1,
+        d = c + 1
+      pidx.push(p, q, c, q, d, c)
+    }
+  const probe = new THREE.BufferGeometry()
+  probe.setAttribute('position', new THREE.BufferAttribute(ppos, 3))
+  probe.setAttribute('normal', new THREE.BufferAttribute(pnr, 3))
+  const probeMt = new THREE.BufferAttribute(pmt, 4)
+  probe.setAttribute('aMtn', probeMt)
+  probe.setIndex(pidx)
+  probe.computeBoundingSphere()
 
   const bakeSun = (dir: { x: number; y: number; z: number }) => {
     const hl = Math.hypot(dir.x, dir.z) || 1e-6
@@ -294,7 +308,10 @@ export function buildMountains(center: THREE.Vector3, inner: number, outer: numb
       for (let k = 0; k <= K; k++) for (let a = 0; a <= per; a++) arr[(k * vpr + a) * 4 + 1] = vis[k * A + ((sct * per + a) % A)]
       m.needsUpdate = true
     }
+    const parr = probeMt.array as Float32Array
+    for (let v = 0; v < pv; v++) parr[v * 4 + 1] = vis[probeSrc[v]]
+    probeMt.needsUpdate = true
   }
 
-  return { sectors, coarseSectors, bakeSun, heightAt }
+  return { sectors, probe, bakeSun, heightAt }
 }

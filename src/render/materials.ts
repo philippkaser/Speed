@@ -277,8 +277,9 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
 
   // sealant: black, smooth bitumen
   albedo = mix(albedo, vec3(0.011, 0.011, 0.012), seal.mul(0.92))
-  // (bitumen sealant is smooth, but dusty: not a mirror for the sky at grazing angles)
-  rough = mix(rough, float(0.55), seal)
+  // (dusty sealant keeps the aggregate's relief and roughness: flattened, it mirrored the sky at
+  // grazing angles and read as light lines)
+  rough = mix(rough, rough.mul(0.92), seal)
 
   // white edge lines (0.25 m wide, 0.1 m inside the asphalt edge), slightly worn paint
   const fromEdge = hw.sub(abs(d))
@@ -290,7 +291,7 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
   m.colorNode = albedo
   m.roughnessNode = clamp(rough, 0.28, 1)
   m.metalnessNode = float(0)
-  m.normalNode = normalMap(normalFromXY(asphalt.nxy), vec2(mix(float(1.15), float(0.3), max(paint, seal))))
+  m.normalNode = normalMap(normalFromXY(asphalt.nxy), vec2(mix(float(1.15), float(0.3), paint)))
   return m
 }
 
@@ -413,7 +414,12 @@ export function terrainMaterial() {
   const rockMask = smoothstep(0.62, 0.8, rock).mul(farRock).mul(0.7).mul(float(1).sub(cover))
   // under the canopy little skylight reaches the ground (the trees' own shadows do the sun)
   m.aoNode = mix(float(1), float(0.45), cover)
-  m.colorNode = mix(g.color, vec3(0.16, 0.15, 0.13).mul(rock.add(0.5)), rockMask).mul(mix(float(1), float(0.7), cover))
+  // the lawns around the circuit are mown in wide stripes that follow the track (aTrack.x: distance
+  // past the barrier), fading out into the wilder meadows further away
+  const stripe = smoothstep(-0.35, 0.35, sin(tr.x.mul(Math.PI / 4.5)))
+  const mown = float(1).sub(smoothstep(60, 170, tr.x)).mul(float(1).sub(cover))
+  const lawn = mix(float(1), mix(float(0.86), float(1.1), stripe), mown)
+  m.colorNode = mix(g.color.mul(lawn), vec3(0.16, 0.15, 0.13).mul(rock.add(0.5)), rockMask).mul(mix(float(1), float(0.7), cover))
   m.roughnessNode = max(g.rough, 0.85)
   m.normalNode = normalMap(normalFromXY(g.nxy), vec2(0.7))
   return m

@@ -5,7 +5,7 @@ import type { Track } from '../track/track'
 import { rubberTexture, armcoMaterial, concreteWallMaterial, fenceMaterial, kerbMaterial, markingMaterial, mountainMaterial, roadMaterial, runoffMaterial, terrainMaterial, tyreWallMaterial, vergeMaterial } from './materials'
 import { Scenery } from './Scenery'
 import { debugFlag } from '../util/debug'
-import { buildBarriers, buildKerbs, buildMarkings, buildMountains, buildRoad, buildRunoff, buildTerrain, buildVerge, chunkGrid, type MountainSet } from './trackGeometry'
+import { buildBarriers, buildKerbs, buildMarkings, buildMountains, buildRoad, buildRunoff, buildTerrain, buildVerge, chunkGrid, coarseGrid, type MountainSet } from './trackGeometry'
 import { PROBE_LAYER } from './Reflections'
 import { sunState } from './Environment'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
@@ -58,13 +58,14 @@ export function TrackScene({ track }: { track: Track }) {
     const terrain = buildTerrain(track)
     // in chunks (each pass draws the ones it sees); the probes see a coarse version of each
     const tMat = terrainMaterial()
-    const chunks = chunkGrid(terrain.geometry, terrain.nx, terrain.nz)
-    for (let k = 0; k < chunks.fine.length; k++) {
-      const f = mesh(chunks.fine[k], tMat, { name: 'terrain' })
+    const chunks = chunkGrid(terrain.geometry, terrain.nx, terrain.nz, 120)
+    for (const geo of chunks.fine) {
+      const f = mesh(geo, tMat, { name: 'terrain' })
       f.userData.noProbe = true
       g.add(f)
-      g.add(probeOnly(mesh(chunks.coarse[k], tMat, { name: 'terrain:probe' })))
     }
+    // the probes: one coarse mesh for the whole terrain (36 m cells), one draw per face
+    g.add(probeOnly(mesh(coarseGrid(terrain.geometry, terrain.nx, terrain.nz, 6), tMat, { name: 'terrain:probe' })))
     const center = new THREE.Vector3((track.minX + track.maxX) / 2, 0, (track.minZ + track.maxZ) / 2)
     const radius = Math.max(track.maxX - track.minX, track.maxZ - track.minZ) * 0.5
     // within ~7.6 km of any camera on the circuit: the sky dome (8 km) would cut anything beyond
@@ -72,14 +73,14 @@ export function TrackScene({ track }: { track: Track }) {
     const mMat = mountainMaterial()
     const mountains = new THREE.Group()
     mountains.name = 'mountains'
-    mset.sectors.forEach((geo, k) => {
+    for (const geo of mset.sectors) {
       // receives the sun's shadow only for its own baked term (beyond the cascades the maps are lit)
       const sector = mesh(geo, mMat, { name: 'mountains', receive: true })
-      // the cars' reflection probes draw the coarse mesh
+      // the cars' reflection probes draw the coarse ring instead
       sector.userData.noProbe = true
       mountains.add(sector)
-      mountains.add(probeOnly(mesh(mset.coarseSectors[k], mMat, { name: 'mountains:probe', receive: true })))
-    })
+    }
+    mountains.add(probeOnly(mesh(mset.probe, mMat, { name: 'mountains:probe', receive: true })))
     g.add(mountains)
     g.userData.mountains = mset
     const b = buildBarriers(track)

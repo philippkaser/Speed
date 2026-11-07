@@ -343,8 +343,10 @@ class VegLayer {
     const max = Math.max(1, data.length / STRIDE)
     this.a = new THREE.InstancedBufferAttribute(new Float32Array(max * 4), 4)
     this.b = new THREE.InstancedBufferAttribute(new Float32Array(max * 4), 4)
-    this.a.setUsage(THREE.DynamicDrawUsage)
-    this.b.setUsage(THREE.DynamicDrawUsage)
+    // static usage on purpose: three re-uploads a DynamicDrawUsage attribute in EVERY pass that draws
+    // it, and after the first (ranged) upload of a frame the range is cleared, so every further pass,
+    // and every frame without a repack, wrote the whole buffer (megabytes for the grass: 3 ms each).
+    // Uploads now happen only on a repack (needsUpdate), of the packed range only.
     g.setAttribute('iA', this.a)
     g.setAttribute('iB', this.b)
     g.instanceCount = 0
