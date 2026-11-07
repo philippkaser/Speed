@@ -73,7 +73,9 @@ export function HUD() {
         setCenter({ big: 'GO', lights: -1 })
         setTimeout(() => setCenter(null), 1300)
       } else if (e.type === 'finish' && e.car === 'player') {
-        push(`Finished P${e.position}`, 'best', 4000)
+        // the chequered flag: the result, big, before the classification comes up
+        setCenter({ big: `P${e.position}`, sm: e.position === 1 ? 'WINNER' : 'FINISH' })
+        setTimeout(() => setCenter(null), 2400)
       } else if (e.type === 'notice') push(e.text, 'info', 1600)
       else if (e.type === 'session') force((v) => v + 1)
     })
