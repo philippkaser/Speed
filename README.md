@@ -8,9 +8,11 @@ bun install
 bun run dev      # Vite (http://localhost:5173) + multiplayer server (:3001), Vite proxies /ws
 bun run build    # type-check + production bundle in dist/
 bun run start    # production: one Bun process serves dist/ and the WebSocket server on :3001
-bun test         # physics, AI, multiplayer integration and motion-history tests
+bun test         # physics, AI, multiplayer integration, motion history, drive feel, camera, replay tests
 bun run test:gpu # headless smoke test of the real WebGPU backend (needs Playwright + Chromium, dev server running)
 ```
+
+Measurement tools: `bun scripts/feel-probe.ts` (drive feel: 18 scenarios through the game's own keyboard/pad input and assists, yaw overshoot, slide recovery, lane-change error), `bun scripts/camera-probe.ts` (chase camera frame bob and on-screen car jitter on the real circuit), `node scripts/perf-probe.cjs <url> <query>` (headless Chromium: draw calls, triangles and render CPU per pass; `DETAIL=1` per object). Production (`bun run start`) serves code and models gzipped and revalidates assets with ETags. `docs/REVIEW.md` is the strict review against GT7 with before/after numbers.
 
 Asset builds (only needed when the source art in `new assets/` or `src/car/*/source` changes; the results in `public/` are committed): `bun scripts/build-car-models.ts [id]`, `bun scripts/build-world-assets.ts [sky] [ground] [trees] [grass]`.
 
@@ -163,9 +165,13 @@ The G-buffer fits WebGPU's default 32-byte colour-attachment budget, and the ren
   - **encoding**: the sRGB curve, then triangular dither of one code value, so sky gradients and the glare's halo show no 8-bit banding
   - `tests/camera.test.ts` checks the tone curve (anchored, monotonic, no kink), the colour rendering (greys neutral, a bright red stays red on its way to white), the PSF (energy and shape independent of resolution) and the star (spikes only, point symmetric)
 
-  Every preset renders at native resolution (the adaptive resolution scale steps in when the frame rate drops).
+  - **resolution** (`dynamicRes.ts`, `taa.ts`): the canvas is always the display's native resolution (up to 2x device pixels); the scene and every pass drawn from its G-buffer render at an internal scale, and the TAA is a **temporal upscaler**: the jitter is on the input grid (8 phases per output pixel's share of an input pixel, up to 64), and every output pixel is reconstructed from the 3 x 3 nearest jittered samples with a Blackman-Harris-like kernel of their real distance, the current frame weighted by how close its nearest sample is. A per-preset pixel budget caps the internal resolution (Medium 2.1, High 3.7, Ultra 8.3 megapixels: High renders natively at 1080p and ~1440p for a 4K display). **Dynamic resolution** holds the target frame rate (Settings) by the GPU's own time per frame from WebGPU timestamp queries (the frame interval where there are none), in 1/32 steps with hysteresis, never below 60%
+  - **sharpening** (`sharpen.ts`): AMD FSR 1's RCAS on the display-referred picture after the tone curve (Settings → Sharpening)
+  - **depth of field** (`dof.ts`) for the cinematic cameras only (the menu's backdrop, the showroom, the TV broadcast; `lensDof.force` for others): a physical lens, the circle of confusion from the focal length (the field of view on the sensor), the f-number and the focus on the car in focus, gathered in one pass (scatter-as-gather; a tap behind the pixel spreads no further than the pixel's own blur, so outlines in focus stay crisp). `?nodof` turns it off; `window.__lensDof` exposes the lens
+  - **HDR output** (Settings → HDR output, opt-in, WebGPU on an HDR display): an extended-range half-float canvas; the tone curve is re-targeted to the display's peak over its paper white (`toneCurveHDR`), so shadows and mid-tones sit where the SDR picture has them and only the highlights open up
+  - by default the picture is clean: 5% lens scatter, a 180-degree shutter with streaks capped at 5% of the image height, film grain off (Settings → Film grain)
 
-  Quality presets are Low, Medium, High and Ultra. drei's `PerformanceMonitor` adapts the render resolution when the frame rate drops.
+  Quality presets are Low, Medium, High and Ultra. Settings → Show frame rate shows the GPU's time per frame and the internal → output resolution.
 - **Car reflections** (`Reflections.tsx`): dynamic cubemaps rendered around the cars, as the best-looking racing games do it (Gran Turismo gives every car one detailed shared cubemap, Forza Horizon renders dynamic car cubemaps and adds ray-traced detail, Assetto Corsa renders a few of a car's six cube faces per frame).
   - The car in focus (the player in the chase and cockpit views, the framed car in TV shots: the biggest on screen) gets a high-resolution probe: 256, 512 or 1024 px per face (Medium, High, Ultra), 1–3 faces rendered per frame, then GGX-prefiltered in place, so the clear coat reflects like a mirror and rougher surfaces blur correctly.
   - The next most visible cars get probes from a small pool (128–256 px, refreshed in turn); every other car shares the hero's probe. Other cars are in the probes, so the cars reflect each other.
@@ -206,6 +212,7 @@ The G-buffer fits WebGPU's default 32-byte colour-attachment budget, and the ren
   - Smoke comes from the contact patch in proportion to friction power above the vaporisation onset, and more from a hot tread.
   - Each puff rides the car's wake, rises with buoyancy while hot, wanders with turbulence, rolls along the road, and grows by turbulent diffusion while its optical depth falls as 1/r² (mass conserved).
   - Particles render in their own pass, composited over the lit image and sorted back to front. They fade softly against the scene depth instead of cutting into the road. The smoke is shaded as a scattering medium: sun lighting with self-shadowing along the light path, sky light from the environment, and Henyey-Greenstein forward scattering (thin smoke glows against the sun).
+- **Replays** (`src/game/replay.ts`, `src/ui/hud/Replay.tsx`): every car recorded at 30 Hz in compact typed arrays (practice keeps the last 15 minutes, races 45) and played back without physics; "Watch replay" in the pause menu and on the results. The TV director (`broadcastCam.ts`) picks battles, overtakes, slides and the finish from the recording; chase and onboard cameras on any car; play/pause, ±5 s, scrub, 0.25x-4x; keys Space, arrows, [ ] for the car, C for the camera, Esc back.
 - **Gameplay aids**: a GT-style driving line (red braking zones, yellow at the limit, green under acceleration) from your car's own speed profile, a time-trial ghost of your best lap, and opponent name tags with positions (drei `<Html>`).
 - **Cameras**:
   - chase and near chase, with a slip-aware yaw lag, speed-dependent FOV and road/kerb shake

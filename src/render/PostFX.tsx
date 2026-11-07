@@ -21,6 +21,7 @@ import { bokehDof, dofU } from './dof'
 import {
   diffuseColor,
   float,
+  Fn,
   metalness,
   mrt,
   normalView,
@@ -116,6 +117,12 @@ const _size = new THREE.Vector2()
 /** one output pixel in uv */
 const texelFull = uniform(new THREE.Vector2(1 / 1920, 1 / 1080))
 
+/**
+ * A G-buffer output written by opaque surfaces only: transparent ones output zero with alpha zero,
+ * which their own (normal) blending turns into "keep what is behind".
+ */
+const opaqueOnly = (node: any) => Fn((_: unknown, builder: { material?: THREE.Material }) => (builder.material?.transparent ? vec4(0) : node))()
+
 const aeDebug = debugFlag('aedebug')
 const OFFSCREEN = typeof location !== 'undefined' && new URLSearchParams(location.search).has('offscreen')
 
@@ -181,9 +188,9 @@ export function PostFX() {
     // velocity: NDC motion per frame, wheel slot, inverse depth of the surface that owns the motion
     if (useMB || useTAA) outputs.velocity = motionVelocityOutput
     // alpha: the SSR's roughness, or (without SSR) the object's weight for screen-space AO / GI
-    if (useSSGI || useSSR || useAO) outputs.normal = vec4(packNormalToRGB(normalView), useSSR ? roughness : aoWeight)
-    if (useSSGI) outputs.diffuseColor = vec4(diffuseColor.rgb, useSSR ? metalness : float(0))
-    else if (useSSR) outputs.metal = vec4(metalness, 0, 0, 1)
+    if (useSSGI || useSSR || useAO) outputs.normal = opaqueOnly(vec4(packNormalToRGB(normalView), useSSR ? roughness : aoWeight))
+    if (useSSGI) outputs.diffuseColor = opaqueOnly(vec4(diffuseColor.rgb, useSSR ? metalness : float(0)))
+    else if (useSSR) outputs.metal = opaqueOnly(vec4(metalness, 0, 0, 1))
     // test switch: an over-budget G-buffer that WebGPU refuses, to exercise the WebGL2 fallback
     if (debugFlag('gpufail') && !isWebGL) for (let i = 0; i < 8; i++) outputs['fail' + i] = vec4(1)
     const mrtNode = mrt(outputs)
@@ -192,6 +199,9 @@ export function PostFX() {
       mrtNode.setBlendMode('velocity', motionBlendMode)
       mrtNode.setClearColor('velocity', 0x000000, 0)
     }
+    // the G-buffer keeps the surface behind a transparent one (glass, decals, the driving line), as
+    // the velocity target does: the screen-space GI / AO / reflections act on what is really there
+    for (const k of ['normal', 'diffuseColor', 'metal']) if (outputs[k]) mrtNode.setBlendMode(k, motionBlendMode)
     scenePass.setMRT(mrtNode)
     if (outputs.fail0) for (let i = 0; i < 8; i++) scenePass.getTexture('fail' + i)
     const color = scenePass.getTextureNode('output')
