@@ -98,25 +98,31 @@ export function RacingLine({ track }: { track: Track }) {
     g.setAttribute('aAcross', new THREE.Float32BufferAttribute(across, 1))
     g.setIndex(idx)
     g.computeVertexNormals()
-    const m = new THREE.MeshStandardNodeMaterial({ transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6 })
+    // Where the line is invisible (most of the lap with braking zones only, the feathered edges, right
+    // under the car) nothing may be drawn at all: the scene pass writes every material's albedo and
+    // normal into the G-buffer without blending (PostFX: the screen-space GI and AO read them), so an
+    // invisible ribbon replaced the asphalt there and its colour came back as a tinted patch wherever
+    // the GI shows (in the car's shadow). The alpha test drops those fragments.
+    const m = new THREE.MeshStandardNodeMaterial({ transparent: true, depthWrite: false, alphaTest: 0.012, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6 })
     const b = attribute('aBrake', 'float')
     const c = attribute('aCorner', 'float')
     const full = smoothstep(1.5, 2, modeU)
-    // accelerate: cool blue; corner at the limit: amber; braking: red, deeper with harder braking
-    const go = mix(vec3(0.05, 0.32, 0.75), vec3(0.85, 0.5, 0.05), c)
-    const red = mix(vec3(0.75, 0.12, 0.05), vec3(0.8, 0.02, 0.02), b)
+    // accelerate: cool blue; corner at the limit: amber; braking: red (a zone is red from its first
+    // metre: the fade-in is in the opacity, not a blend from another colour), deeper braking harder
+    const go = mix(vec3(0.04, 0.24, 0.55), vec3(0.6, 0.36, 0.04), c)
+    const red = mix(vec3(0.55, 0.1, 0.05), vec3(0.6, 0.03, 0.02), b)
     const brakeShow = smoothstep(0.02, 0.35, b)
-    const col = mix(go, red, brakeShow)
+    const col = mix(go, red, smoothstep(0.0, 0.03, b))
     // feathered edges (the across attribute runs -1..1 over the width)
-    const edge = float(1).sub(smoothstep(0.3, 1.0, abs(attribute('aAcross', 'float'))))
+    const edge = float(1).sub(smoothstep(0.15, 1.0, abs(attribute('aAcross', 'float'))))
     const dist = length(positionWorld.sub(cameraPosition))
     const fade = smoothstep(5, 14, dist).mul(smoothstep(220, 110, dist))
     // braking zones only (setting 'braking'), or the whole line, lighter where it is not braking
-    const strength = max(brakeShow.mul(mix(0.32, 0.5, b)), full.mul(0.2))
+    const strength = max(brakeShow.mul(mix(0.26, 0.4, b)), full.mul(0.18))
     m.colorNode = col
     // a little light of its own so the line still reads in the shade
-    m.emissiveNode = col.mul(0.12)
-    m.roughnessNode = float(0.7)
+    m.emissiveNode = col.mul(0.08)
+    m.roughnessNode = float(0.75)
     m.metalnessNode = float(0)
     m.opacityNode = clamp(strength.mul(edge).mul(fade), 0, 1)
     const mesh = new THREE.Mesh(g, m)
