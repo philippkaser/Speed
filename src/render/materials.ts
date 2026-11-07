@@ -277,8 +277,9 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
 
   // sealant: black, smooth bitumen
   albedo = mix(albedo, vec3(0.011, 0.011, 0.012), seal.mul(0.92))
-  // (bitumen sealant is smooth, but dusty: not a mirror for the sky at grazing angles)
-  rough = mix(rough, float(0.55), seal)
+  // (dusty sealant keeps the aggregate's relief and roughness: flattened, it mirrored the sky at
+  // grazing angles and read as light lines)
+  rough = mix(rough, rough.mul(0.92), seal)
 
   // white edge lines (0.25 m wide, 0.1 m inside the asphalt edge), slightly worn paint
   const fromEdge = hw.sub(abs(d))
@@ -290,7 +291,7 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
   m.colorNode = albedo
   m.roughnessNode = clamp(rough, 0.28, 1)
   m.metalnessNode = float(0)
-  m.normalNode = normalMap(normalFromXY(asphalt.nxy), vec2(mix(float(1.15), float(0.3), max(paint, seal))))
+  m.normalNode = normalMap(normalFromXY(asphalt.nxy), vec2(mix(float(1.15), float(0.3), paint)))
   return m
 }
 
