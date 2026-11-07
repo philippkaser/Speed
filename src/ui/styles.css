@@ -1557,3 +1557,6 @@ input[type='range']::-moz-range-thumb {
     flex-wrap: wrap;
   }
 }
+body.replaying .name-tag {
+  display: none !important;
+}

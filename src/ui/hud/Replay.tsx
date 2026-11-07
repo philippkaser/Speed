@@ -29,6 +29,12 @@ export function ReplayOverlay() {
   const dragging = useRef(false)
   const units = useSettings((s) => s.units)
 
+  // a broadcast has no floating name tags over the cars (CarVisual draws them in races)
+  useEffect(() => {
+    document.body.classList.add('replaying')
+    return () => document.body.classList.remove('replaying')
+  }, [])
+
   // graphics at 10 Hz, the scrubber and clock every frame
   useEffect(() => {
     const id = setInterval(() => force((x) => x + 1), 100)

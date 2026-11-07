@@ -449,6 +449,11 @@ export class Game {
     p.timing.valid = false
   }
 
+  /** the race is on: also after the player's flag (the rest of the field still has to finish) */
+  get racing() {
+    return this.phase === 'racing' || this.phase === 'finished'
+  }
+
   /** Called every frame before rendering. */
   update(dt: number) {
     if (this.replay) {
@@ -481,7 +486,8 @@ export class Game {
         this.emit({ type: 'go' })
       }
     }
-    if (this.phase === 'racing') this.raceTime += dt
+    // the race runs on after the player's flag until the whole field is home
+    if (this.racing) this.raceTime += dt
 
     // player controls
     if (this.player && !this.player.isRemote && !this.player.ai) {
@@ -527,7 +533,7 @@ export class Game {
     // AI controls (traffic list in track coordinates)
     const traffic: TrafficCar[] = this.cars.map((c) => ({ id: c.id, s: c.timing.s, d: c.sample.d, speed: c.sim.vehicle.speed }))
     for (const c of this.cars) {
-      if (c.ai) c.ai.drive(dt, c.sim.input, traffic, this.phase === 'racing' || this.mode === 'attract')
+      if (c.ai) c.ai.drive(dt, c.sim.input, traffic, this.racing || this.mode === 'attract')
     }
 
     // remote cars: interpolated network state
@@ -580,7 +586,7 @@ export class Game {
     t.distance += ds
     t.prevS = s
     t.s = s
-    if (this.phase !== 'racing' && this.mode !== 'practice') return
+    if (!this.racing && this.mode !== 'practice') return
     t.current = this.sessionTime - t.lapStartTime
 
     // wrong way detection
@@ -677,8 +683,14 @@ export class Game {
       t.position = this.finishOrder.length
       this.emit({ type: 'finish', car: c.id, position: t.position })
       if (c.isPlayer && this.mode === 'online') net.send({ type: 'finish', time: t.finishTime, bestLap: t.best })
-      if (c.isPlayer) this.phase = 'finished'
-      if (c.ai) {
+      if (c.isPlayer) {
+        this.phase = 'finished'
+        // the cool-down lap drives itself (the results are up), as after a race in GT
+        if (!c.ai && this.mode === 'race') {
+          c.ai = new AIDriver(c.sim.vehicle, this.track, 0.8)
+          c.ai.id = c.id
+        }
+      } else if (c.ai) {
         c.ai.skill *= 0.85 // cool-down lap
         c.ai.rebuildProfile()
       }
