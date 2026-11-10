@@ -5,3 +5,4 @@ dist
 .vite
 tsconfig.tsbuildinfo
 test-output
+.claude/worktrees
