@@ -25,6 +25,9 @@ export interface SunState {
   elevation: number
 }
 
+const _followV = new THREE.Vector3()
+const _followL = new THREE.Vector3()
+
 /** The cascaded shadow maps of the sun (vegetation sizes its shadow draws by the cascades' ranges). */
 export const csmState: { csm: CSMShadowNode | null } = { csm: null }
 
@@ -273,8 +276,22 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
   // debug camera overrides: after the camera rigs (0), before anything picks levels of detail or culls
   // by the camera (vegetation at 0.6, reflection probes at 0.7)
   useFrame(() => {
+    // debug (window.__camFollow = { right, up, back, lookUp?, fov?, id? }): a camera rigidly attached to
+    // a car (metres to its right, above and behind its origin, looking at the point lookUp above it):
+    // a perfect tracking shot, in which the car, its shadow and its reflections of itself should not
+    // move by a pixel from frame to frame (scripts/shot.cjs followCam)
+    const w = window as unknown as { __camPose?: { pos: number[]; look: number[]; fov?: number }; __camFollow?: { right: number; up: number; back: number; lookUp?: number; fov?: number; id?: string } }
+    const follow = w.__camFollow
+    if (follow) {
+      const car = (follow.id && carPoses.get(follow.id)) || carPoses.get('player') || carPoses.values().next().value
+      if (car) {
+        const o = _followV.set(-follow.right, follow.up, -follow.back).applyQuaternion(car.quat).add(car.pos)
+        const l = _followL.set(0, follow.lookUp ?? 0.5, 0).applyQuaternion(car.quat).add(car.pos)
+        w.__camPose = { pos: [o.x, o.y, o.z], look: [l.x, l.y, l.z], fov: follow.fov }
+      }
+    }
     // debug (window.__camPose = { pos, look, fov? }): a fixed camera, for look development and A/B views
-    const pose = (window as unknown as { __camPose?: { pos: number[]; look: number[]; fov?: number } }).__camPose
+    const pose = w.__camPose
     if (pose) {
       const pc = camera as THREE.PerspectiveCamera
       pc.position.set(pose.pos[0], pose.pos[1], pose.pos[2])
