@@ -196,6 +196,7 @@ export class SunShadowNode extends CSMShadowNode {
   }
 }
 
+const NO_HERO = typeof location !== 'undefined' && new URLSearchParams(location.search).has('nohero')
 const SHADOW_DEBUG = typeof location !== 'undefined' && new URLSearchParams(location.search).has('vegdebug')
 const shadowDebugMode: N = uniform(0)
 
@@ -281,6 +282,8 @@ export function pickHero(cars: Iterable<[string, { pos: THREE.Vector3; root?: TH
       curRoot = c.root
     }
   }
+  // debug (?nohero): no car gets the dedicated map, every car's shadow comes from the cascades
+  if (NO_HERO) return setShadowHero(null)
   if (curRoot && curS * 1.25 >= bestS) setShadowHero(curRoot)
   else {
     heroId = best

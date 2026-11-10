@@ -173,6 +173,19 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
     }
   }, [light, shadowsQ, camera])
 
+  // debug (?shadowmask): every surface matte white, lit by the sun alone (the sky's light is switched
+  // off in the frame loop below): the picture is the sun's shadow factor times N.L and nothing else,
+  // for measuring how still the shadows' edges stand from frame to frame (scripts/shadow-stability.py)
+  useEffect(() => {
+    if (!debugFlag('shadowmask')) return
+    const m = new THREE.MeshLambertNodeMaterial({ color: 0xffffff })
+    scene.overrideMaterial = m
+    return () => {
+      scene.overrideMaterial = null
+      m.dispose()
+    }
+  }, [scene])
+
   // fog / aerial perspective
   const fogU = useMemo(
     () => ({
@@ -320,6 +333,10 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
 
   const target = useRef(new THREE.Vector3())
   useFrame(() => {
+    if (debugFlag('shadowmask')) {
+      scene.environment = null
+      scene.environmentIntensity = 0
+    }
     // keep the light pointing along the sun direction relative to the focus point
     const f = focus?.current ?? target.current.copy(camera.position)
     light.target.position.copy(f)
