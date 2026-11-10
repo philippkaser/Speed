@@ -110,10 +110,10 @@ test('cascades always render: a cascade cloned while the probes had paused the s
   const cascades = [0, 1, 2].map(() => ({ shadow: sun.shadow.clone() }))
   expect(cascades.every((c) => c.shadow.autoUpdate === false)).toBe(true)
   cascadesWithoutHero({ lights: cascades })
-  // the near cascades render every frame; the farthest every other frame
-  expect(cascades.slice(0, -1).every((c) => c.shadow.autoUpdate === true)).toBe(true)
-  const far = [0, 1, 2, 3].map(() => (cascadesWithoutHero({ lights: cascades }), cascades[2].shadow.autoUpdate))
-  expect(far.filter(Boolean).length).toBe(2)
+  // every cascade renders every frame, the farthest too (cars move metres per frame: a cascade
+  // that skips frames leaves their shadows behind, then jumps)
+  const far = [0, 1, 2, 3].map(() => (cascadesWithoutHero({ lights: cascades }), cascades.every((c) => c.shadow.autoUpdate === true)))
+  expect(far.every(Boolean)).toBe(true)
   // and the cascades never draw the hero car's layer
   expect(cascades.every((c) => !c.shadow.camera.layers.isEnabled(HERO_LAYER) && c.shadow.camera.layers.isEnabled(0))).toBe(true)
 })

@@ -306,10 +306,10 @@ export function cascadesWithoutHero(csm: CascadeSource | null, sunDir?: THREE.Ve
     const l = lights[i]
     const mask = cascadeMask(i)
     if (l.shadow.camera.layers.mask !== mask) l.shadow.camera.layers.mask = mask
-    // The farthest cascade (130 m and beyond) renders every other frame: its lookup matrix is only
-    // recomputed when it renders, so the map and the matrix always belong together, and a frame's
-    // lag at that distance does not show. A quarter of the shadow passes' cost saved.
-    l.shadow.autoUpdate = lights.length < 3 || i < lights.length - 1 || cascadeFrame % 2 === 0
+    // Every cascade renders every frame. (The farthest one used to render every other frame, which
+    // is invisible for the static world but not for cars: at 250 km/h a car moves 2.3 m in two
+    // frames, so beyond 130 m its shadow fell behind it and then jumped: the cars' shadows stuttered.)
+    l.shadow.autoUpdate = true
   }
   heroLight.shadow.autoUpdate = true
 }
