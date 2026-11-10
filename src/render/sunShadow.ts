@@ -269,9 +269,18 @@ export function pickHero(cars: Iterable<[string, { pos: THREE.Vector3; root?: TH
     curS = 0,
     bestRoot: THREE.Object3D | null = null,
     curRoot: THREE.Object3D | null = null
+  camera.getWorldDirection(_f)
   for (const [id, c] of cars) {
     if (!c.root) continue
-    const s = 1 / (Math.max(0.5, c.pos.distanceTo(_p)) * t)
+    // Only a car the camera can see (or sits in). By distance alone, a car following the player
+    // closely was "bigger" than the player's own (it is nearer to the chase camera, behind it): the
+    // map went to a car that was not in the picture, and the player's shadow fell back to the
+    // cascades and came back as the gap changed.
+    _r.subVectors(c.pos, _p)
+    const along = _r.dot(_f)
+    const dist = _r.length()
+    if (dist > 1.8 && (along < 0 || Math.sqrt(Math.max(0, dist * dist - along * along)) > along * t * 2.2 + 4)) continue
+    const s = 1 / (Math.max(0.5, dist) * t)
     if (s > bestS) {
       bestS = s
       best = id
@@ -282,8 +291,12 @@ export function pickHero(cars: Iterable<[string, { pos: THREE.Vector3; root?: TH
       curRoot = c.root
     }
   }
-  // debug (?nohero): no car gets the dedicated map, every car's shadow comes from the cascades
-  if (NO_HERO) return setShadowHero(null)
+  // debug (?nohero or window.__noHero): no car gets the dedicated map, every car's shadow comes from
+  // the cascades
+  if (NO_HERO || (globalThis as { __noHero?: boolean }).__noHero) {
+    heroId = null
+    return setShadowHero(null)
+  }
   if (curRoot && curS * 1.25 >= bestS) setShadowHero(curRoot)
   else {
     heroId = best
@@ -318,8 +331,28 @@ export function cascadesWithoutHero(csm: CascadeSource | null, sunDir?: THREE.Ve
 }
 let cascadeFrame = 0
 
+/**
+ * A cascade's biases from its texel size (m) and the depth its shadow camera spans (m).
+ *
+ * three applies `bias` to the shadow map's normalised depth, so its size in metres is bias times the
+ * camera's depth range: the cascades' cameras span 3 km (casters far towards the sun must fit), and
+ * the constant that was set here (-0.0002 times the cascade's number) meant 0.6 m in the first
+ * cascade and 2.4 m in the fourth, along the sun's ray. Nothing lower than 0.45 m (first cascade) to
+ * 1.8 m (fourth) above its receiver cast a shadow: a car beyond 38 m had none at all, nearer ones only
+ * that of the roof and the wing, kerbs, barriers and posts none, and a car's shadow changed shape as
+ * it passed from one cascade to the next. What a cascade needs is set by its texel: the filter reads
+ * up to two texels beside the receiver, where the stored depth of a surface that slopes away from the
+ * sun differs by about a texel per texel. So the receiver is moved along its normal by one and a half
+ * texels (three's normalBias, in metres: that holds for any orientation of the surface) and a small
+ * depth bias of half a texel plus a centimetre covers the rest (the cars' shadow casters are a
+ * simplified mesh, up to a few millimetres off the one that receives).
+ */
+export function cascadeBias(texel: number, depthRange: number) {
+  return { bias: -(0.5 * texel + 0.01) / Math.max(1, depthRange), normalBias: 1.5 * texel }
+}
+
 interface CascadeSource {
-  lights?: { shadow: { camera: THREE.Camera; autoUpdate: boolean } }[]
+  lights?: { shadow: { camera: THREE.Camera; autoUpdate: boolean; bias: number; normalBias: number } }[]
   maxFar?: number
   camera?: THREE.Camera | null
   _cascades?: THREE.Vector2[]
@@ -352,6 +385,9 @@ function tagCascadeDepths(csm: CascadeSource | null, sunDir?: THREE.Vector3) {
     const ud = sc.userData as { cascadeDepth?: [number, number]; cascadeTexel?: number }
     // (m per shadow texel)
     ud.cascadeTexel = (sc.right - sc.left) / Math.max(1, (lights[i].shadow as unknown as { mapSize: THREE.Vector2 }).mapSize.x)
+    const bias = cascadeBias(ud.cascadeTexel, sc.far - sc.near)
+    lights[i].shadow.bias = bias.bias
+    lights[i].shadow.normalBias = bias.normalBias
     const r = (ud.cascadeDepth ??= [0, 0])
     r[0] = near + x0 * (far - near) - reach
     r[1] = near + y1 * (far - near) + reach

@@ -117,3 +117,81 @@ test('cascades always render: a cascade cloned while the probes had paused the s
   // and the cascades never draw the hero car's layer
   expect(cascades.every((c) => !c.shadow.camera.layers.isEnabled(HERO_LAYER) && c.shadow.camera.layers.isEnabled(0))).toBe(true)
 })
+
+test("a cascade's depth bias is a few centimetres along the sun's ray, whatever its camera's depth range", async () => {
+  const { cascadeBias } = await import('../src/render/sunShadow')
+  // the four cascades on High: ~0.9 cm, 3 cm, 9 cm and 30 cm per texel; the shadow cameras span 3 km
+  for (const texel of [0.009, 0.03, 0.09, 0.3]) {
+    const b = cascadeBias(texel, 2999)
+    const metres = -b.bias * 2999
+    // (three applies the bias to normalised depth: -0.0002 was 0.6 m here, and no kerb, post or
+    // distant car cast a shadow)
+    expect(metres).toBeGreaterThan(0.005)
+    expect(metres).toBeLessThan(texel + 0.02)
+    // level ground under a 48 degree sun, read up to two texels beside the receiver: moving the
+    // receiver along its normal by n lifts it n / sin(elevation) clear of the stored depth
+    const elev = (48 * Math.PI) / 180
+    const margin = b.normalBias / Math.sin(elev) + metres
+    expect(margin).toBeGreaterThan((2 * texel) / Math.tan(elev))
+    // and the shadow starts no further than two texels from its caster
+    expect(b.normalBias).toBeLessThan(2 * texel)
+  }
+})
+
+test('the car in focus is one the camera sees: a car close behind the chase camera does not take the map', async () => {
+  const { pickHero } = await import('../src/render/sunShadow')
+  const player = car()
+  const chaser = car()
+  const cam = new THREE.PerspectiveCamera(58, 16 / 9, 0.1, 1000)
+  // chase view: the camera 6.5 m behind the player, looking along +z; the chaser 1 m behind the camera
+  cam.position.set(0, 2.4, -6.5)
+  cam.lookAt(0, 0.8, 0)
+  cam.updateMatrixWorld(true)
+  const cars: [string, { pos: THREE.Vector3; root?: THREE.Object3D }][] = [
+    ['player', { pos: new THREE.Vector3(0, 0, 0), root: player.root }],
+    ['ai', { pos: new THREE.Vector3(0.5, 0, -7.5), root: chaser.root }],
+  ]
+  pickHero(cars, cam)
+  expect(player.body.layers.isEnabled(HERO_LAYER)).toBe(true)
+  expect(chaser.body.layers.isEnabled(HERO_LAYER)).toBe(false)
+  // alongside and in view, nearer to the camera by more than the hysteresis: now it is the bigger car
+  cars[1][1].pos.set(1.5, 0, -3.5)
+  pickHero(cars, cam)
+  expect(chaser.body.layers.isEnabled(HERO_LAYER)).toBe(true)
+  // cockpit view: the camera sits in the player's car, whose centre is beside or behind it
+  cam.position.set(0.3, 1.0, -0.2)
+  cam.lookAt(0.3, 1.0, 10)
+  cam.updateMatrixWorld(true)
+  cars[1][1].pos.set(0, 0, -6)
+  pickHero(cars, cam)
+  expect(player.body.layers.isEnabled(HERO_LAYER)).toBe(true)
+  setShadowHero(null)
+})
+
+test("grounding: a car's box takes the sky from the road as a wall and a ceiling of its size would", async () => {
+  const { boxOcclusionAt, groundBox } = await import('../src/render/carGrounding')
+  const g = groundBox(new THREE.Box3(new THREE.Vector3(-1, 0, -2.3), new THREE.Vector3(1, 1.25, 2.3)))
+  // the floor is a few centimetres above the road, the box ends at the beltline
+  expect(g.centre.y - g.half.y).toBeGreaterThan(0.04)
+  expect(g.centre.y - g.half.y).toBeLessThan(0.12)
+  expect(g.centre.y + g.half.y).toBeLessThan(1)
+  const up = new THREE.Vector3(0, 1, 0)
+  const at = (x: number, z = 0) => boxOcclusionAt(new THREE.Vector3(x, -g.centre.y, z), up, g.half)
+  // under the middle of the car nearly all of the sky is gone
+  expect(at(0)).toBeGreaterThan(0.93)
+  expect(at(0)).toBeLessThanOrEqual(1)
+  // beside it: an infinitely long wall of height H at distance d covers (1 - d / hypot(d, H)) / 2;
+  // the car is a little less (finite length, the gap under the floor)
+  const H = g.centre.y + g.half.y
+  for (const d of [0.1, 0.3, 1, 2]) {
+    const wall = (1 - d / Math.hypot(d, H)) / 2
+    const o = at(g.half.x + d)
+    expect(o).toBeLessThan(wall + 0.01)
+    expect(o).toBeGreaterThan(wall * 0.55)
+  }
+  // falls off monotonically, and is symmetric
+  expect(at(g.half.x + 0.2)).toBeGreaterThan(at(g.half.x + 0.6))
+  expect(at(g.half.x + 0.6)).toBeGreaterThan(at(g.half.x + 1.5))
+  expect(at(-g.half.x - 0.6)).toBeCloseTo(at(g.half.x + 0.6), 6)
+  expect(at(g.half.x + 2.5)).toBeLessThan(0.04)
+})

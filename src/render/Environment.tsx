@@ -16,6 +16,7 @@ import { makeEnvScene, makeSkyDome, photoRotationFor, photoSkyHorizon, photoSkyU
 import { skyMeta, skyReady } from './worldAssets'
 import { cascadesFar, cascadesWithoutHero, heroShadowLight, pickHero, seeHero, SunShadowNode, updateHeroShadow } from './sunShadow'
 import { particleScene } from './particles'
+import { installCarGrounding, updateCarGrounding } from './carGrounding'
 import { carPoses } from './CarVisual'
 
 export interface SunState {
@@ -31,6 +32,7 @@ const _followL = new THREE.Vector3()
 /** The cascaded shadow maps of the sun (vegetation sizes its shadow draws by the cascades' ranges). */
 export const csmState: { csm: CSMShadowNode | null } = { csm: null }
 
+const _roots: (THREE.Object3D | undefined)[] = []
 const _heroCars: [string, { pos: THREE.Vector3; root?: THREE.Object3D }][] = []
 
 export const sunState: SunState = { dir: new THREE.Vector3(0.3, 0.4, 0.2).normalize(), color: new THREE.Color(1, 0.9, 0.8), intensity: 3, elevation: 0.3 }
@@ -140,7 +142,8 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
     light.shadow.camera.right = 400
     light.shadow.camera.top = 400
     light.shadow.camera.bottom = -400
-    light.shadow.bias = -0.0002
+    // (the cascades set their own biases from their texel size every frame: sunShadow.ts cascadeBias)
+    light.shadow.bias = -0.00001
     light.shadow.normalBias = 0.02
     if (shadowsQ > 0 && !debugFlag('noshadow') && !debugFlag('nocsm')) {
       // Cascade breaks in metres, where the subjects are: the first ends at 12 m (the car in the chase
@@ -172,6 +175,11 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
       csmState.csm = null
     }
   }, [light, shadowsQ, camera])
+
+  // the cars keep the sky's light from the ground under and around them (carGrounding.ts)
+  useEffect(() => {
+    if (!debugFlag('nogrounding')) installCarGrounding(renderer)
+  }, [renderer])
 
   // debug (?shadowmask): every surface matte white, lit by the sun alone (the sky's light is switched
   // off in the frame loop below): the picture is the sun's shadow factor times N.L and nothing else,
@@ -350,6 +358,9 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
     // the camera sees every layer the scene draws on (the hero's, the near-cascade casters'), with or
     // without shadows
     seeHero(camera)
+    _roots.length = 0
+    for (const pose of carPoses.values()) _roots.push(pose.model?.root)
+    updateCarGrounding(_roots)
     // the car in focus gets its own detailed shadow map (sunShadow.ts)
     if (csm) {
       cascadesWithoutHero(csm as never, sun.dir)
