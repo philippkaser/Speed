@@ -249,7 +249,7 @@ export function Reflections() {
         setMirrorCube(mirror, probe.front.texture)
         ;(mirror.origin.value as THREE.Vector3).copy(probe.origin)
         mirror.parallax.value = probe === own ? 1 : 0
-        setMirrorGround(mirror, pose.pos, pose.quat)
+        setMirrorGround(mirror, pose.pos, pose.quat, pose.model?.spec.cgHeight ?? 0.43)
       }
       if (root && sys.assigned.get(root) !== tex) {
         setEnv(r.id, tex)

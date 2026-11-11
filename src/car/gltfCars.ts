@@ -14,7 +14,7 @@ import * as THREE from 'three/webgpu'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { abs, attribute, clearcoatNormalView, float, Fn, min, mix, normalView, output, pow, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
+import { abs, attribute, clearcoatNormalView, float, Fn, min, mix, normalView, output, positionViewDirection, pow, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
 import { makeMirrorEnv, mirrorRadiance, type MirrorEnv, type MirrorMaterial } from '../render/mirrorEnv'
 import { HERO_LAYER } from '../render/sunShadow'
 import type { CarSpec } from '../physics/spec'
@@ -288,8 +288,13 @@ class CarPaintMaterial extends THREE.MeshPhysicalNodeMaterial implements MirrorM
   mirrorNode: unknown = null
   /** ?chromecars: the whole surface is the mirror (what the probe holds, through the same lookup) */
   chrome = false
+  /** window glass: how much of what is behind it the pane hides (its alpha) */
+  cover: any = null
   setMirror(env: MirrorEnv | null) {
-    this.mirrorNode = env ? mirrorRadiance(env, this.chrome ? normalView : clearcoatNormalView) : null
+    let node = env ? mirrorRadiance(env, this.chrome ? normalView : clearcoatNormalView) : null
+    // (blending scales the pane's own light by its alpha: the reflection is not part of the tint)
+    if (node && this.cover) node = node.div(this.cover)
+    this.mirrorNode = node
     if (this.chrome) this.emissiveNode = this.mirrorNode as typeof this.emissiveNode
     this.needsUpdate = true
   }
@@ -392,14 +397,48 @@ function liveryMaterial(src: THREE.MeshPhysicalMaterial, paint: Meta['paint'], p
 }
 
 /**
+ * A window pane as the dielectric surface it is. Its only reflection is the mirror at the surface
+ * (the clear-coat lobe: 4% head-on, everything at grazing angles), which reads the car's cube probe
+ * at full resolution like the paint's clear coat; behind it a neutral tint. What the pane lets
+ * through falls as its reflection rises, so a window seen along its surface is a mirror, not a hole.
+ */
+function windowGlass(src: THREE.MeshPhysicalMaterial, mirror: MirrorEnv) {
+  const g = new CarPaintMaterial()
+  g.name = src.name
+  g.color.setRGB(0, 0, 0)
+  g.metalness = 0
+  g.roughness = 1
+  g.specularIntensity = 0
+  g.clearcoat = 1
+  g.clearcoatRoughness = 0
+  g.transparent = true
+  g.side = src.side
+  g.depthWrite = src.depthWrite
+  // GT3 side and rear windows are near-clear polycarbonate: at most 30% tint
+  const tint = Math.min(src.opacity, 0.3)
+  const nv = normalView.dot(positionViewDirection).abs().clamp(0, 1)
+  const fresnel = float(0.04).add(float(0.96).mul(pow(float(1).sub(nv), 5)))
+  const cover = float(1).sub(float(1).sub(fresnel).mul(1 - tint))
+  g.opacityNode = cover
+  g.cover = cover
+  mirror.materials.push(g)
+  return g
+}
+
+/**
  * Physically plausible glass and carbon. The source models' glass is metallic (metalness ~1) and on
  * one car rough (0.39): real glass is a smooth dielectric whose reflection rises with the angle.
  * Exterior carbon fibre is clear-coated.
  */
-function normaliseMaterial(mat: THREE.Material) {
+function normaliseMaterial(mat: THREE.Material, mirror?: MirrorEnv) {
   const m = mat as THREE.MeshPhysicalMaterial
   const name = mat.name ?? ''
   if (!m.isMeshStandardMaterial) return mat
+  if (mirror && /glass|window/i.test(name) && m.transparent && !m.map && !/light|lamp|emissive|sticker/i.test(name)) {
+    const glass = windowGlass(m, mirror)
+    m.dispose()
+    return glass
+  }
   if (/glass|window/i.test(name) && m.transparent) {
     m.metalness = 0
     m.roughness = Math.min(m.roughness, 0.03)
@@ -526,7 +565,7 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
       out = bakedMaterial(name === 'lod:glass', bakedU)
     } else if (/Light_Rear/i.test(name) || /Disc/i.test(name) || opts.uniqueMaterials !== false) {
       // every car its own materials: each car carries its own reflection probe
-      out = normaliseMaterial(mat.clone())
+      out = normaliseMaterial(mat.clone(), mirror)
       // the brake lights (rear lights only: see splitLights)
       if (/Light_Rear/i.test(name)) rearLights.push(out as THREE.MeshStandardMaterial)
       if (/Disc/i.test(name)) discs.push(out as THREE.MeshStandardMaterial)

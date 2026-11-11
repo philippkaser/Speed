@@ -65,10 +65,10 @@ export function setMirrorCube(env: MirrorEnv, tex: THREE.CubeTexture | null) {
   for (const m of env.materials) m.setMirror(tex ? env : null)
 }
 
-/** The ground plane under a car at `pos` (its origin is on the road) with orientation `quat`. */
-export function setMirrorGround(env: MirrorEnv, pos: THREE.Vector3, quat: THREE.Quaternion) {
+/** The ground plane under a car: `height` below its origin `pos` (its centre of gravity), along its own up axis. */
+export function setMirrorGround(env: MirrorEnv, pos: THREE.Vector3, quat: THREE.Quaternion, height: number) {
   const v = env.ground.value as THREE.Vector4
   _n.set(0, 1, 0).applyQuaternion(quat)
-  v.set(_n.x, _n.y, _n.z, -_n.dot(pos))
+  v.set(_n.x, _n.y, _n.z, height - _n.dot(pos))
 }
 const _n = new THREE.Vector3()
