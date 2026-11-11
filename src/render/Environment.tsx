@@ -242,6 +242,8 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
     postUniforms.exposure.value = THREE.MathUtils.clamp((Math.sin(0.42) + 0.15) / (Math.sin(Math.max(sun.elevation, 0)) + 0.15), 0.5, 1.35)
     const sunPos = sun.dir.clone().multiplyScalar(1000)
     sky.sunPosition.value.copy(sun.dir)
+    // debug: the sun's direction, for cameras placed at its mirror image (scripts/shot.cjs sunCam)
+    ;(window as unknown as { __sunDir?: THREE.Vector3 }).__sunDir = sun.dir
     light.color.copy(sun.color)
     light.intensity = sun.intensity
     fogU.sunDir.value.copy(sun.dir)

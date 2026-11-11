@@ -85,6 +85,12 @@ const save = (file, url) => fs.writeFileSync(file, Buffer.from(url.split(',')[1]
         delete window.__camFollow
         window.__camPose = { pos: [P('x'), P('y'), P('z')], look: [v.pos.x + v.up.x * lookUp, v.pos.y + v.up.y * lookUp, v.pos.z + v.up.z * lookUp], fov }
       }
+      // sunCam(dist, fov, lookUp): a camera where a level panel at lookUp above the car mirrors the sun into it
+      window.sunCam = (dist = 7, fov = 30, lookUp = 1) => {
+        const v = car().sim.vehicle, s = window.__sunDir, L = [v.pos.x + v.up.x * lookUp, v.pos.y + v.up.y * lookUp, v.pos.z + v.up.z * lookUp]
+        delete window.__camFollow
+        window.__camPose = { pos: [L[0] - s.x * dist, L[1] + s.y * dist, L[2] - s.z * dist], look: L, fov }
+      }
       window.followCam = (right, up, back, fov = 40, lookUp = 0.5, id) => {
         window.__camFollow = { right, up, back, lookUp, fov, id: id ?? car().id }
       }

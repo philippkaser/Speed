@@ -402,11 +402,11 @@ function liveryMaterial(src: THREE.MeshPhysicalMaterial, paint: Meta['paint'], p
       .mul(smoothstep(0.5, 0.7, s))
       .mul(smoothstep(0.22, 0.38, v))
     // shading relative to the reference value of each paint (gradients, panel shadows)
-    // (at most the team colour itself: lifting the model's lighter-than-reference base pixels by up to
+    // (each at most its team colour: lifting the model's lighter-than-reference pixels by up to
     // 1.6x made the red's albedo 0.93, brighter than any real pigment, and the clear coat's 4% mirror
     // vanished against it)
     const shadeA = pow(v.div(paint.baseV).clamp(0.15, 1.0), float(2.2))
-    const shadeB = pow(v.div(paint.accentV).clamp(0.35, 1.15), float(2.2))
+    const shadeB = pow(v.div(paint.accentV).clamp(0.35, 1.0), float(2.2))
     let col: any = lin.mul(base)
     col = mix(col, (teamA as any).mul(shadeA), baseW)
     if (paint.hiHue !== undefined && paint.hiV !== undefined) {
@@ -415,7 +415,7 @@ function liveryMaterial(src: THREE.MeshPhysicalMaterial, paint: Meta['paint'], p
         .sub(smoothstep(0.02, 0.045, hueDist(h, paint.hiHue)))
         .mul(smoothstep(0.42, 0.62, s))
         .mul(smoothstep(0.45, 0.58, v))
-      const shadeH = pow(v.div(paint.hiV).clamp(0.4, 1.2), float(2.2))
+      const shadeH = pow(v.div(paint.hiV).clamp(0.4, 1.0), float(2.2))
       col = mix(col, mix(teamA as any, vec3(1), 0.32).mul(shadeH), hiW)
     }
     col = mix(col, (teamB as any).mul(shadeB), accW)
