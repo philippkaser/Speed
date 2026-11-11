@@ -36,6 +36,12 @@ export const taaU = {
   alpha: uniform(0.1),
   /** variance clipping width (standard deviations) */
   gamma: uniform(1.0),
+  /** sharpness of the current frame's reconstruction kernel exp(-k d^2) (d in input pixels) at native
+   *  resolution. Converged over the jitter sequence, the result is the pixel's box supersample
+   *  convolved with this kernel: UE4's 2.29 (sigma 0.47 px) leaves a visibly soft image; 5 (sigma
+   *  0.32 px) is close to the box alone. When upscaling it widens towards 2.29 (fewer samples per
+   *  output pixel). */
+  kernel: uniform(5.0),
 }
 
 /**
@@ -272,6 +278,7 @@ class TemporalAANode extends THREE.Node {
       const tentW = float(0).toVar()
       const vOwn = vel.load(ip).xy
       const pxs = inSize.mul(0.5)
+      const kk = max(taaU.kernel.div(ratio.mul(ratio)), 2.29).negate()
       for (const [dx, dy] of [
         [0, 0],
         [-1, -1],
@@ -289,14 +296,14 @@ class TemporalAANode extends THREE.Node {
         // the sample's offset from this output pixel's centre (input pixels)
         const off = vec2(ip.add(ivec2(dx, dy))).add(0.5).add(jitterPx).sub(inPos)
         const d2 = off.dot(off)
-        const w = tsl.exp(d2.mul(-2.29))
+        const w = tsl.exp(d2.mul(kk))
         recon.addAssign(y.mul(w))
         reconW.addAssign(w)
         nearW.assign(max(nearW, tsl.exp(max(d2.mul(ratio).mul(ratio).sub(0.25), 0).mul(-2.29))))
         m1.addAssign(y)
         m2.addAssign(y.mul(y))
         const same = float(1).sub(smoothstep(1, 3, length(vel.load(q).xy.sub(vOwn).mul(pxs))))
-        const tw = same.mul(w)
+        const tw = same.mul(tsl.exp(d2.mul(-2.29)))
         tent.addAssign(y.mul(tw))
         tentW.addAssign(tw)
         lo.assign(min(lo, y))

@@ -42,9 +42,10 @@ import { reportGpuError } from './gpuHealth'
 import { debugFlag } from '../util/debug'
 import { ae, exposureMeter, stepAutoExposure } from './autoExposure'
 import { motionBlur, motionBlurUniforms } from './motionBlur'
-import { renderScale, temporalAA } from './taa'
+import { renderScale, taaU, temporalAA } from './taa'
 import { stepDynamicRes } from './dynamicRes'
 import { rcas, sharpenU } from './sharpen'
+import { installLodBias, lodBias } from './lodBias'
 import { contactShadows, contactShadowsOff, updateContactShadows } from './contactShadows'
 import { beginMotionFrame, motionBlendMode, motionVelocityOutput } from './motionHistory'
 import { particleScene, particleU, sceneDepth } from './particles'
@@ -124,6 +125,12 @@ const texelFull = uniform(new THREE.Vector2(1 / 1920, 1 / 1080))
 const opaqueOnly = (node: any) => Fn((_: unknown, builder: { material?: THREE.Material }) => (builder.material?.transparent ? vec4(0) : node))()
 
 const aeDebug = debugFlag('aedebug')
+installLodBias()
+
+/** look-development overrides (A/B captures): `window.__clarity = { sharpen, lodBias }` */
+const clarity: { sharpen?: number; lodBias?: number } = {}
+if (typeof window !== 'undefined') (window as unknown as { __clarity?: object }).__clarity = clarity
+
 const OFFSCREEN = typeof location !== 'undefined' && new URLSearchParams(location.search).has('offscreen')
 
 /**
@@ -329,6 +336,7 @@ export function PostFX() {
     }
     ;(rp as any).__meter = meter
     ;(rp as any).__taa = taaNode
+    if (typeof window !== 'undefined') (window as unknown as { __taa?: object }).__taa = taaNode ? { node: taaNode, u: taaU } : undefined
     ;(rp as any).__exposed = exposedTex
     ;(rp as any).__scene = scenePass
     return rp
@@ -371,7 +379,9 @@ export function PostFX() {
     if (pl.__gi) pl.__gi.resolutionScale = rs * (gfx.preset === 'ultra' ? 1 : 0.5)
     if (pl.__gtao) pl.__gtao.resolutionScale = 0.5 * rs
     if (pl.__particles) pl.__particles.setResolutionScale(Math.min(gfx.preset === 'high' || gfx.preset === 'ultra' ? 0.75 : 0.5, rs))
-    sharpenU.amount.value = Math.max(0, Math.min(1, gfx.sharpness ?? 0.5))
+    sharpenU.amount.value = clarity.sharpen ?? Math.max(0, Math.min(1, gfx.sharpness ?? 0.5))
+    // textures one mip sharper under TAA (its jitter supersamples them), more when upscaling
+    lodBias.value = clarity.lodBias ?? (useTAA ? Math.log2(Math.max(0.25, rs)) - 0.5 : 0)
     if (useDof) {
       // the lens: focal length from the field of view on the sensor, focused on the car in focus
       const fovRad = (camera.fov * Math.PI) / 180 / Math.max(camera.zoom, 1e-3)

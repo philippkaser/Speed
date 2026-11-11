@@ -26,7 +26,7 @@ function tex(path: string, srgb: boolean, opts: { flipY?: boolean; anisotropy?: 
   t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace
   t.wrapS = t.wrapT = THREE.RepeatWrapping
   t.flipY = opts.flipY ?? true
-  t.anisotropy = opts.anisotropy ?? 8
+  t.anisotropy = opts.anisotropy ?? 16
   t.generateMipmaps = opts.mips ?? true
   t.minFilter = t.generateMipmaps ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter
   t.magFilter = THREE.LinearFilter

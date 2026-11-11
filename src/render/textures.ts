@@ -265,7 +265,7 @@ export function canvasTexture(w: number, h: number, draw: (ctx: CanvasRenderingC
   draw(ctx)
   const t = new THREE.CanvasTexture(c)
   t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace
-  t.anisotropy = 8
+  t.anisotropy = 16
   t.generateMipmaps = true
   t.minFilter = THREE.LinearMipmapLinearFilter
   return t

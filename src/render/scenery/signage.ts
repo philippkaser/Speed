@@ -327,7 +327,7 @@ export function signAtlas() {
       ctx.restore()
     }
   })
-  atlas.anisotropy = 8
+  atlas.anisotropy = 16
   return atlas
 }
 
