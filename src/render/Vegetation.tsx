@@ -48,6 +48,7 @@ import {
   varying,
   vec2,
   vec3,
+  normalize,
   vec4,
 } from 'three/tsl'
 import { motionTime } from './motionHistory'
@@ -493,6 +494,8 @@ interface VegMaterialOpts {
    * are shaded only to be discarded (the grass cards overlap the near grass)
    */
   collapse?: boolean
+  /** grass: bend the shading normal towards the ground's up (0..1) */
+  upNormal?: number
   /** cards: grow wider with distance (0..1 over the fade-out range) as they thin out, keeping cover */
   widen?: number
 }
@@ -526,6 +529,12 @@ function vegMaterial(o: VegMaterialOpts) {
   m.metalnessNode = float(0)
   // card canopies: the baked, crown-shaped normals on both faces (no flipping on the back face)
   m.normalNode = normalViewGeometry
+  if (o.upNormal) {
+    // short grass is lit like the ground it covers: the blades' normals mostly the ground's up (a
+    // photographed lawn's albedo already holds the blades' own shading)
+    const up = cameraViewMatrix.mul(vec4(0, 1, 0, 0)).xyz
+    m.normalNode = normalize(mix(normalViewGeometry, up, o.upNormal))
+  }
   if (o.crown > 0) {
     // ambient occlusion inside the crown: darker towards the trunk and the bottom of the canopy
     const radial = vertexPos().xz.length().div(o.crown).clamp(0, 1)
@@ -981,7 +990,8 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
         roughTrunk: 0.85,
         roughLeaf: 0.85,
         crown: 0,
-        canopy: { root: 0.6, selfShadow: 0.55 },
+        canopy: { root: 0.78, selfShadow: 0.75 },
+        upNormal: 0.75,
         collapse: true,
       }
       const opts = { instances: g, height: 0.6, castShadow: false, shadowMargin: 0, probeRange: 0 }

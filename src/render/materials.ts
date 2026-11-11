@@ -95,7 +95,7 @@ export function bumpView(height: N, n: N = normalView): N {
 /** Summer verge: the scan's straw shifted towards green. */
 const greenGrass = (c: N) => {
   const lum = c.dot(LUM)
-  return mix(c, vec3(lum.mul(0.66), lum.mul(1.2), lum.mul(0.4)), 0.7).mul(0.9)
+  return mix(c, vec3(lum.mul(0.68), lum.mul(1.14), lum.mul(0.42)), 0.7).mul(0.78)
 }
 
 /**
@@ -205,7 +205,15 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
   const macro = mx_noise_float(vec3(pw.x.mul(0.018), 0, pw.z.mul(0.018))).mul(0.5).add(0.5)
   const macro2 = mx_noise_float(vec3(pw.x.mul(0.11), 1.7, pw.z.mul(0.11))).mul(0.5).add(0.5)
   let albedo: N = asphalt.col.mul(mix(float(0.8), float(1.18), macro)).mul(mix(float(0.93), float(1.07), macro2))
-  let rough: N = asphalt.rough.mul(mix(float(0.88), float(1.0), macro2))
+  // race tarmac is a little smoother than the scan's road (0.83): the sun's sheen at grazing angles
+  let rough: N = asphalt.rough.mul(mix(float(0.82), float(0.94), macro2))
+
+  // resurfacing sections along the lap (120-260 m): newer, blacker binder or older, greyer, warmer tarmac
+  const secLen = 190
+  const sec = floor(s.div(secLen).add(mx_noise_float(vec3(d.mul(0.05), 4.4, 0)).mul(0.03)))
+  const secTone = mx_cell_noise_float(vec3(sec, 9.1, 2.7))
+  albedo = albedo.mul(mix(vec3(0.86, 0.86, 0.88), vec3(1.12, 1.09, 1.04), secTone))
+  rough = rough.mul(mix(float(0.95), float(1.04), secTone))
 
   // paving strips (three across the width), each its own tone, cold joints between them
   const laneW = hw.mul(2 / 3)
@@ -252,7 +260,8 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
     : exp(d.sub(racing).div(1.25).pow(2).negate())
   const rubberNoise = mx_noise_float(vec3(s.mul(0.08), d.mul(0.6), 3.1)).mul(0.25).add(0.75)
   albedo = albedo.mul(mix(float(1), float(0.5), rl.mul(rubberNoise)))
-  rough = mix(rough, rough.mul(0.8), rl)
+  // rubber polishes the aggregate: the line is the glossiest part of the road (~0.5)
+  rough = mix(rough, rough.mul(0.64), rl)
 
   // skid marks: pairs of tyre tracks either side of the racing line, wandering, in fragments, where
   // the cars brake hard and spin their wheels out of slow corners
@@ -281,17 +290,29 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
   // grazing angles and read as light lines)
   rough = mix(rough, rough.mul(0.92), seal)
 
-  // white edge lines (0.25 m wide, 0.1 m inside the asphalt edge), slightly worn paint
-  const fromEdge = hw.sub(abs(d))
-  const paintLine = band(fromEdge, 0.08, 0.33)
+  // white edge lines: 13.5 cm, 0.1 m inside the asphalt edge, hand-laid (the edges wander a few
+  // millimetres and are soft), the paint worn through in patches and in fine scuffs, the aggregate
+  // showing through it, grubby with tyre rubber
+  const fromEdge = hw.sub(abs(d)).add(mx_noise_float(vec3(s.mul(0.7), 3.3, 0)).mul(0.008))
+  const pfw = fwidth(fromEdge).mul(1.2).add(0.006)
+  const paintLine = smoothstep(float(0.1).sub(pfw), float(0.1).add(pfw), fromEdge).mul(float(1).sub(smoothstep(float(0.235).sub(pfw), float(0.235).add(pfw), fromEdge)))
   const wear = smoothstep(0.25, 0.65, mx_noise_float(vec3(s.mul(0.9), d.mul(4.0), 0.2)).mul(0.5).add(0.5)).mul(0.3)
-  const paint = paintLine.mul(float(1).sub(wear))
-  albedo = mix(albedo, vec3(0.7, 0.7, 0.68), paint)
+  const scuffFade = float(1).sub(smoothstep(0.01, 0.05, fwidth(s)))
+  const scuff = smoothstep(0.35, 0.75, mx_noise_float(vec3(s.mul(6), d.mul(14), 1.9))).mul(0.45).mul(scuffFade)
+  const paint = paintLine.mul(float(1).sub(wear)).mul(float(1).sub(scuff))
+  const grain = clamp(asphalt.col.dot(LUM).div(0.05), 0.6, 1.4)
+  const grime = mx_noise_float(vec3(s.mul(0.05), 7.7, 0)).mul(0.5).add(0.5)
+  albedo = mix(albedo, vec3(0.64, 0.64, 0.62).mul(mix(float(0.88), float(1.06), grain)).mul(mix(float(0.86), float(1), grime)), paint)
   rough = mix(rough, float(0.6), paint)
+  // specular anti-aliasing: where a pixel covers many stones, the normal detail it averages away
+  // becomes roughness (no sparkle in the distance, a broad sheen instead)
+  const uvm = uv().mul(4)
+  const foot = fwidth(uvm.x).add(fwidth(uvm.y))
+  rough = rough.mul(rough).add(smoothstep(0.004, 0.06, foot).mul(0.06)).sqrt()
   m.colorNode = albedo
   m.roughnessNode = clamp(rough, 0.28, 1)
   m.metalnessNode = float(0)
-  m.normalNode = normalMap(normalFromXY(asphalt.nxy), vec2(mix(float(1.15), float(0.3), paint)))
+  m.normalNode = normalMap(normalFromXY(asphalt.nxy), vec2(mix(float(1.15), float(0.4), paint).mul(mix(float(1), float(0.6), smoothstep(0.004, 0.06, foot)))))
   return m
 }
 
@@ -378,19 +399,19 @@ export function vergeMaterial() {
   // them carries the same tone, Vegetation.tsx placeGrass)
   const stripe = smoothstep(-0.3, 0.3, sin(behind.mul(Math.PI / 2.5)))
   const inside = float(1).sub(smoothstep(-0.5, 0.5, behind))
-  let col: N = grass.color.mul(mix(float(1), mix(float(0.88), float(1.12), stripe), inside))
+  let col: N = grass.color.mul(mix(float(1), mix(float(0.84), float(1.16), stripe), inside))
   // longer, darker grass behind the barrier
   col = mix(col, col.mul(vec3(0.82, 0.88, 0.8)), smoothstep(0, 3, behind))
   // the worn margin next to the track: a ragged strip of bare, dusty soil (cars cutting the edge,
   // the mower's wheel), then thin, dry grass before the sward closes up
   const fromIn = tr.w
   const rag = mx_noise_float(vec3(pw.x.mul(1.1), 8.1, pw.z.mul(1.1)))
-    .mul(0.16)
-    .add(mx_noise_float(vec3(pw.x.mul(4.7), 2.2, pw.z.mul(4.7))).mul(0.07))
+    .mul(0.3)
+    .add(mx_noise_float(vec3(pw.x.mul(4.7), 2.2, pw.z.mul(4.7))).mul(0.08))
   const e = fromIn.add(rag)
-  const bare = float(1).sub(smoothstep(0.1, 0.38, e)).mul(float(1).sub(w))
-  const thin = float(1).sub(smoothstep(0.25, 1.2, e)).mul(float(1).sub(w))
-  const soil = mix(gtex.rgb.mul(0.75), vec3(0.11, 0.09, 0.065), 0.55).mul(mix(float(0.85), float(1.1), rag.mul(3).add(0.5).clamp(0, 1)))
+  const bare = float(1).sub(smoothstep(0.02, 0.22, e)).mul(float(1).sub(w))
+  const thin = float(1).sub(smoothstep(0.1, 1.0, e)).mul(float(1).sub(w))
+  const soil = mix(gtex.rgb.mul(0.55), vec3(0.085, 0.068, 0.05), 0.6).mul(mix(float(0.85), float(1.1), rag.mul(3).add(0.5).clamp(0, 1)))
   col = mix(col, mix(col.mul(vec3(1.1, 0.98, 0.72)), soil, 0.25), thin.mul(0.8))
   col = mix(col, soil, bare)
   m.colorNode = mix(col, gtex.rgb, w)
@@ -417,10 +438,10 @@ function turfDetail(xz: N) {
   const fw = fwidth(xz.x).add(fwidth(xz.y))
   const c1 = mx_noise_float(vec3(xz.x.mul(2.1), 1.3, xz.y.mul(2.1)))
   const c2 = mx_noise_float(vec3(xz.x.mul(6.5), 2.9, xz.y.mul(6.5)))
-  const a1 = float(1).sub(smoothstep(0.15, 0.6, fw))
-  const a2 = float(1).sub(smoothstep(0.05, 0.2, fw))
-  const k = float(1).add(c1.mul(0.2).mul(a1)).add(c2.mul(0.14).mul(a2))
-  return { tone: dryTone(xz).mul(k), relief: c1.mul(0.012).mul(a1).add(c2.mul(0.004).mul(a2)) }
+  const a1 = float(1).sub(smoothstep(0.3, 1.2, fw))
+  const a2 = float(1).sub(smoothstep(0.08, 0.35, fw))
+  const k = float(1).add(c1.mul(0.3).mul(a1)).add(c2.mul(0.22).mul(a2))
+  return { tone: dryTone(xz).mul(k), relief: c1.mul(0.02).mul(a1).add(c2.mul(0.006).mul(a2)) }
 }
 
 /**
