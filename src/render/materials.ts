@@ -212,7 +212,7 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
   const secLen = 190
   const sec = floor(s.div(secLen).add(mx_noise_float(vec3(d.mul(0.05), 4.4, 0)).mul(0.03)))
   const secTone = mx_cell_noise_float(vec3(sec, 9.1, 2.7))
-  albedo = albedo.mul(mix(vec3(0.86, 0.86, 0.88), vec3(1.12, 1.09, 1.04), secTone))
+  albedo = albedo.mul(mix(vec3(0.92, 0.92, 0.94), vec3(1.08, 1.065, 1.03), secTone))
   rough = rough.mul(mix(float(0.95), float(1.04), secTone))
 
   // paving strips (three across the width), each its own tone, cold joints between them

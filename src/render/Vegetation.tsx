@@ -984,8 +984,8 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
         wind: { sway: 0.05, flutter: 0.008, speed: 1.6 },
         alphaTest: 0.4,
         // the stripe's tone (iB.z): as the ground's 0.88 / 1.12
-        tintA: new THREE.Color(0.86, 0.88, 0.86),
-        tintB: new THREE.Color(1.1, 1.12, 1.08),
+        tintA: new THREE.Color(0.76, 0.78, 0.74),
+        tintB: new THREE.Color(0.98, 1.0, 0.94),
         groundColour: grassGroundColour,
         roughTrunk: 0.85,
         roughLeaf: 0.85,
