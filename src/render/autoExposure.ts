@@ -33,6 +33,9 @@ export const AE = {
   /** share of the metered difference the exposure follows (a camera exposing for the cockpit blows
    *  out the windscreen; facing the sun it stops down without turning day to dusk) */
   strength: 0.8,
+  /** the same when the scene meters darker than the key (opening up): a frame filled with asphalt and
+   *  tyres, or a cockpit, must not lift the sunlit car and sky into the shoulder */
+  openStrength: 0.5,
   /** range of the auto exposure around the base exposure, in stops */
   minEv: -2,
   maxEv: 2,
@@ -101,7 +104,10 @@ const SETTLE = 6
 export const ae = { ev: 0, target: 0, measured: NaN, ready: false, pending: false, frame: 0, settle: 0, settleFrom: 0 }
 
 /** Target exposure in stops for a metered log2 luminance. */
-export const targetEv = (measured: number) => Math.max(AE.minEv, Math.min(AE.maxEv, (Math.log2(AE.key) - measured) * AE.strength))
+export const targetEv = (measured: number) => {
+  const d = Math.log2(AE.key) - measured
+  return Math.max(AE.minEv, Math.min(AE.maxEv, d * (d > 0 ? AE.openStrength : AE.strength)))
+}
 
 /**
  * One frame of auto exposure (after the frame is rendered): reads the meter every few frames and moves

@@ -30,10 +30,14 @@ type N = any
 const { Fn, float, hash, max, min, mix, pow, screenCoordinate, step, uint, uniform, vec3 } = tsl as N
 
 /** Tone curve: contrast, shoulder sharpness, and its anchor (exposed value -> display-linear value). */
-// Contrast 1.85 (was 1.62): a photographic print's mid-tone gamma. A hard shadow on asphalt (2.5 stops
-// under the sunlit asphalt that anchors the key) lands ~4.5 stops below it on the display, near black,
-// so the sun carries the picture; the anchor itself is unchanged (materials were tuned against it).
-export const CURVE = { contrast: 1.85, shoulder: 1.25, keyIn: 0.13, keyOut: 0.11 }
+// Contrast 1.95: a photographic print's mid-tone gamma. A hard shadow on asphalt (2.5 stops under the
+// sunlit asphalt that anchors the key) lands ~4.4 stops below it on the display, near black, so the
+// sun carries the picture; the anchor itself is unchanged (materials were tuned against it).
+// Shoulder 0.7 (was 1.25): a long, soft roll-off. Sunlit paint (0.8 exposed) lands at 0.68 of display
+// white and a sunlit white panel (1.2) at 0.79 instead of 0.85 and 0.94, so a bright car keeps its
+// colour and its shading and the sky's reflection and the glints in the clear coat have somewhere to
+// go; white is reached only several stops up (4 -> 0.95, 64 -> 0.999).
+export const CURVE = { contrast: 1.95, shoulder: 0.7, keyIn: 0.13, keyOut: 0.11 }
 /** Saturation of the picture (1 = as the inset gamut renders it), applied to the scene-linear colour. */
 export const SATURATION = 1.12
 

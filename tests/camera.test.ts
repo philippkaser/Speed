@@ -25,11 +25,16 @@ test('tone curve: anchored, monotonic, smooth, deep blacks and a soft shoulder i
   // shadows: four stops under the key are near black; highlights: clouds keep detail, the sun is white
   expect(toneCurve(CURVE.keyIn / 16)).toBeLessThan(0.01)
   expect(toneCurve(1.5)).toBeLessThan(0.97)
-  expect(toneCurve(64)).toBeGreaterThan(0.999)
+  expect(toneCurve(64)).toBeGreaterThan(0.998)
+  // headroom: sunlit paint and a sunlit white panel stay well under display white, so a bright car
+  // keeps its colour and shading and the reflections in its clear coat show against it
+  expect(toneCurve(0.8)).toBeLessThan(0.72)
+  expect(toneCurve(1.2)).toBeLessThan(0.82)
+  expect(toneCurve(4)).toBeGreaterThan(0.93)
   // contrast: a hard shadow on asphalt (2.5 stops under sunlit asphalt, the key) is at least 4.4 stops
-  // darker on the display, and a stop above the key opens up by at least 1.55 stops
+  // darker on the display, and a stop above the key still opens up (by at least 1.3 stops)
   expect(Math.log2(CURVE.keyOut / toneCurve(CURVE.keyIn / 2 ** 2.5))).toBeGreaterThan(4.4)
-  expect(Math.log2(toneCurve(CURVE.keyIn * 2) / CURVE.keyOut)).toBeGreaterThan(1.55)
+  expect(Math.log2(toneCurve(CURVE.keyIn * 2) / CURVE.keyOut)).toBeGreaterThan(1.3)
 })
 
 test('picture: greys stay neutral, bright colours keep their hue on the way to white', () => {
@@ -105,8 +110,10 @@ test('HDR tone curve: the SDR curve at P = 1, the same mid-tones, highlights up 
   for (const P of [2, 4.9, 10]) {
     // the key (sunlit asphalt) lands exactly where SDR puts it
     expect(toneCurveHDR(CURVE.keyIn, P)).toBeCloseTo(CURVE.keyOut, 8)
-    // shadows within 15% of SDR, the shoulder opens up, never beyond the peak, monotonic
-    expect(Math.abs(toneCurveHDR(0.01, P) / toneCurve(0.01) - 1)).toBeLessThan(0.15)
+    // shadows within a third of a stop of SDR (the soft SDR shoulder already bends the curve at the
+    // key, the HDR one does not, so with the key held the toe sits a little lower), the shoulder
+    // opens up, never beyond the peak, monotonic
+    expect(Math.abs(toneCurveHDR(0.01, P) / toneCurve(0.01) - 1)).toBeLessThan(0.26)
     expect(toneCurveHDR(8, P)).toBeGreaterThan(toneCurve(8) * 1.2)
     let prev = 0
     for (let x = 1e-4; x < 1e4; x *= 1.2) {
