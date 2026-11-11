@@ -112,7 +112,9 @@ test('record a race, play it back exactly, resume the live session untouched', (
     spinA = a.wheels[2].spin
   pl.seek(t0 + 0.5 / REPLAY_HZ)
   expect(Math.hypot(a.pos.x - pa[0], a.pos.y - pa[1], a.pos.z - pa[2])).toBeGreaterThan(0.05)
-  expect(Math.abs(a.wheels[2].spin - spinA - (a.wheels[2].omega * 0.5) / REPLAY_HZ)).toBeLessThan(0.05)
+  // spin is a periodic angle (recorded wrapped to +-pi): compare modulo 2 pi
+  const dSpin = a.wheels[2].spin - spinA - (a.wheels[2].omega * 0.5) / REPLAY_HZ
+  expect(Math.abs(Math.atan2(Math.sin(dSpin), Math.cos(dSpin)))).toBeLessThan(0.05)
   // playback at 4x: the clock runs four times as fast, the blur's wheel speed with it; physics stands still
   pl.seek(t0)
   pl.speed = 4

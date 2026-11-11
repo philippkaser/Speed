@@ -115,6 +115,7 @@ export class Wheel {
   brakeTemp = 120
   brakeTorque = 0
   driveTorque = 0
+  rollTorque = 0 // rolling resistance, N m (Coulomb, acts in the brake constraint)
   springForce = 0
   lean = 0
   // world-space outputs (for rendering / effects)
@@ -172,6 +173,10 @@ export class Vehicle {
   // rigid body (sprung mass)
   mass = 1000
   invMass = 0.001
+  /** unsprung mass (kg): it moves with the body horizontally, only its vertical travel is free */
+  unsprungTotal = 0
+  /** inverse mass for motion perpendicular to the body's up axis (sprung + unsprung) */
+  invMassH = 0.001
   inertia = new V3(1, 1, 1) // body-frame principal (x pitch, y yaw, z roll)
   pos = new V3()
   vel = new V3()
@@ -253,9 +258,16 @@ export class Vehicle {
     const unsprung = 2 * (sp.suspFront.unsprungMass + sp.suspRear.unsprungMass)
     this.mass = sp.mass + this.setup.ballast + this.fuel - unsprung
     this.invMass = 1 / this.mass
+    this.unsprungTotal = unsprung
+    // the wheels, uprights and brakes ride along horizontally: the body carries their mass in
+    // every direction except along its own up axis, where each corner has its own travel
+    this.invMassH = 1 / (this.mass + unsprung)
     const m = this.mass
-    const iyaw = m * this.a * this.b * 0.92 * sp.inertiaScale[1]
-    this.inertia.set(iyaw * 0.94 * sp.inertiaScale[0], iyaw, (m * ((sp.width * 0.8) ** 2 + (sp.height * 0.7) ** 2)) / 12 * sp.inertiaScale[2])
+    const iyaw0 = m * this.a * this.b * 0.92
+    // yaw: the corners are rigid in yaw, so the whole car's inertia (dynamic index ~0.92 on the
+    // total mass); pitch and roll: sprung mass only (the corners have their own vertical travel)
+    const iyaw = (m + unsprung) * this.a * this.b * 0.92 * sp.inertiaScale[1]
+    this.inertia.set(iyaw0 * 0.94 * sp.inertiaScale[0], iyaw, (m * ((sp.width * 0.8) ** 2 + (sp.height * 0.7) ** 2)) / 12 * sp.inertiaScale[2])
   }
 
   /** Total mass including unsprung parts, ballast and fuel (kg). */
@@ -497,6 +509,13 @@ export class Vehicle {
     const up = this.up
     const fwd = this.fwd
     this.F.set(0, -GRAVITY * this.mass, 0)
+    // the unsprung weight across the strut axis is carried by the links into the body
+    // (along the axis it acts on each corner's own travel)
+    {
+      const gu = -GRAVITY * this.unsprungTotal
+      this.F.y += gu
+      this.F.addScaled(up, -gu * up.y)
+    }
     this.T.set(0, 0, 0)
     this.rand = (this.rand * 16807) % 2147483647
     const rnd = this.rand / 2147483647
@@ -663,7 +682,7 @@ export class Vehicle {
     this.solveDrivetrain(h, engThrottle, engage, rnd)
 
     // ---------------------------------------------------------------- integrate body
-    this.vel.addScaled(this.F, this.invMass * h)
+    this.addLinear(this.F, h)
     // angular: w += I_world^-1 * T * h  (computed in body frame)
     const Tb = this.R.applyT(this.T, _t2)
     const wb = this.R.applyT(this.w, _t3)
@@ -906,9 +925,17 @@ export class Vehicle {
     return out
   }
 
+  /** vel += J * s / m, with the sprung mass along up and the whole car's mass across it */
+  private addLinear(J: V3, s: number) {
+    const up = this.up
+    const ju = (J.x * up.x + J.y * up.y + J.z * up.z) * (this.invMass - this.invMassH) * s
+    this.vel.addScaled(J, this.invMassH * s)
+    this.vel.addScaled(up, ju)
+  }
+
   /** Apply an impulse J (world) at body point r (relative to CoG, world). */
   applyImpulse(r: V3, J: V3) {
-    this.vel.addScaled(J, this.invMass)
+    this.addLinear(J, 1)
     const t = _tq.crossVectors(r, J)
     const tb = this.R.applyT(t, _t2)
     tb.x /= this.inertia.x
@@ -923,7 +950,8 @@ export class Vehicle {
     const rxn = _t1.crossVectors(r, n)
     const b = this.R.applyT(rxn, _t2)
     const I = this.inertia
-    return this.invMass + (b.x * b.x) / I.x + (b.y * b.y) / I.y + (b.z * b.z) / I.z
+    const nu = n.x * this.up.x + n.y * this.up.y + n.z * this.up.z
+    return this.invMassH + (this.invMass - this.invMassH) * nu * nu + (b.x * b.x) / I.x + (b.y * b.y) / I.y + (b.z * b.z) / I.z
   }
 
   private wheelForces(wh: Wheel, h: number, ground: Ground, brake: number, handbrake: number) {
@@ -1112,11 +1140,16 @@ export class Vehicle {
       // self-aligning moment reacts through the upright into the chassis
       this.T.addScaled(_n, tyre.Mz)
       if (wh.front) this.rackTorque += tyre.Mz - kin.mechTrail * tyre.Fy
-      const rr = (wh.model.compound.rollingRes + surf.rolling) * Fz * Re * Math.tanh(wh.omega * 2)
-      wh.driveTorque = -tyre.Fx * Re - rr
+      // rolling resistance is a dissipative (Coulomb) torque: solved with the brakes, so it
+      // stops a free-rolling wheel instead of letting it creep under a tiny residual force
+      wh.rollTorque = (wh.model.compound.rollingRes + surf.rolling) * Fz * Re
+      wh.driveTorque = -tyre.Fx * Re
       // the rubber that leaves the tyre stays on the track
       if (s.surface === Surface.Asphalt && ground.layRubber) ground.layRubber(s, h * (0.0004 + tyre.slipPower * 3e-8))
-    } else wh.driveTorque = 0
+    } else {
+      wh.driveTorque = 0
+      wh.rollTorque = 0
+    }
 
     // ------------------------------------------------------------ suspension
     let Fs = wh.k * wh.c
@@ -1196,7 +1229,7 @@ export class Vehicle {
       // brakes: drive omega towards 0 within brake torque
       for (let i = 0; i < 4; i++) {
         const wh = W[i]
-        const cap = wh.brakeTorque * h
+        const cap = (wh.brakeTorque + wh.rollTorque) * h
         if (cap <= 0) continue
         let lam = -wh.omega * wh.inertia
         const old = jBrake[i]

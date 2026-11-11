@@ -56,7 +56,9 @@ const _p = new V3(),
   _t = new V3(),
   _J = new V3(),
   _a = new V3(),
-  _b = new V3()
+  _b = new V3(),
+  _va = new V3(),
+  _vb = new V3()
 
 export class PhysicsWorld {
   cars: SimCar[] = []
@@ -233,13 +235,23 @@ export class PhysicsWorld {
     // separate
     a.pos.addScaled(_n, -res.depth * 0.5)
     b.pos.addScaled(_n, res.depth * 0.5)
-    const va = a.pointVelocity(_a, new V3())
-    const vb = b.pointVelocity(_b, new V3())
-    const vrel = vb.sub(va).dot(_n)
+    const va = a.pointVelocity(_a, _va)
+    const vb = b.pointVelocity(_b, _vb)
+    _v.copy(vb).sub(va)
+    const vrel = _v.dot(_n)
     if (vrel >= 0) return
     const k = a.invMassAt(_a, _n) + b.invMassAt(_b, _n)
-    const jn = (-(1 + 0.25) * vrel) / k
+    const jn = (-(1 + (vrel < -1 ? 0.25 : 0)) * vrel) / k
     _J.copy(_n).scale(jn)
+    // body-on-body friction (painted carbon / plastic, mu ~0.3): side-by-side contact drags
+    _t.copy(_v).addScaled(_n, -vrel)
+    _t.y = 0
+    const vt = _t.len()
+    if (vt > 1e-4) {
+      _t.scale(1 / vt)
+      const kt = a.invMassAt(_a, _t) + b.invMassAt(_b, _t)
+      _J.addScaled(_t, -Math.min(vt / kt, 0.3 * jn))
+    }
     b.applyImpulse(_b, _J)
     _J.scale(-1)
     a.applyImpulse(_a, _J)
@@ -259,7 +271,7 @@ export class PhysicsWorld {
     _n.set(res.nx, 0, res.nz)
     _a.set(res.px - a.pos.x, 0, res.pz - a.pos.z)
     a.pos.addScaled(_n, -res.depth * 0.6)
-    const va = a.pointVelocity(_a, new V3())
+    const va = a.pointVelocity(_a, _va)
     const vrel = _v.copy(k.vel).sub(va).dot(_n)
     if (vrel >= 0) return
     const jn = (-(1 + 0.2) * vrel) / a.invMassAt(_a, _n) * 0.5
@@ -316,18 +328,14 @@ export function obbOverlap(
   l = Math.hypot(bfx, bfz) || 1
   bfx /= l
   bfz /= l
-  const axes = [
-    [afx, afz],
-    [afz, -afx],
-    [bfx, bfz],
-    [bfz, -bfx],
-  ]
   const dx = bx - ax,
     dz = bz - az
   let minPen = Infinity,
     mnx = 0,
     mnz = 0
-  for (const [x, z] of axes) {
+  for (let k = 0; k < 4; k++) {
+    const x = k === 0 ? afx : k === 1 ? afz : k === 2 ? bfx : bfz
+    const z = k === 0 ? afz : k === 1 ? -afx : k === 2 ? bfz : -bfx
     const ra = ahl * Math.abs(afx * x + afz * z) + ahw * Math.abs(afz * x - afx * z)
     const rb = bhl * Math.abs(bfx * x + bfz * z) + bhw * Math.abs(bfz * x - bfx * z)
     const dist = dx * x + dz * z
@@ -340,21 +348,41 @@ export function obbOverlap(
       mnz = z * s
     }
   }
-  // contact point: deepest corner of B inside A, else of A inside B
-  let bestD = -Infinity,
-    px = (ax + bx) / 2,
-    pz = (az + bz) / 2
-  for (const sl of [-1, 1])
-    for (const sw of [-1, 1]) {
-      const cx = bx + bfx * bhl * sl + bfz * bhw * sw
-      const cz = bz + bfz * bhl * sl - bfx * bhw * sw
-      const d = -((cx - ax) * mnx + (cz - az) * mnz)
-      if (d > bestD) {
-        bestD = d
-        px = cx
-        pz = cz
-      }
+  // contact point: centroid of the corners of each box that lie inside the other (the middle of
+  // the contact patch). A single deepest corner puts a square rear-end tap half a car width off
+  // centre and spins both cars.
+  let sx = 0,
+    sz = 0,
+    cnt = 0
+  for (let k = 0; k < 8; k++) {
+    const onB = k < 4
+    const sl = k & 1 ? 1 : -1,
+      sw = k & 2 ? 1 : -1
+    const ox = onB ? bx : ax,
+      oz = onB ? bz : az,
+      fx = onB ? bfx : afx,
+      fz = onB ? bfz : afz,
+      hl = onB ? bhl : ahl,
+      hw = onB ? bhw : ahw
+    const cx = ox + fx * hl * sl + fz * hw * sw
+    const cz = oz + fz * hl * sl - fx * hw * sw
+    // inside the other box (2 cm tolerance)?
+    const tx = onB ? ax : bx,
+      tz = onB ? az : bz,
+      gx = onB ? afx : bfx,
+      gz = onB ? afz : bfz,
+      gl = (onB ? ahl : bhl) + 0.02,
+      gw = (onB ? ahw : bhw) + 0.02
+    const rx = cx - tx,
+      rz = cz - tz
+    if (Math.abs(rx * gx + rz * gz) <= gl && Math.abs(rx * gz - rz * gx) <= gw) {
+      sx += cx
+      sz += cz
+      cnt++
     }
+  }
+  const px = cnt > 0 ? sx / cnt : (ax + bx) / 2,
+    pz = cnt > 0 ? sz / cnt : (az + bz) / 2
   _res.nx = mnx
   _res.nz = mnz
   _res.depth = minPen
