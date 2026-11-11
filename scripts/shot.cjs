@@ -101,6 +101,8 @@ const save = (file, url) => fs.writeFileSync(file, Buffer.from(url.split(',')[1]
           window.__camPose = { pos: p.split(',').map(Number), look: l.split(',').map(Number), ...(f ? { fov: Number(f) } : {}) }
         }, step.pose)
       }
+      // (steps: "size": "WxH" resizes the viewport for this step and the ones after it)
+      if (step.size) { const [w, h] = step.size.split('x').map(Number); await page.setViewportSize({ width: w, height: h }) }
       if (step.eval) await page.evaluate(step.eval)
       const start = await page.evaluate(() => window.__frames)
       const tSettle = Date.now()

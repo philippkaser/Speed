@@ -243,7 +243,7 @@ export const CARS: CarSpec[] = [
       ballast: 0,
     },
     bodyStyle: 'gt3',
-    defaultColor: '#c8102e',
+    defaultColor: '#c8160c',
   },
   {
     id: 'aurel-gt',

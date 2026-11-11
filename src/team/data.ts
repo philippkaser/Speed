@@ -50,7 +50,7 @@ export const RIVAL_TEAMS: Team[] = [
     model: 'ferrari-296-gt3',
     name: 'Ferro Corse',
     short: 'FER',
-    color: '#a30d16',
+    color: '#a8140c',
     accent: '#f4c430',
     box: 1,
     drivers: [d('ricci', 'Matteo', 'Ricci', 'RIC', 11, 'ITA', 0.95, 0.7, 0.45, 0.9), d('bianchi', 'Lucia', 'Bianchi', 'BIA', 12, 'ITA', 0.82, 0.8, 0.7, 0.75)],
@@ -100,7 +100,7 @@ export function defaultPlayerTeam(): Team {
   }
 }
 
-export const TEAM_PAINTS = ['#111316', '#f2f2ef', '#c8102e', '#ff6f00', '#f5b800', '#c6ff00', '#2e7d32', '#00838f', '#00bcd4', '#0d47a1', '#1d3b6e', '#6a1b9a', '#c51162', '#9ea3a8', '#b08d57']
+export const TEAM_PAINTS = ['#111316', '#f2f2ef', '#c8160c', '#ff6f00', '#f5b800', '#c6ff00', '#2e7d32', '#00838f', '#00bcd4', '#0d47a1', '#1d3b6e', '#6a1b9a', '#c51162', '#9ea3a8', '#b08d57']
 
 export interface Round {
   name: string

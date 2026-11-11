@@ -7,7 +7,7 @@ import { Btn, Segmented, Slider } from '../components'
 import { BottomBar, carStats, TopBar } from './Home'
 import { GLTF_CARS } from '../../car/gltfCars'
 
-const PAINTS = ['#c8102e', '#e4002b', '#ff6f00', '#f5b800', '#2e7d32', '#00838f', '#0d47a1', '#1d3b6e', '#6a1b9a', '#f2f2f0', '#9ea3a8', '#3c4045', '#0a0a0c', '#b08d57', '#00bcd4', '#c51162']
+const PAINTS = ['#c8160c', '#e4002b', '#ff6f00', '#f5b800', '#2e7d32', '#00838f', '#0d47a1', '#1d3b6e', '#6a1b9a', '#f2f2f0', '#9ea3a8', '#3c4045', '#0a0a0c', '#b08d57', '#00bcd4', '#c51162']
 
 export function Garage() {
   const g = useGameStore()

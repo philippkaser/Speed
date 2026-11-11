@@ -14,7 +14,7 @@ import * as THREE from 'three/webgpu'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { abs, attribute, clearcoatNormalView, float, Fn, min, mix, normalView, output, positionViewDirection, pow, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
+import { abs, attribute, BRDF_GGX, clearcoatNormalView, float, Fn, min, mix, normalView, output, positionViewDirection, pow, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
 import { makeMirrorEnv, mirrorRadiance, type MirrorEnv, type MirrorMaterial } from '../render/mirrorEnv'
 import { HERO_LAYER } from '../render/sunShadow'
 import type { CarSpec } from '../physics/spec'
@@ -283,6 +283,11 @@ const hueDist = (h: any, h0: number) => {
  * Car paint: a physical material whose clear coat mirrors the car's cube probe itself, at its full
  * resolution (mirrorEnv.ts), instead of the prefiltered environment.
  */
+/** the sun's angular radius (0.27 deg) as GGX alpha: the sharpest the clear coat's sun glint can be */
+const SUN_ALPHA = 0.0047
+/** how many pixels a curved panel spreads the sun's glint over (its energy kept), so the TAA keeps it */
+const GLINT_PX = 2
+
 class CarPaintMaterial extends THREE.MeshPhysicalNodeMaterial implements MirrorMaterial {
   /** (an own node property: part of the material's shader cache key) */
   mirrorNode: unknown = null
@@ -301,6 +306,26 @@ class CarPaintMaterial extends THREE.MeshPhysicalNodeMaterial implements MirrorM
   setupLightingModel() {
     const model = super.setupLightingModel() as any
     const mirror = this.mirrorNode
+    if (model.clearcoat === true && !this.cover) {
+      // The sun in the clear coat. three's own lobe adds the normal's change across the pixel to the
+      // roughness (r + dn, so alpha = (r + dn)^2 ~ dn^2): on a curved panel the sun's reflection stays
+      // a sub-pixel speck of ~5000 that the temporal AA's tonemapped average turns into a grey smear.
+      // Here alpha^2 = alpha_coat^2 + alpha_sun^2 + (GLINT_PX dn)^2: on flat panels the sun's image at
+      // its true size and brightness (thousands, it blooms), on curved ones the same energy spread over
+      // ~GLINT_PX pixels, enough to survive the TAA as a stable glint instead of popping.
+      const direct = model.direct
+      model.direct = function (data: { lightDirection: any; lightColor: any }, builder: unknown) {
+        this.clearcoat = false
+        direct.call(this, data, builder)
+        this.clearcoat = true
+        const n = clearcoatNormalView as any
+        const dn = n.dFdx().length().max(n.dFdy().length())
+        const a2 = dn.mul(GLINT_PX).pow2().add(SUN_ALPHA * SUN_ALPHA + 0.03 ** 4)
+        const r = a2.sqrt().sqrt() // BRDF_GGX takes r, alpha = r^2
+        const nl = n.dot(data.lightDirection).clamp()
+        this.clearcoatSpecularDirect.addAssign(data.lightColor.mul(nl).mul(BRDF_GGX({ lightDirection: data.lightDirection, f0: vec3(0.04), f90: float(1), roughness: r, normalView: n } as any)))
+      }
+    }
     if (mirror && model.clearcoat === true) {
       // the lighting model adds the clear coat's environment term from `clearcoatRadiance`, which the
       // environment node filled from the PMREM at the clamped roughness: hand it the mirror instead
@@ -377,7 +402,10 @@ function liveryMaterial(src: THREE.MeshPhysicalMaterial, paint: Meta['paint'], p
       .mul(smoothstep(0.5, 0.7, s))
       .mul(smoothstep(0.22, 0.38, v))
     // shading relative to the reference value of each paint (gradients, panel shadows)
-    const shadeA = pow(v.div(paint.baseV).clamp(0.15, 1.25), float(2.2))
+    // (at most the team colour itself: lifting the model's lighter-than-reference base pixels by up to
+    // 1.6x made the red's albedo 0.93, brighter than any real pigment, and the clear coat's 4% mirror
+    // vanished against it)
+    const shadeA = pow(v.div(paint.baseV).clamp(0.15, 1.0), float(2.2))
     const shadeB = pow(v.div(paint.accentV).clamp(0.35, 1.15), float(2.2))
     let col: any = lin.mul(base)
     col = mix(col, (teamA as any).mul(shadeA), baseW)
