@@ -14,7 +14,8 @@ import * as THREE from 'three/webgpu'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { abs, attribute, float, Fn, min, mix, normalViewGeometry, output, positionViewDirection, pow, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
+import { abs, attribute, clearcoatNormalView, float, Fn, min, mix, normalView, output, pow, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
+import { makeMirrorEnv, mirrorRadiance, type MirrorEnv, type MirrorMaterial } from '../render/mirrorEnv'
 import { HERO_LAYER } from '../render/sunShadow'
 import type { CarSpec } from '../physics/spec'
 import type { Vehicle } from '../physics/vehicle'
@@ -265,9 +266,6 @@ export function hasGltfCar(id: GltfCarId | undefined): id is GltfCarId {
 
 // ------------------------------------------------------------------------------------------------ livery
 
-/** clear-coat reflectance over the physical 4% at normal incidence (see liveryMaterial) */
-const CLEARCOAT_BOOST = 2.2
-
 const rgb2hsv = Fn(([c]: [any]) => {
   const K = vec4(0, -1 / 3, 2 / 3, -1)
   const p = mix(vec4(c.b, c.g, K.w, K.z), vec4(c.g, c.b, K.x, K.y), step(c.b, c.g))
@@ -282,46 +280,75 @@ const hueDist = (h: any, h0: number) => {
 }
 
 /**
+ * Car paint: a physical material whose clear coat mirrors the car's cube probe itself, at its full
+ * resolution (mirrorEnv.ts), instead of the prefiltered environment.
+ */
+class CarPaintMaterial extends THREE.MeshPhysicalNodeMaterial implements MirrorMaterial {
+  /** (an own node property: part of the material's shader cache key) */
+  mirrorNode: unknown = null
+  /** ?chromecars: the whole surface is the mirror (what the probe holds, through the same lookup) */
+  chrome = false
+  setMirror(env: MirrorEnv | null) {
+    this.mirrorNode = env ? mirrorRadiance(env, this.chrome ? normalView : clearcoatNormalView) : null
+    if (this.chrome) this.emissiveNode = this.mirrorNode as typeof this.emissiveNode
+    this.needsUpdate = true
+  }
+  setupLightingModel() {
+    const model = super.setupLightingModel() as any
+    const mirror = this.mirrorNode
+    if (mirror && model.clearcoat === true) {
+      // the lighting model adds the clear coat's environment term from `clearcoatRadiance`, which the
+      // environment node filled from the PMREM at the clamped roughness: hand it the mirror instead
+      const indirectSpecular = model.indirectSpecular
+      model.indirectSpecular = function (b: unknown) {
+        const prefiltered = this.clearcoatRadiance
+        this.clearcoatRadiance = mirror
+        indirectSpecular.call(this, b)
+        this.clearcoatRadiance = prefiltered
+      }
+    }
+    return model
+  }
+}
+
+/**
  * Livery recolouring: the model's paint scheme (a navy base with red accents) is remapped to the
  * team's colours by hue, saturation and value, so sponsor logos, numbers and baked shading survive.
  */
-function liveryMaterial(src: THREE.MeshPhysicalMaterial, paint: Meta['paint'], primary: THREE.Color, accent: THREE.Color) {
-  const m = new THREE.MeshPhysicalNodeMaterial()
+function liveryMaterial(src: THREE.MeshPhysicalMaterial, paint: Meta['paint'], primary: THREE.Color, accent: THREE.Color, mirror: MirrorEnv) {
+  const m = new CarPaintMaterial()
+  mirror.materials.push(m)
   m.name = src.name + ':team'
-  for (const k of ['roughness', 'metalness', 'roughnessMap', 'metalnessMap', 'normalMap', 'normalScale', 'clearcoat', 'clearcoatRoughness', 'clearcoatMap', 'clearcoatRoughnessMap', 'clearcoatNormalMap', 'clearcoatNormalScale', 'specularIntensity', 'specularColor', 'specularIntensityMap', 'specularColorMap', 'aoMap', 'aoMapIntensity', 'side', 'envMapIntensity'] as const) {
+  // (the base coat's own maps are not carried over: it has no specular lobe to shape, see below)
+  for (const k of ['clearcoatMap', 'clearcoatRoughnessMap', 'clearcoatNormalMap', 'clearcoatNormalScale', 'aoMap', 'aoMapIntensity', 'side', 'envMapIntensity'] as const) {
     const v = (src as unknown as Record<string, unknown>)[k]
     if (v === undefined) continue
     const cur = (m as unknown as Record<string, unknown>)[k]
     if (cur && typeof (cur as { copy?: unknown }).copy === 'function' && v && typeof v === 'object' && !(v as THREE.Texture).isTexture) (cur as { copy: (x: unknown) => void }).copy(v)
     else (m as unknown as Record<string, unknown>)[k] = v
   }
-  // Race paint: a dielectric base coat (a touch of metallic flake) under a glossy clear coat. The
-  // models came with metallic or barely clear-coated liveries (Ferrari: metalness 0.97, clear coat
-  // 0.04), which read as blurry tinted metal; the clear coat is what makes reflections crisp.
-  m.metalness = 0.12
-  m.roughness = 0.42
+  // Solid race paint, as it is built: a pigmented base coat under a clear coat. The clear coat's
+  // resin and the base coat's binder have nearly the same refractive index, so there is no optical
+  // interface between them and the base coat has no specular lobe of its own: it is a diffuse colour
+  // seen through the clear coat, and all the gloss is the clear coat's mirror reflection (4% head-on,
+  // rising to 100% at grazing angles). A base lobe (it used to be F0 4% + 12% metal at roughness
+  // 0.42) mirrors a 30-degree blur of the sky and a wide white sun highlight over every panel: a
+  // milky veil that hid the clear coat's reflection and washed red out to pink.
+  m.metalness = 0
+  m.roughness = 1
+  m.specularIntensity = 0
   m.clearcoat = 1
   m.clearcoatRoughness = 0.03
-  // the base coat's flake normal map (kept at the source's 4K) turns into grain at a distance: a hint
-  // of it under the smooth clear coat
-  m.normalScale.set(0.12, 0.12)
-  // Clear-coat reflectance: physically 4% head-on (IOR 1.5), which over a bright base coat in full sun
-  // all but hides the mirrored sky and horizon. Real automotive finishes (thick, multi-layer clear coats
-  // over flake) and every racing game read glossier: ~2.2x head-on, easing to the exact Fresnel towards
-  // grazing angles (where the base is also attenuated correctly, so silhouettes never go dark).
-  const nv = normalViewGeometry.dot(positionViewDirection).abs().clamp(0, 1)
-  m.clearcoatNode = mix(float(CLEARCOAT_BOOST), float(1), pow(float(1).sub(nv), 5))
   if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('blackpaint')) {
     // ?blackpaint: gloss black under the same clear coat, to look at the clear coat's reflections alone
     m.colorNode = vec3(0.01, 0.01, 0.01)
     return { material: m, teamA: uniform(primary.clone()), teamB: uniform(accent.clone()) }
   }
   if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('chromecars')) {
-    // ?chromecars: mirror-chrome paint, to look at what the reflection probes hold
-    m.metalness = 1
-    m.roughness = 0.02
+    // ?chromecars: a perfect mirror, to look at what the reflection probes hold and how sharp they are
     m.clearcoat = 0
-    m.colorNode = vec3(0.95, 0.95, 0.95)
+    m.chrome = true
+    m.colorNode = vec3(0, 0, 0)
     return { material: m, teamA: uniform(primary.clone()), teamB: uniform(accent.clone()) }
   }
   const map = src.map
@@ -473,6 +500,9 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
   const accent = new THREE.Color(opts.accent)
   const root = new THREE.Group()
   root.name = 'car:' + id
+  // what the car's mirror lobes reflect (Reflections.tsx points it at the car's probe)
+  const mirror = makeMirrorEnv()
+  root.userData.mirror = mirror
   const bodyGroup = new THREE.Group()
   root.add(bodyGroup)
 
@@ -490,7 +520,7 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
     let out: THREE.Material = mat
     const name = mat.name ?? ''
     if (name === meta.livery && (mat as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial) {
-      livery = liveryMaterial(mat as THREE.MeshPhysicalMaterial, meta.paint, primary, accent)
+      livery = liveryMaterial(mat as THREE.MeshPhysicalMaterial, meta.paint, primary, accent, mirror)
       out = livery.material
     } else if (name === 'lod:opaque' || name === 'lod:glass') {
       out = bakedMaterial(name === 'lod:glass', bakedU)
