@@ -165,7 +165,7 @@ export function buildRunoff(track: Track) {
   return mergeGeoms(geoms)
 }
 
-/** Grass/gravel verge from the end of the paved area out past the barrier. aTrack.x = gravel weight */
+/** Grass/gravel verge from the end of the paved area out past the barrier. aTrack: gravel weight, s, distance past the barrier, distance from the inner edge */
 export function buildVerge(track: Track) {
   const geoms: THREE.BufferGeometry[] = []
   for (const side of [1, -1]) {
@@ -189,7 +189,10 @@ export function buildVerge(track: Track) {
           const gravel = S.outer[i] === Surface.Gravel ? 1 : 0
           const ad = Math.abs(d)
           const inTrap = ad < S.wall[i] - 1.5 ? gravel : 0
-          return [inTrap, i * DS, ad - S.wall[i], 0]
+          // aTrack.w: distance from the verge's inner edge (the worn margin next to the track)
+          const p = Math.max(S.paved[i], 0)
+          const start = track.hw[i] + S.kerb[i] + (p >= 0.4 ? p - 0.05 : -0.02)
+          return [inTrap, i * DS, ad - S.wall[i], ad - start]
         },
         4,
         8,

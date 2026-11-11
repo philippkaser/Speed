@@ -104,7 +104,7 @@ const greenGrass = (c: N) => {
  */
 export function grassGroundColour(xz: N) {
   const t = groundSet('grass').colour
-  return greenGrass(texture(t, xz.div(2.6)).level(float(7)).rgb).mul(lawnTone(xz))
+  return greenGrass(texture(t, xz.div(2.6)).level(float(7)).rgb).mul(lawnTone(xz)).mul(dryTone(xz))
 }
 
 /**
@@ -370,19 +370,57 @@ export function vergeMaterial() {
   const gravelW = tr.x
   // distance past the barrier (negative inside)
   const behind = tr.z
+  const pw = positionWorld
   const grass = grassColor(smoothstep(1, 6, behind).mul(0.6))
   const gtex = texture(tex.gravel.map, uv().mul(8 / 3))
   const w = smoothstep(0.3, 0.7, gravelW)
-  // mowing stripes: 2.5 m bands along the track, alternating light and dark
+  // mowing stripes: 2.5 m bands along the track, alternating light and dark (the 3D grass standing on
+  // them carries the same tone, Vegetation.tsx placeGrass)
   const stripe = smoothstep(-0.3, 0.3, sin(behind.mul(Math.PI / 2.5)))
   const inside = float(1).sub(smoothstep(-0.5, 0.5, behind))
-  let col: N = grass.color.mul(mix(float(1), mix(float(0.9), float(1.1), stripe), inside))
+  let col: N = grass.color.mul(mix(float(1), mix(float(0.88), float(1.12), stripe), inside))
   // longer, darker grass behind the barrier
   col = mix(col, col.mul(vec3(0.82, 0.88, 0.8)), smoothstep(0, 3, behind))
+  // the worn margin next to the track: a ragged strip of bare, dusty soil (cars cutting the edge,
+  // the mower's wheel), then thin, dry grass before the sward closes up
+  const fromIn = tr.w
+  const rag = mx_noise_float(vec3(pw.x.mul(1.1), 8.1, pw.z.mul(1.1)))
+    .mul(0.16)
+    .add(mx_noise_float(vec3(pw.x.mul(4.7), 2.2, pw.z.mul(4.7))).mul(0.07))
+  const e = fromIn.add(rag)
+  const bare = float(1).sub(smoothstep(0.1, 0.38, e)).mul(float(1).sub(w))
+  const thin = float(1).sub(smoothstep(0.25, 1.2, e)).mul(float(1).sub(w))
+  const soil = mix(gtex.rgb.mul(0.75), vec3(0.11, 0.09, 0.065), 0.55).mul(mix(float(0.85), float(1.1), rag.mul(3).add(0.5).clamp(0, 1)))
+  col = mix(col, mix(col.mul(vec3(1.1, 0.98, 0.72)), soil, 0.25), thin.mul(0.8))
+  col = mix(col, soil, bare)
   m.colorNode = mix(col, gtex.rgb, w)
-  m.roughnessNode = mix(grass.rough, float(0.95), w)
-  m.normalNode = normalMap(mix(normalFromXY(grass.nxy), texture(tex.gravel.normal, uv().mul(8 / 3)).rgb, w), vec2(0.8))
+  const wn = max(w, bare.mul(0.7))
+  m.roughnessNode = mix(grass.rough, float(0.95), wn)
+  const n = normalMap(mix(normalFromXY(grass.nxy), texture(tex.gravel.normal, uv().mul(8 / 3)).rgb, wn), vec2(0.8))
+  // the sward's clumps in the lighting too (a centimetre or two of relief), fading with the footprint
+  m.normalNode = bumpView(grass.relief.mul(float(1).sub(wn)), n)
   return m
+}
+
+/** Drier, straw-coloured patches a couple of metres across (shared with the 3D grass standing there). */
+function dryTone(xz: N): N {
+  const dry = smoothstep(0.15, 0.6, mx_noise_float(vec3(xz.x.mul(0.45), 6.2, xz.y.mul(0.45))))
+  return mix(vec3(1), vec3(1.1, 1.03, 0.74), dry.mul(0.6))
+}
+
+/**
+ * Turf detail finer than the scan can hold at a grazing view: clumps (~0.5 m) and tufts (~0.15 m) as
+ * tone and relief, faded out where a pixel covers them (no aliasing), and drier, straw-coloured patches
+ * a couple of metres across.
+ */
+function turfDetail(xz: N) {
+  const fw = fwidth(xz.x).add(fwidth(xz.y))
+  const c1 = mx_noise_float(vec3(xz.x.mul(2.1), 1.3, xz.y.mul(2.1)))
+  const c2 = mx_noise_float(vec3(xz.x.mul(6.5), 2.9, xz.y.mul(6.5)))
+  const a1 = float(1).sub(smoothstep(0.15, 0.6, fw))
+  const a2 = float(1).sub(smoothstep(0.05, 0.2, fw))
+  const k = float(1).add(c1.mul(0.2).mul(a1)).add(c2.mul(0.14).mul(a2))
+  return { tone: dryTone(xz).mul(k), relief: c1.mul(0.012).mul(a1).add(c2.mul(0.004).mul(a2)) }
 }
 
 /**
@@ -392,11 +430,12 @@ export function vergeMaterial() {
 function grassColor(leafy: N = float(0)) {
   const g = scannedGrass(positionWorld.xz, leafy)
   const n = mx_noise_float(vec3(positionWorld.x.mul(0.006), 0.5, positionWorld.z.mul(0.006))).mul(0.5).add(0.5)
-  let col: N = g.col.mul(lawnTone(positionWorld.xz))
+  const t = turfDetail(positionWorld.xz)
+  let col: N = g.col.mul(lawnTone(positionWorld.xz)).mul(t.tone)
   const dist = length(positionWorld.sub(cameraPosition))
   const far = smoothstep(120, 900, dist)
   col = mix(col, col.mul(0.25).add(vec3(0.05, 0.065, 0.026).mul(mix(float(0.85), float(1.15), n))), far.mul(0.6))
-  return { color: col, rough: g.rough, nxy: mix(g.nxy, vec2(0.5, 0.5), far) }
+  return { color: col, rough: g.rough, nxy: mix(g.nxy, vec2(0.5, 0.5), far), relief: t.relief }
 }
 
 export function terrainMaterial() {

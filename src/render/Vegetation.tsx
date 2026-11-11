@@ -9,10 +9,10 @@
 //    with views of the real tree baked at load time (16 directions, colour and normals), lit like the
 //    meshes. The forests are closed canopies in their cores (scenery/forest.ts), standing on a dark
 //    forest floor baked into the terrain from the same function;
-//  - the grass is a sward of patches along the verges in two levels of detail over the same
-//    instances: the modelled patch (clumps of Poly Haven's grass_medium_01, 1800 triangles) within
-//    ~14 m of the camera, packed per instance, and three crossed cards of the clump billboards from
-//    the same atlas (6 triangles) out to ~80 m, dithered into each other; one draw each.
+//  - the grass is a mown sward of short patches along the verges (clumps of Poly Haven's
+//    grass_medium_01, 1800 triangles, scaled to 10-14 cm) within ~12 m of the camera, packed per
+//    instance, shrinking and dithering out into the ground's turf (materials.ts), which carries the
+//    lawn beyond on its own (no far cards: they read as dark hedges along the verge); one draw.
 // Instances live in a grid of cells. Each frame the visible cells are packed into the instance buffer
 // nearest first; only a change in that set uploads anything. The shadow cascades draw the prefix of
 // instances their range needs, and the meshes cross-fade into the impostors with a dither (no pop).
@@ -141,8 +141,9 @@ function placeTrees(track: Track, heights: TerrainHeight, density: number) {
 function placeGrass(track: Track, density: number) {
   const r = rng(track.def.seed * 7 + 3)
   const out: number[] = []
-  // a sward: ~1.8 patches per square metre (the cards draw only part of them, see keep)
-  const step = 0.74 / Math.sqrt(Math.max(density, 0.2))
+  // a mown sward: short patches (10-14 cm) close together; the ground's own turf carries the cover
+  // between and beyond them
+  const step = 0.62 / Math.sqrt(Math.max(density, 0.2))
   const p = { x: 0, y: 0, z: 0 }
   const lane = pitLane(track)
   const L = track.length
@@ -151,89 +152,36 @@ function placeGrass(track: Track, density: number) {
     const i = track.idx(s)
     for (const side of [1, -1]) {
       const S = side > 0 ? track.L : track.R
-      const edge = track.hw[i] + S.kerb[i] + (S.paved[i] >= 0.4 ? S.paved[i] : 0) + 0.25
+      // past the worn soil margin (vergeMaterial): the patch's blades must not spill onto it or the road
+      const edge = track.hw[i] + S.kerb[i] + (S.paved[i] >= 0.4 ? S.paved[i] : 0) + 0.3
       const wall = S.wall[i]
       const gravel = S.outer[i] === Surface.Gravel
       const sw = wrap(s)
       for (let d = edge; d < wall + 9; d += step) {
         const dd = d + (r() - 0.5) * step * 0.9
+        const sc = 1.0 + r() * 0.35
         // the barrier itself, gravel traps, the pit road and lane, the grandstands
         if (Math.abs(dd - wall) < 0.9) continue
         if (gravel && dd < wall - 1.5) continue
-        if (dd < edge) continue
+        // the patch reaches ~0.7 m x scale from its centre
+        if (dd - 0.6 * sc < edge) continue
         if (side > 0 && sw > -830 && sw < 330 && Math.abs(dd - lane.roadD(sw)) < 7) continue
         if (side > 0 && sw > -270 && sw < 80 && dd > wall - 1) continue
         if (side < 0 && sw > -190 && sw < 240 && dd > wall) continue
         const ss = s + (r() - 0.5) * step * 0.9
         track.pointAt(ss, side * dd, p)
-        // wide, low clumps that close up into a sward; mown short inside the barrier, longer behind it
-        const sc = 1.45 + r() * 0.5
-        const sy = (dd > wall ? 1.05 : 0.68) + r() * 0.3
-        out.push(p.x, p.y - 0.02, p.z, r() * Math.PI * 2, sc, sy, r(), r() * 6.283)
+        // mown short inside the barrier, longer behind it
+        const behind = dd - wall
+        const sy = (behind > 0 ? 0.55 : 0.27) + r() * 0.1
+        // tone (tint): the ground's mowing stripes under the patch (vergeMaterial), darker behind the barrier
+        const x = Math.sin((behind * Math.PI) / 2.5) / 0.3
+        const stripe = behind > 0 ? 0.2 : Math.min(1, Math.max(0, x * 0.5 + 0.5))
+        out.push(p.x, p.y - 0.02, p.z, r() * Math.PI * 2, sc, sy, stripe * 0.85 + r() * 0.15, r() * 6.283)
       }
     }
   }
   void DS
   return new Float32Array(out)
-}
-
-/**
- * The grass's far level of detail: three crossed cards per patch, each showing one of the clump
- * billboards Poly Haven ships in the grass atlas (the bottom of grass.webp). 6 triangles instead of the
- * patch's 1800; same instances, same material (ground colour, canopy shading, wind by height).
- */
-function grassCards() {
-  // sprite rectangles in the atlas, pixels from the top-left of the 1024 x 1024 image
-  const sprites: [number, number, number, number][] = [
-    [201, 770, 499, 902],
-    [599, 778, 839, 890],
-    [26, 905, 205, 1016],
-    [240, 914, 519, 1016],
-    [590, 888, 808, 1016],
-  ]
-  const pos: number[] = [],
-    nrm: number[] = [],
-    uvs: number[] = [],
-    wind: number[] = [],
-    idx: number[] = []
-  const H = 0.3
-  const cards: [number, number, number, number][] = [
-    // sprite, angle, offset x, offset z
-    [0, 0.2, -0.15, 0.1],
-    [3, 1.25, 0.2, -0.1],
-    [4, 2.3, 0.0, 0.25],
-  ]
-  for (const [si, ang, ox, oz] of cards) {
-    const [x0, y0, x1, y1] = sprites[si]
-    const w = (H * (x1 - x0)) / (y1 - y0)
-    const c = Math.cos(ang),
-      s = Math.sin(ang)
-    const base = pos.length / 3
-    for (const [u, v] of [
-      [0, 0],
-      [1, 0],
-      [1, 1],
-      [0, 1],
-    ]) {
-      const lx = (u - 0.5) * w
-      pos.push(ox + lx * c, v * H, oz + lx * s)
-      // lit mostly from above, like the patches' blades
-      const nx = -s * 0.6,
-        nz = c * 0.6
-      const l = Math.hypot(nx, 0.75, nz)
-      nrm.push(nx / l, 0.75 / l, nz / l)
-      uvs.push((x0 + u * (x1 - x0)) / 1024, (y1 - v * (y1 - y0)) / 1024)
-      wind.push(v, 1)
-    }
-    idx.push(base, base + 1, base + 2, base, base + 2, base + 3)
-  }
-  const g = new THREE.BufferGeometry()
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
-  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3))
-  g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
-  g.setAttribute('wind', new THREE.Float32BufferAttribute(wind, 2))
-  g.setIndex(idx)
-  return g
 }
 
 // ------------------------------------------------------------------------------------- cells
@@ -1019,21 +967,21 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
     }
     if (grass && !debugFlag('nograss') && density >= 0.5) {
       const g = placeGrass(track, density)
-      // two levels of detail over the same patches: the modelled clumps near the camera (each instance
-      // packed only while within `near`), crossed cards beyond, out to `reach`, dithered into each other
-      const near = 11 + 3 * Math.min(density, 1.4)
-      const reach = 55 + 25 * Math.min(density, 1.4)
+      // the modelled clumps near the camera (each instance packed only while within `near`); beyond,
+      // the ground alone
+      const near = 9 + 2.5 * Math.min(density, 1.4)
       const common = {
         atlas: grass.atlas,
         wind: { sway: 0.05, flutter: 0.008, speed: 1.6 },
         alphaTest: 0.4,
-        tintA: new THREE.Color(0.9, 0.95, 0.88),
-        tintB: new THREE.Color(1.04, 1.08, 0.96),
+        // the stripe's tone (iB.z): as the ground's 0.88 / 1.12
+        tintA: new THREE.Color(0.86, 0.88, 0.86),
+        tintB: new THREE.Color(1.1, 1.12, 1.08),
         groundColour: grassGroundColour,
         roughTrunk: 0.85,
         roughLeaf: 0.85,
         crown: 0,
-        canopy: { root: 0.32, selfShadow: 0.28 },
+        canopy: { root: 0.6, selfShadow: 0.55 },
         collapse: true,
       }
       const opts = { instances: g, height: 0.6, castShadow: false, shadowMargin: 0, probeRange: 0 }
@@ -1046,18 +994,6 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
           cell: 8,
           maxDist: near,
           instanceRange: near,
-        }),
-      )
-      layers.push(
-        new VegLayer({
-          ...opts,
-          name: 'grass-cards',
-          geometry: grassCards(),
-          material: vegMaterial({ ...common, fadeIn: [near - 2.5, near], fadeOut: [reach * 0.72, reach], widen: 0.7, tintA: new THREE.Color(0.5, 0.54, 0.5), tintB: new THREE.Color(0.7, 0.7, 0.58) }),
-          cell: 24,
-          maxDist: reach,
-          // about every other patch to ~25 m, thinning beyond (the cards widen to keep the cover)
-          keep: (d) => 0.55 * Math.max(0.3, Math.min(1, (26 / Math.max(d, 1)) ** 1.25)),
         }),
       )
       console.info(`[veg] ${g.length / STRIDE} grass patches`)
