@@ -88,10 +88,10 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
   const renderer = gl as unknown as THREE.WebGPURenderer
   const shadowsQ = useSettings((s) => s.graphics.shadows)
   const photo = usePhotoSky()
-  // every car's own shadow map (carShadowAtlas.ts), decided before any material is built; the WebGL2
-  // fallback keeps the hero map
+  // every car's own shadow map (carShadowAtlas.ts), decided before any material is built; ?noatlas and
+  // the WebGL2 fallback keep the hero map (one car's own map, the others in the cascades)
   useMemo(() => {
-    atlasState.on = debugFlag('atlas') && !debugFlag('noatlas') && !(renderer as unknown as { backend: { isWebGLBackend?: boolean } }).backend.isWebGLBackend
+    atlasState.on = !debugFlag('noatlas') && !(renderer as unknown as { backend: { isWebGLBackend?: boolean } }).backend.isWebGLBackend
     if (atlasState.on) initCarShadowAtlas(shadowsQ >= 2 ? 4096 : 2048)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderer])

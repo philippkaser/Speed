@@ -1,5 +1,8 @@
 // The sun's shadow, in parts multiplied together (SunShadowNode), the last being the screen-space
 // contact shadows (contactShadows.ts):
+//  (By default every car has its own map instead, locked to the car, in one atlas: carShadowAtlas.ts,
+//  and the cascades hold the static world only. What follows about the hero is the ?noatlas and WebGL2
+//  path.)
 //  - three's cascaded shadow maps for the world and every car but one;
 //  - a dedicated shadow map for the car in focus (the "hero": the player in the chase and cockpit
 //    views, the framed car in TV shots, the same car that gets the high-resolution reflection probe):
@@ -75,7 +78,7 @@ export const heroShadowLight = heroLight
 const heroMapNode: N = shadow(heroLight as N)
 
 /** Whether the cars' shadows come from the per-car atlas (carShadowAtlas.ts): set once, before any
- *  material is built (Environment.tsx; ?atlas while it is being proven, never on the WebGL2 fallback). */
+ *  material is built (Environment.tsx: the default; not with ?noatlas, nor on the WebGL2 fallback). */
 export const atlasState = { on: false }
 
 // ------------------------------------------------------------------------------- distant trees

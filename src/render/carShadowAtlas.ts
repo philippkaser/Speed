@@ -342,7 +342,7 @@ export function updateCarShadows(renderer: THREE.WebGPURenderer, camera: THREE.P
     const off = Math.sqrt(Math.max(0, dist * dist - along * along))
     const margin = car.radius + reach
     const inView = dist < margin + 2 || (along > -margin && off < Math.max(0, along) * t * 2.4 + margin)
-    scores[i] = inView ? 1 / (Math.max(0.5, dist) * t) : dist < 60 ? 1e-4 / Math.max(0.5, dist) : 0
+    scores[i] = inView ? 1 / (Math.max(0.5, dist) * t) : 0
     current[i] = held.get(car) ?? -1
   })
   assignSlots(scores, current, Math.min(slots.length, MAX_SHADOW_CARS))
