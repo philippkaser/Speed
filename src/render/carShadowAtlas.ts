@@ -287,6 +287,22 @@ const current: number[] = []
 export const carShadowStats = { cars: 0, draws: 0, width: 0, height: 0 }
 
 /**
+ * Creates the atlas (`width` x `width / 2`). Called before any material that samples it is built: the
+ * materials hold the texture, so it is sized once and never resized under them.
+ */
+export function initCarShadowAtlas(width: number) {
+  if (atlas) return
+  atlas = new THREE.RenderTarget(width, width / 2, { depthBuffer: true, format: THREE.RedFormat, type: THREE.UnsignedByteType })
+  atlas.texture.name = 'CarShadowAtlas.color'
+  depthTexture.image.width = width
+  depthTexture.image.height = width / 2
+  atlas.depthTexture = depthTexture
+  slots = atlasSlots(width)
+  carShadowStats.width = width
+  carShadowStats.height = width / 2
+}
+
+/**
  * Renders this frame's car shadow maps: after the cars and the camera have moved, before anything
  * that shades with them renders (the reflection probes, the frame). `quality` is the shadow setting
  * (0: off).
@@ -297,18 +313,8 @@ export function updateCarShadows(renderer: THREE.WebGPURenderer, camera: THREE.P
     count.value = 0
     return
   }
-  if (!atlas) {
-    // (sized once: the materials hold the texture, and resizing would destroy it under them)
-    const width = quality >= 2 ? 4096 : 2048
-    atlas = new THREE.RenderTarget(width, width / 2, { depthBuffer: true, format: THREE.RedFormat, type: THREE.UnsignedByteType })
-    atlas.texture.name = 'CarShadowAtlas.color'
-    depthTexture.image.width = width
-    depthTexture.image.height = width / 2
-    atlas.depthTexture = depthTexture
-    slots = atlasSlots(width)
-    carShadowStats.width = width
-    carShadowStats.height = width / 2
-  }
+  if (!atlas) initCarShadowAtlas(quality >= 2 ? 4096 : 2048)
+  if (!atlas) return
   const W = atlas.width,
     H = atlas.height
   // this frame's cars

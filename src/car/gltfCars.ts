@@ -671,6 +671,8 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
   bodyGroup.add(driver)
   // the level of detail is decided once per car, before its parts are drawn (first child)
   const carLod = new CarLOD(levels)
+  // the per-car shadow map draws the same levels (carShadowAtlas.ts)
+  root.userData.shadowCasters = { levels, lod: carLod }
   root.add(carLod)
   root.children.unshift(root.children.pop()!)
 

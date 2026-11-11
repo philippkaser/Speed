@@ -14,7 +14,8 @@ import { setTrackTemp } from '../physics/tyre'
 import { postUniforms } from './PostFX'
 import { makeEnvScene, makeSkyDome, photoRotationFor, photoSkyHorizon, photoSkyU, photoSunDir } from './photoSky'
 import { skyMeta, skyReady } from './worldAssets'
-import { cascadesFar, cascadesWithoutHero, heroShadowLight, pickHero, seeHero, SunShadowNode, updateHeroShadow } from './sunShadow'
+import { initCarShadowAtlas, updateCarShadows } from './carShadowAtlas'
+import { atlasState, cascadesFar, cascadesWithoutHero, heroShadowLight, pickHero, seeHero, SunShadowNode, updateHeroShadow } from './sunShadow'
 import { particleScene } from './particles'
 import { installCarGrounding, updateCarGrounding } from './carGrounding'
 import { carPoses } from './CarVisual'
@@ -87,6 +88,13 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
   const renderer = gl as unknown as THREE.WebGPURenderer
   const shadowsQ = useSettings((s) => s.graphics.shadows)
   const photo = usePhotoSky()
+  // every car's own shadow map (carShadowAtlas.ts), decided before any material is built; the WebGL2
+  // fallback keeps the hero map
+  useMemo(() => {
+    atlasState.on = debugFlag('atlas') && !debugFlag('noatlas') && !(renderer as unknown as { backend: { isWebGLBackend?: boolean } }).backend.isWebGLBackend
+    if (atlasState.on) initCarShadowAtlas(shadowsQ >= 2 ? 4096 : 2048)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderer])
   const sun = useMemo(() => (photo ? photoSun() : computeSun(hour)), [hour, photo])
   Object.assign(sunState, sun)
   // asphalt temperature follows the sun (feeds the tyre thermal model)
@@ -366,8 +374,11 @@ export function Environment({ hour, focus }: { hour: number; focus?: React.RefOb
       cascadesWithoutHero(csm as never, sun.dir)
       _heroCars.length = 0
       for (const [id, pose] of carPoses) _heroCars.push([id, { pos: pose.pos, root: pose.model?.root }])
-      pickHero(_heroCars, camera as THREE.PerspectiveCamera)
-      updateHeroShadow(sun.dir, shadowsQ >= 2 ? 2048 : 1024)
+      if (atlasState.on) updateCarShadows(renderer, camera as THREE.PerspectiveCamera, sun.dir, _roots, shadowsQ)
+      else {
+        pickHero(_heroCars, camera as THREE.PerspectiveCamera)
+        updateHeroShadow(sun.dir, shadowsQ >= 2 ? 2048 : 1024)
+      }
     }
   }, -3)
 

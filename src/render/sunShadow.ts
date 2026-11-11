@@ -23,6 +23,7 @@
 import * as THREE from 'three/webgpu'
 import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js'
 import { float, positionView, positionWorld, shadow, smoothstep, texture, uniform } from 'three/tsl'
+import { carShadowNode } from './carShadowAtlas'
 import { contactShadowNode } from './contactShadows'
 
 type N = any
@@ -71,7 +72,11 @@ export const heroShadow = heroLight.shadow
 export const heroShadowLight = heroLight
 
 /** The hero map's shadow term (1 outside its footprint). */
-const heroShadowNode: N = shadow(heroLight as N)
+const heroMapNode: N = shadow(heroLight as N)
+
+/** Whether the cars' shadows come from the per-car atlas (carShadowAtlas.ts): set once, before any
+ *  material is built (Environment.tsx; ?atlas while it is being proven, never on the WebGL2 fallback). */
+export const atlasState = { on: false }
 
 // ------------------------------------------------------------------------------- distant trees
 
@@ -180,6 +185,8 @@ export function setTreeShadows(trees: Iterable<TreeShadowCaster>, sunDir: THREE.
 export class SunShadowNode extends CSMShadowNode {
   setup(builder: N) {
     const csm = super.setup(builder) as N
+    // every car's own map (carShadowAtlas.ts), or (?noatlas, the WebGL2 fallback) the hero's
+    const heroShadowNode = atlasState.on ? carShadowNode : heroMapNode
     // (the distant trees' map is not here: only the far receivers sample it, see farTreeShadow; every
     // texture here is bound in every lit material, and WebGPU allows 16 per shader stage)
     let all = csm.mul(heroShadowNode).mul(contactShadowNode)
