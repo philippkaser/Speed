@@ -10,6 +10,7 @@
 //   --every k         with --seq: keep every k-th frame (default 1)
 //   --pose 'x,y,z;lx,ly,lz;fov'   a fixed camera (window.__camPose)
 //   --eval '<js>'     run in the page once the scene is ready (before the settle frames)
+//   --hdr             also save the exposed linear frame as <out>.hdr.json (steps: "hdr": true)
 //   --info            print window.__info (draw calls, triangles) and the frame time
 //   --steps file.json several captures in one page load (loading costs ~100 s here, a frame ~3-10 s):
 //                     [{ "out": "a.png", "pose": "x,y,z;lx,ly,lz;fov" | null, "eval": "js", "frames": 12, "seq": 0, "every": 1 }, ...]
@@ -123,6 +124,12 @@ const save = (file, url) => fs.writeFileSync(file, Buffer.from(url.split(',')[1]
         })
         await page.waitForFunction(() => window.__shot, null, { timeout: 600000, polling: 250 })
         save(step.out, await page.evaluate(() => window.__shot))
+        if (step.hdr || args.includes('--hdr')) {
+          // the exposed scene-linear frame (RGBA half floats) next to the png: <out>.hdr.json
+          await page.evaluate(() => { window.__hdr = null; window.__wantHdr = true })
+          await page.waitForFunction(() => window.__hdr, null, { timeout: 600000, polling: 250 })
+          fs.writeFileSync(step.out.replace(/\.png$/, '.hdr.json'), JSON.stringify(await page.evaluate(() => window.__hdr)))
+        }
       }
       console.log(`saved ${step.out} (${Math.round(msPerFrame)} ms/frame, t+${Math.round((Date.now() - t0) / 1000)} s)`)
     }

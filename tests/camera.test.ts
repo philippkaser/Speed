@@ -26,6 +26,10 @@ test('tone curve: anchored, monotonic, smooth, deep blacks and a soft shoulder i
   expect(toneCurve(CURVE.keyIn / 16)).toBeLessThan(0.01)
   expect(toneCurve(1.5)).toBeLessThan(0.97)
   expect(toneCurve(64)).toBeGreaterThan(0.999)
+  // contrast: a hard shadow on asphalt (2.5 stops under sunlit asphalt, the key) is at least 4.4 stops
+  // darker on the display, and a stop above the key opens up by at least 1.55 stops
+  expect(Math.log2(CURVE.keyOut / toneCurve(CURVE.keyIn / 2 ** 2.5))).toBeGreaterThan(4.4)
+  expect(Math.log2(toneCurve(CURVE.keyIn * 2) / CURVE.keyOut)).toBeGreaterThan(1.55)
 })
 
 test('picture: greys stay neutral, bright colours keep their hue on the way to white', () => {

@@ -30,9 +30,12 @@ type N = any
 const { Fn, float, hash, max, min, mix, pow, screenCoordinate, step, uint, uniform, vec3 } = tsl as N
 
 /** Tone curve: contrast, shoulder sharpness, and its anchor (exposed value -> display-linear value). */
-export const CURVE = { contrast: 1.62, shoulder: 1.4, keyIn: 0.13, keyOut: 0.11 }
+// Contrast 1.85 (was 1.62): a photographic print's mid-tone gamma. A hard shadow on asphalt (2.5 stops
+// under the sunlit asphalt that anchors the key) lands ~4.5 stops below it on the display, near black,
+// so the sun carries the picture; the anchor itself is unchanged (materials were tuned against it).
+export const CURVE = { contrast: 1.85, shoulder: 1.25, keyIn: 0.13, keyOut: 0.11 }
 /** Saturation of the picture (1 = as the inset gamut renders it), applied to the scene-linear colour. */
-export const SATURATION = 1.08
+export const SATURATION = 1.12
 
 export const sensorU = {
   /** relative noise at the key (shot noise; 0 = none) */
