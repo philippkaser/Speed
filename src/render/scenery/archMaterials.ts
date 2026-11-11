@@ -81,14 +81,31 @@ export function archMaterial() {
     .add(clad.mul(cladTone.sub(1)))
     .add(rib.mul(ribTone.sub(1)))
     .add(steel.add(floorP).mul(softTone.sub(1)))
-  m.colorNode = c.mul(tone)
+  // precast concrete panels and the cladding's structural bays: wider, darker joints every few metres
+  const bays = seams(p, vec2(6, 3), 0.025)
+  // weathering on every wall: rain streaks running down from the edges, broad mottling, and the
+  // grime splashed up from the ground (darker, browner, ragged upper edge); none on floors and roofs
+  const nY: N = abs(normalize(attribute('normal', 'vec3')).y)
+  const wall = float(1).sub(smoothstep(0.35, 0.6, nY))
+  const lh: N = attribute('aLh', 'float')
+  const streaks = smoothstep(0.5, 0.9, mx_noise_float(vec3(pw.x.mul(2.3).add(pw.z.mul(2.3)), pw.y.mul(0.09), 5.3)).mul(0.5).add(0.5))
+  const splashTop = float(0.9).add(mx_noise_float(vec3(pw.x.mul(0.9), 1.3, pw.z.mul(0.9))).mul(0.45))
+  const splash = float(1).sub(smoothstep(0.05, splashTop, lh)).mul(wall)
+  const contact = float(1).sub(smoothstep(0.0, 0.25, lh)).mul(wall)
+  const weather = float(1)
+    .sub(streaks.mul(0.14).mul(wall))
+    .sub(bays.mul(0.35).mul(conc.add(clad)))
+    .mul(mix(float(0.9), float(1.04), n1))
+    .mul(float(1).sub(contact.mul(0.3)))
+  const grime = vec3(0.62, 0.56, 0.48)
+  m.colorNode = mix(c.mul(tone).mul(weather), c.mul(tone).mul(grime).mul(0.75), splash.mul(0.55))
   // floors: darker tyre marks
   const rough: N = pbr.x.mul(mix(float(1), mix(float(0.9), float(1.1), n2), conc.add(floorP)))
   m.roughnessNode = clamp(rough, 0.04, 1)
   m.metalnessNode = pbr.y
   m.emissiveNode = c.mul(pbr.z)
   m.aoNode = pbr.w
-  const height = seam.mul(-0.004).mul(clad).add(ribH.mul(0.012).mul(rib)).add(n2.mul(0.002).mul(conc))
+  const height = seam.mul(-0.004).sub(bays.mul(0.006).mul(conc.add(clad))).mul(clad).add(ribH.mul(0.012).mul(rib)).add(n2.mul(0.002).mul(conc))
   m.normalNode = bumpView(height)
   return m
 }

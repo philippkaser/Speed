@@ -27,6 +27,7 @@ import {
   cameraPosition,
   cameraViewMatrix,
   cos,
+  dot,
   float,
   floor,
   fract,
@@ -37,6 +38,7 @@ import {
   normalLocal,
   normalViewGeometry,
   positionPrevious,
+  positionWorld,
   screenCoordinate,
   sin,
   smoothstep,
@@ -76,6 +78,9 @@ const vegCam = uniform(new THREE.Vector3())
  * away through a TV camera's 5 degree lens is as big as one 60 m away through a normal lens).
  */
 const vegLens = uniform(1)
+/** the sun's direction and radiance (colour x intensity) for the crowns' translucency */
+const vegSunDir = uniform(new THREE.Vector3(0, 1, 0))
+const vegSunCol = uniform(new THREE.Color(1, 1, 1))
 const REF_TAN = Math.tan((50 * Math.PI) / 360)
 const lensOf = (camera: THREE.Camera) => {
   const pc = camera as THREE.PerspectiveCamera
@@ -124,14 +129,19 @@ function placeTrees(track: Track, heights: TerrainHeight, density: number) {
       const S = s.d >= 0 ? track.L : track.R
       const wall = S.wall[track.idx(s.s)]
       const ad = Math.abs(s.d)
-      if (ad < wall + 14 + r() * 10) continue
+      // a ragged forest edge: bays and promontories tens of metres deep, not a hedge along the barrier
+      const bay = Math.max(0, valueNoise2(px * 0.012 + 4.4, pz * 0.012 - 2.2) - 0.35) * 55
+      if (ad < wall + 14 + bay + r() * 14) continue
       // keep the inside of the start straight clear for the grandstands & pits
       if ((s.s > track.length - 420 || s.s < 460) && ad < wall + 90) continue
       if (r() > treeChance(forest)) continue
       const y = heights.height(px, pz)
-      const conifer = valueNoise2(px * 0.004, pz * 0.004) > 0.45
-      const scale = conifer ? 0.72 + r() * 0.6 : 0.58 + r() * 0.42
-      const sy = scale * (0.88 + r() * 0.3)
+      // stands of one species blending into each other (no clean borders)
+      const conifer = valueNoise2(px * 0.004, pz * 0.004) + (r() - 0.5) * 0.3 > 0.45
+      // a few young trees, many middle-aged, some old giants (skewed, not uniform)
+      const age = r()
+      const scale = (conifer ? 0.62 : 0.52) * (0.85 + 1.0 * age * age + 0.25 * r())
+      const sy = scale * (0.82 + r() * 0.4)
       ;(conifer ? conifers : broad).push(px, y - 0.25, pz, r() * Math.PI * 2, scale, sy, r(), r() * 6.283)
     }
   }
@@ -524,6 +534,12 @@ function vegMaterial(o: VegMaterialOpts) {
     const mean = texture(o.atlas, vec2(0.5, 0.5)).level(float(12)).rgb.max(vec3(0.02))
     albedo = ground.mul(tex.rgb.div(mean)).mul(tint)
   }
+  if (o.crown > 0) {
+    // per tree: value and hue (olive-yellow .. blue-green), the same hash as its impostor's
+    const h1 = fract(sin(dot(iA.xz, vec2(12.9898, 78.233))).mul(43758.5453))
+    const h2 = fract(h1.mul(23.17).add(0.31))
+    albedo = albedo.mul(mix(vec3(1), mix(vec3(1.1, 1.04, 0.78), vec3(0.84, 0.97, 1.1), h2).mul(mix(float(0.68), float(1.18), h1)), leaf))
+  }
   m.colorNode = vec4(albedo, tex.a)
   m.roughnessNode = mix(float(o.roughTrunk), float(o.roughLeaf), leaf)
   m.metalnessNode = float(0)
@@ -853,7 +869,22 @@ function impostorMaterial(imp: Impostors, fadeIn: [number, number], maxDist: num
   const tint = mix(vec3(tints[0][0].r, tints[0][0].g, tints[0][0].b), vec3(tints[0][1].r, tints[0][1].g, tints[0][1].b), iB.z)
   const tintB = mix(vec3(tints[1][0].r, tints[1][0].g, tints[1][0].b), vec3(tints[1][1].r, tints[1][1].g, tints[1][1].b), iB.z)
   const tn = mix(tint, tintB, species.clamp(0, 1))
-  m.colorNode = vec4(alb.mul(alb).mul(tn), alpha)
+  // per tree: value and hue (olive-yellow .. blue-green) from a hash of its position
+  const h1 = fract(sin(dot(iA.xz, vec2(12.9898, 78.233))).mul(43758.5453))
+  const h2 = fract(h1.mul(23.17).add(0.31))
+  const hue = mix(vec3(1.1, 1.04, 0.78), vec3(0.84, 0.97, 1.1), h2)
+  const val = mix(float(0.68), float(1.18), h1)
+  // crown structure: the lower crown and the dense core darker (self-shadowed), the thin rim lighter
+  const ly: N = varying(corner.y.mul(0.5).add(0.5), 'vImpY')
+  const core = smoothstep(0.75, 1.0, alpha)
+  const shade = mix(float(0.55), float(1), smoothstep(0.0, 0.6, ly)).mul(mix(float(1), float(0.72), core))
+  const albT = alb.mul(alb).mul(tn).mul(hue).mul(val)
+  m.colorNode = vec4(albT.mul(shade), alpha)
+  // translucency: sunlight through the thin outer foliage, strongest looking towards the sun
+  const V = normalize(positionWorld.sub(cameraPosition))
+  const back = max(dot(V, vegSunDir), 0)
+  const rim = float(1).sub(core)
+  m.emissiveNode = albT.mul(vegSunCol).mul(rim).mul(back.mul(back).mul(0.22).add(0.025)).mul(farTreeShadow())
   // baked object-space normal, turned with the tree, into view space
   const nObj = mix(n0.rgb, n1.rgb, vt).mul(2).sub(1)
   const cs = cos(yaw),
@@ -1060,6 +1091,8 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
     camera.updateMatrixWorld()
     vegCam.value.setFromMatrixPosition(camera.matrixWorld)
     vegLens.value = lensOf(camera)
+    vegSunDir.value.copy(sunState.dir)
+    vegSunCol.value.copy(sunState.color).multiplyScalar(sunState.intensity)
     for (const l of built.layers) l.update(camera)
     ;(window as unknown as { __veg?: object }).__veg = Object.fromEntries(built.layers.map((l) => [l.o.name, { instances: l.total, triangles: l.triangles }]))
   }, 0.6)

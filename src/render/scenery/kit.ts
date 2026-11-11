@@ -47,6 +47,8 @@ export class Kit {
   col: number[] = []
   pbr: number[] = []
   pat: number[] = []
+  /** height above the frame's ground (local y): the grime splashed up from the ground */
+  lh: number[] = []
   idx: number[] = []
   /** extra per-vertex attributes (e.g. the glass' rooms), set by the caller per face */
   extra: Record<string, { size: number; data: number[]; cur: number[] }> = {}
@@ -69,6 +71,7 @@ export class Kit {
   }
 
   private vert(p: THREE.Vector3, n: THREE.Vector3, u: number, v: number, s: Surf) {
+    this.lh.push(p.y)
     _w.copy(p).applyMatrix4(this.m)
     this.pos.push(_w.x, _w.y, _w.z)
     _w.copy(n).applyMatrix3(this.nm).normalize()
@@ -237,6 +240,7 @@ export class Kit {
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.col, 3))
     g.setAttribute('aPbr', new THREE.Float32BufferAttribute(this.pbr, 4))
     g.setAttribute('aPat', new THREE.Float32BufferAttribute(this.pat, 1))
+    g.setAttribute('aLh', new THREE.Float32BufferAttribute(this.lh, 1))
     for (const k in this.extra) g.setAttribute(k, new THREE.Float32BufferAttribute(this.extra[k].data, this.extra[k].size))
     const n = this.vertexCount
     g.setIndex(n > 65535 ? new THREE.Uint32BufferAttribute(this.idx, 1) : new THREE.Uint16BufferAttribute(this.idx, 1))

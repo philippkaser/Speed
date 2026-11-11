@@ -526,10 +526,11 @@ export function mountainMaterial() {
   const snow = smoothstep(snowLine.sub(35), snowLine.add(55), h).mul(snowSlope)
 
   // colours (linear albedo)
-  const canopy = mix(vec3(0.022, 0.034, 0.019), vec3(0.04, 0.055, 0.028), smoothstep(-0.4, 0.5, n2.add(n3.mul(0.6))))
+  // conifer forest seen from afar ~0.04-0.06 (crowns and their shadows), a little bluer in the gullies
+  const canopy = mix(vec3(0.03, 0.043, 0.026), vec3(0.052, 0.066, 0.036), smoothstep(-0.4, 0.5, n2.add(n3.mul(0.6)))).mul(float(1).sub(drain.mul(0.25)))
   const meadow = mix(vec3(0.075, 0.085, 0.04), vec3(0.12, 0.115, 0.075), smoothstep(-0.3, 0.6, n2))
   const strata = sin(h.mul(0.085).add(n2.mul(4)).add(n1.mul(2))).mul(0.5).add(0.5)
-  const rock = mix(vec3(0.1, 0.095, 0.088), vec3(0.2, 0.19, 0.172), strata.mul(0.6).add(n3.mul(0.2)).add(0.2)).mul(float(1).sub(drain.mul(0.35)))
+  const rock = mix(vec3(0.13, 0.125, 0.115), vec3(0.23, 0.215, 0.195), strata.mul(0.6).add(n3.mul(0.2)).add(0.2)).mul(float(1).sub(drain.mul(0.35)))
   const scree = vec3(0.19, 0.185, 0.17).mul(n3.mul(0.15).add(0.95))
   let col: N = mix(meadow, scree, smoothstep(0.2, 0.42, slope).mul(smoothstep(treeLine, treeLine.add(150), h)))
   col = mix(col, rock, rocky)
@@ -540,12 +541,14 @@ export function mountainMaterial() {
   m.metalnessNode = float(0)
   m.aoNode = ao.mul(mix(float(1), float(0.8), forest))
   // rock and canopy relief below the mesh's resolution (fades out with distance)
-  const relief = n2.mul(18).add(n3.mul(5)).mul(mix(float(0.4), float(1), rocky)).mul(float(1).sub(snow.mul(0.6))).mul(near.mul(0.7).add(0.3))
+  const relief = n2.mul(12).add(n3.mul(5)).mul(mix(float(0.4), float(1), rocky)).mul(float(1).sub(snow.mul(0.6))).mul(near.mul(0.7).add(0.3))
   m.normalNode = bumpView(relief)
 
   // aerial perspective (before the scene's fog): extinction and the sky's horizon light
   const dir = toCam.div(max(dist, 1))
-  const k = float(0.000068).mul(exp(max(h, 0).div(-900)).mul(0.8).add(0.2))
+  // aerosol + Rayleigh extinction of hazy summer air (visibility ~25 km at the valley floor), the
+  // density falling with a ~1.8 km scale height along a path that climbs from the camera to the point
+  const k = float(0.00013).mul(exp(max(h, 0).div(-1800)).mul(0.7).add(0.3))
   const T = exp(dist.mul(k).negate())
   const haze = photoSkyHorizon(dir).mul(vec3(0.86, 0.93, 1.06))
   m.colorNode = col.mul(T)

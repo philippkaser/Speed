@@ -47,7 +47,9 @@ export function buildMountains(center: THREE.Vector3, inner: number, outer: numb
     const far = 1 - smooth(0.84, 1.0, t)
     // foothills rise slowly from the valley; the high range stands behind them
     const footAmp = smooth(0.0, 0.4, t) * far
-    const high = smooth(0.28, 0.68, t) * far
+    // two ranges one behind the other: a lower front range, a saddle, the main range behind it
+    // (the haze then layers them: the far one paler and flatter in tone)
+    const high = (0.62 * smooth(0.24, 0.42, t) * (1 - 0.45 * smooth(0.5, 0.62, t)) + 0.45 * smooth(0.6, 0.8, t)) * far
     for (let a = 0; a < A; a++) {
       const i = k * A + a
       const x = center.x + cosA[a] * r,
@@ -62,13 +64,18 @@ export function buildMountains(center: THREE.Vector3, inner: number, outer: numb
       const qx = px + 0.42 * wx,
         qz = pz + 0.42 * wz
       // (the finest octave ~2-3 grid cells: finer noise would only alias)
-      const rid = ridged2(qx * 1.15, qz * 1.15, 6)
+      const rid = ridged2(qx * 0.85, qz * 0.85, 6)
+      // the body of the massif: broad, slowly varying, so ridgelines run on at similar heights
+      const body = 0.5 + 0.5 * fbm2(qx * 0.45 - 2.7, qz * 0.45 + 6.1, 4)
       // where the high massifs stand along the ring (with saddles between them)
       const massif = smooth(-0.35, 0.5, fbm2(px * 0.33 + 9.1, pz * 0.33 - 4.4, 3))
       // rolling forested foothills in front of the range
       const roll = 0.5 + 0.5 * fbm2(qx * 2.6 + 3.3, qz * 2.6 - 1.7, 4)
       const foot = footAmp * (25 + 190 * roll * (0.6 + 0.4 * rid))
-      const range = high * (0.3 + 0.7 * massif) * 1150 * Math.pow(rid, 1.55)
+      // broad eroded ridges, not needles: the ridged noise only sculpts a broad body, and the summits
+      // are compressed towards a common level (accordant summits of an old, eroded range)
+      const raw = high * (0.35 + 0.65 * massif) * 1700 * (0.42 * body + 0.58 * Math.pow(rid, 1.15))
+      const range = 1000 * Math.tanh(raw / 1000)
       H[i] = foot + range - 12
     }
   }
