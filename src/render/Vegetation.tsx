@@ -140,7 +140,7 @@ function placeTrees(track: Track, heights: TerrainHeight, density: number) {
       const conifer = valueNoise2(px * 0.004, pz * 0.004) + (r() - 0.5) * 0.3 > 0.45
       // a few young trees, many middle-aged, some old giants (skewed, not uniform)
       const age = r()
-      const scale = (conifer ? 0.62 : 0.52) * (0.85 + 1.0 * age * age + 0.25 * r())
+      const scale = (conifer ? 0.74 : 0.6) * (0.8 + 0.95 * age * age + 0.25 * r())
       const sy = scale * (0.82 + r() * 0.4)
       ;(conifer ? conifers : broad).push(px, y - 0.25, pz, r() * Math.PI * 2, scale, sy, r(), r() * 6.283)
     }
