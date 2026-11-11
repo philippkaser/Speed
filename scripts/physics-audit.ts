@@ -14,6 +14,14 @@ import { TRACKS } from '../src/track/trackDef'
 const args = process.argv.slice(2)
 const quick = args.includes('--quick')
 const spec = args[0] && !args[0].startsWith('--') ? getCar(args[0]) : CARS[0]
+// AUDIT_SET="defaultSetup.arbF=60,aero.clAFront=1.3" overrides spec fields for what-if runs
+for (const kv of (process.env.AUDIT_SET ?? '').split(',').filter(Boolean)) {
+  const [path, val] = kv.split('=')
+  const keys = path.split('.')
+  let o: any = spec
+  for (const k of keys.slice(0, -1)) o = o[k]
+  o[keys[keys.length - 1]] = Number(val)
+}
 const DEG = Math.PI / 180
 const G = 9.81
 const rows: [string, string, string][] = []
@@ -68,6 +76,7 @@ function warm(v: Vehicle) {
   }
 }
 function setup(ground: Ground = new FlatGround(), assists: Partial<Vehicle['assists']> = {}, x = 0, z = 0, yaw = 0) {
+  ceInt = 0
   const world = new PhysicsWorld(ground)
   const v = new Vehicle(spec)
   Object.assign(v.assists, { abs: true, tc: 0, steering: 0, autoGear: true, stability: false }, assists)
@@ -126,13 +135,15 @@ function braking(kmh: number) {
 
 // ---------------------------------------------------------------- circle driver
 /** follow a left-hand circle of radius R centred at the origin, starting at (-R,0) heading +z */
+let ceInt = 0
 function circleSteer(v: Vehicle, R: number) {
   const r = Math.hypot(v.pos.x, v.pos.z)
   const desired = Math.atan2(v.pos.z / r, -v.pos.x / r)
   const he = wrap(desired - heading(v))
   const ce = r - R
   const kin = Math.atan(spec.wheelbase / R)
-  return { cmd: kin + he * 1.2 + ce * 0.05, he, ce, r }
+  ceInt = Math.max(-20, Math.min(20, ceInt + ce * PHYSICS_DT))
+  return { cmd: kin + he * 1.5 + ce * 0.12 + ceInt * 0.04, he, ce, r }
 }
 /** ramp speed on a constant radius; returns max sustained lateral g, the speed and the understeer gradient */
 function pinTemps(v: Vehicle) {
@@ -155,7 +166,7 @@ function circle(R: number, startKmh: number, pin = true) {
     bestSteer = 0,
     sustained = 0
   const pts: [number, number][] = []
-  run(world, quick ? 45 : 90, (t) => {
+  run(world, 90, (t) => {
     if (pin) pinTemps(v)
     const c = circleSteer(v, R)
     car.input.steer = -c.cmd / spec.steerLock
@@ -163,7 +174,7 @@ function circle(R: number, startKmh: number, pin = true) {
     const err = target - v.speed
     car.input.throttle = Math.max(0, Math.min(1, 0.3 + err * 0.8))
     car.input.brake = err < -1 ? Math.min(1, -err * 0.2) : 0
-    if (Math.abs(c.ce) < 1.5 && Math.abs(c.he) < 0.15) {
+    if (Math.abs(c.ce) < 3 && Math.abs(c.he) < 0.15) {
       const lat = (v.speed * v.speed) / c.r / G
       sustained++
       if (sustained > 600) {
@@ -463,7 +474,8 @@ const sec = (s: string) => rows.push([`-- ${s}`, '', ''])
 const T0 = performance.now()
 
 if (process.env.DIAG) {
-  circle(+process.env.DIAG, 120)
+  const [dr, dk] = process.env.DIAG.split(':').map(Number)
+  circle(dr, dk || 120)
   process.exit(0)
 }
 sec('straight line')

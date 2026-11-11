@@ -592,9 +592,16 @@ export class Vehicle {
     const rpm = this.engine.omega * RADS_TO_RPM
     if (this.gear === 0) engage = 0
     else {
-      // centrifugal style auto clutch: slips near idle so the car can launch and never stalls
-      if (this.speed < 6) {
-        engage = smoothstep(eng.idleRpm + 120, eng.idleRpm + 1700, rpm)
+      // auto clutch as a race driver launches: with the throttle open it slips the engine at a
+      // launch speed (on boost for a turbo) until the wheels catch up, so the start is traction
+      // limited instead of bogging at ~2000 rpm; closed throttle disengages near idle, never stalls
+      // road speed, not wheel speed: wheelspin must not end the launch
+      const wheelRpm = Math.abs((this.currentRatio() * this.speed) / this.wheels[2].radius) * RADS_TO_RPM
+      const launchMax = eng.turbo ? eng.turbo.fullRpm + 300 : eng.idleRpm + 3000
+      // the pedal sets the launch speed (a TC cut must not drop the clutch in)
+      const launch = eng.idleRpm + 600 + clamp(input.throttle, 0, 1) * Math.max(0, launchMax - eng.idleRpm - 600)
+      if (this.speed < 6 || wheelRpm < launch - 200) {
+        engage = smoothstep(launch - 1100, launch + 200, rpm)
         if (throttle < 0.02) engage = Math.min(engage, smoothstep(eng.idleRpm + 200, eng.idleRpm + 900, rpm))
       } else engage = smoothstep(eng.idleRpm - 250, eng.idleRpm + 250, rpm)
       if (input.clutch > 0) engage = Math.min(engage, 1 - input.clutch)

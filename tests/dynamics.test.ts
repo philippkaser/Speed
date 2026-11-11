@@ -84,3 +84,29 @@ test('a square rear-end tap pushes the car ahead without spinning either car or 
   expect(maxYaw).toBeLessThan((1 * Math.PI) / 180)
   expect(b.speed).toBeGreaterThan(a.speed) // pushed ahead, separating
 })
+
+test('a full-throttle start slips the clutch at launch revs and is traction limited (no bog, no clutch drop)', () => {
+  for (const spec of CARS) {
+    const world = new PhysicsWorld(ground)
+    const v = new Vehicle(spec)
+    Object.assign(v.assists, { abs: true, tc: 3, steering: 0, autoGear: true })
+    v.reset(0, 0, 0, ground)
+    const car = world.addCar('a', v)
+    car.input.throttle = 1
+    let minEngage = 1,
+      minRpm = 1e9
+    for (let i = 0; i < 600; i++) {
+      world.stepOnce(PHYSICS_DT)
+      if (i > 300) {
+        minEngage = Math.min(minEngage, v.clutchEngage)
+        minRpm = Math.min(minRpm, v.rpm)
+      }
+    }
+    const kmh = v.speed * 3.6
+    console.log(`[${spec.name}] launch: ${kmh.toFixed(1)} km/h after 1 s, min clutch ${minEngage.toFixed(2)}, min rpm ${minRpm.toFixed(0)}`)
+    // 0.5 g average over the first second was a bog at ~2000 rpm below the turbo's spool
+    expect(kmh).toBeGreaterThan(spec.id === 'vanta-gt3' ? 28 : 18)
+    expect(minEngage).toBeGreaterThan(0.3)
+    expect(minRpm).toBeGreaterThan(spec.engine.idleRpm + 1500)
+  }
+})
