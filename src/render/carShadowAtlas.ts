@@ -355,7 +355,9 @@ export function updateCarShadows(renderer: THREE.WebGPURenderer, camera: THREE.P
     held.set(car, slot)
     const last = car.levels.length - 1
     // never the full model (the simplified level's shadow is indistinguishable, a handful of draws)
-    const level = slot < 0 ? -1 : Math.min(last, Math.max(car.lod?.mainLevel ?? 0, Math.min(1, last)))
+    // and the far level in the small slots (512 and 256 texels: 1-2 cm, finer than its 8 cm tolerance
+    // would show)
+    const level = slot < 0 ? -1 : tierOf(slot) >= 2 ? last : Math.min(last, Math.max(car.lod?.mainLevel ?? 0, Math.min(1, last)))
     car.levels.forEach((l, k) => {
       for (const p of l) {
         p.mesh.visible = k === level
