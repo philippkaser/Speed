@@ -285,6 +285,10 @@ const hueDist = (h: any, h0: number) => {
  */
 /** the sun's angular radius (0.27 deg) as GGX alpha: the sharpest the clear coat's sun glint can be */
 const SUN_ALPHA = 0.0047
+/** tail lamps' lens radiance (always on): about a sunlit white panel, so they read lit in daylight */
+const TAIL_LAMP = 1.2
+/** added by full braking: an LED brake lamp is several times a sunlit panel and glares a little */
+const BRAKE_LAMP = 16
 /** albedo scale of the model's livery texture for white / for saturated colours (display colours -> pigment) */
 const LIVERY_WHITE = 0.85
 const LIVERY_SATURATED = 0.68
@@ -734,14 +738,14 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
     if (steering && steerRest) steering.quaternion.copy(steerRest).multiply(_sq.setFromAxisAngle(steerAxis, v.steerInput * 2.2))
     for (const m of rearLights) {
       m.emissive.setRGB(1, 0.02, 0.02)
-      m.emissiveIntensity = 0.6 + v.brake * 7
+      m.emissiveIntensity = TAIL_LAMP + v.brake * BRAKE_LAMP
     }
     const glow = brakeGlow(maxBrake, heat)
     for (const m of discs) {
       m.emissive.copy(heat)
       m.emissiveIntensity = glow
     }
-    ;(bakedU.brake.value as THREE.Color).setRGB(1, 0.02, 0.02).multiplyScalar(0.6 + v.brake * 7)
+    ;(bakedU.brake.value as THREE.Color).setRGB(1, 0.02, 0.02).multiplyScalar(TAIL_LAMP + v.brake * BRAKE_LAMP)
     ;(bakedU.heat.value as THREE.Color).copy(heat).multiplyScalar(glow)
   }
 
