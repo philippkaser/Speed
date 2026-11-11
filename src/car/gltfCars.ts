@@ -285,6 +285,9 @@ const hueDist = (h: any, h0: number) => {
  */
 /** the sun's angular radius (0.27 deg) as GGX alpha: the sharpest the clear coat's sun glint can be */
 const SUN_ALPHA = 0.0047
+/** albedo scale of the model's livery texture for white / for saturated colours (display colours -> pigment) */
+const LIVERY_WHITE = 0.85
+const LIVERY_SATURATED = 0.68
 /** how many pixels a curved panel spreads the sun's glint over (its energy kept), so the TAA keeps it */
 const GLINT_PX = 2
 
@@ -407,7 +410,11 @@ function liveryMaterial(src: THREE.MeshPhysicalMaterial, paint: Meta['paint'], p
     // vanished against it)
     const shadeA = pow(v.div(paint.baseV).clamp(0.15, 1.0), float(2.2))
     const shadeB = pow(v.div(paint.accentV).clamp(0.35, 1.0), float(2.2))
-    let col: any = lin.mul(base)
+    // the model's own livery is painted as display colours (its reds ~0.85 linear, whiter than any
+    // pigment): real paint reflects at most ~0.6 in its strongest channel when saturated, ~0.8 when
+    // white, so the texture is scaled by saturation between the two (its own contrast kept). The team
+    // colours below are pigment values already and are not scaled.
+    let col: any = lin.mul(base).mul(mix(float(LIVERY_WHITE), float(LIVERY_SATURATED), s))
     col = mix(col, (teamA as any).mul(shadeA), baseW)
     if (paint.hiHue !== undefined && paint.hiV !== undefined) {
       // lighter stripes of the base colour: a lifted shade of the team colour

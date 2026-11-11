@@ -15,7 +15,8 @@
 //    looks the same at every resolution.
 //
 //    Temporal stability: the first downsample takes a partial Karis average (each 2 x 2 group of
-//    taps weighted by 1 / (1 + luma / KARIS)) and clamps each tap at CLAMP. A glint one pixel wide
+//    taps weighted by 1 / (1 + luma / KARIS)) and clamps each tap at CLAMP, raised by SUPPORT x the
+//    mean of the tap's group (up to CLAMP_MAX), so a glint spread over a few pixels still glares. A glint one pixel wide
 //    (the sun in the clear coat, a wheel nut, the edge of a windscreen), which appears and disappears
 //    from frame to frame as it slides between pixels, can then add no more to the halo than an
 //    ordinary bright pixel; large bright areas (the sky, clouds, white walls) average as before.
@@ -65,9 +66,13 @@ export const SCATTER = {
   minSigma: 0.0025,
 }
 
-/** Karis average strength (luma at which a group's weight halves) and the per-tap clamp of the scatter's input. */
-const KARIS = 4
+/** luma at which a 2x2 group's weight halves (partial Karis average; the per-tap clamp below does the firefly work) */
+const KARIS = 48
 const CLAMP = 64
+/** how far a tap may exceed CLAMP per unit of its neighbours' mean: a lit neighbourhood is a real glint, not a firefly */
+const SUPPORT = 4
+/** the most a supported tap may carry: a glint's peak (hundreds), well under the sun disc's own pixels (thousands), whose glare is analytic */
+const CLAMP_MAX = 400
 
 /** The sun's diffraction star: share of the sun's light in the spikes. */
 const STAR_GAIN = 0.012
@@ -231,10 +236,14 @@ class LensScatterNode extends THREE.Node {
         const wsum = float(0).toVar()
         for (const [gw, taps] of GROUPS) {
           let g: N = vec3(0)
-          for (const [dx, dy] of taps) {
-            const c = tex.sample(p.add(texel.mul(vec2(dx, dy)))).rgb
-            g = g.add(karis ? min(max(c, vec3(0)), vec3(CLAMP)) : c)
-          }
+          const cs = (taps as number[][]).map(([dx, dy]) => (karis ? max(tex.sample(p.add(texel.mul(vec2(dx, dy)))).rgb, vec3(0)) : tex.sample(p.add(texel.mul(vec2(dx, dy)))).rgb))
+          if (karis) {
+            // each tap clamped at CLAMP plus SUPPORT x the mean of its group's other taps: a lone
+            // one-pixel speck (the others dark) stays at ~CLAMP, a glint that covers several taps (the
+            // clear coat spreads the sun over ~2 px, car/gltfCars.ts) keeps its energy and glares
+            const sum = cs.reduce((a: N, c: N) => a.add(c), vec3(0))
+            for (const c of cs) g = g.add(min(c, min(vec3(CLAMP).add(sum.sub(c).mul(SUPPORT / (cs.length - 1))), vec3(CLAMP_MAX))))
+          } else for (const c of cs) g = g.add(c)
           g = g.mul(0.25)
           const wk = karis ? float(gw).div(luma(g).div(KARIS).add(1)) : float(gw)
           acc.addAssign(g.mul(wk))

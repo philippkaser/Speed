@@ -18,6 +18,9 @@ import { cameraViewMatrix, cubeTexture, materialEnvIntensity, positionViewDirect
 
 type Node = ReturnType<typeof uniform>
 
+/** the brightest radiance a mirror lobe reflects from the probe: above sunlit clouds and white walls (~5), below the sun disc */
+const MIRROR_MAX = 40
+
 export interface MirrorEnv {
   /** the probe's cube (created with the first one: a material's shader is built around it) */
   cube: ReturnType<typeof cubeTexture> | null
@@ -51,7 +54,9 @@ export function mirrorRadiance(env: MirrorEnv, normalView: unknown) {
   const height = (positionWorld as any).dot(g.xyz).add(g.w).max(0.03)
   const invT = r.dot(g.xyz).negate().max(0).div(height).mul(env.parallax)
   const dir = r.add((positionWorld as any).sub(env.origin).mul(invT))
-  return (env.cube as any).sample(dir).rgb.mul(materialEnvIntensity)
+  // (at most MIRROR_MAX: the probe sees the sky's sun disc, thousands; the materials' analytic sun lobe
+  // is the sun, so the mirror would count it twice)
+  return (env.cube as any).sample(dir).rgb.min(MIRROR_MAX).mul(materialEnvIntensity)
 }
 
 /** Points a car's mirror lobes at a cube (null: back to the prefiltered environment). */
