@@ -19,7 +19,8 @@
 //    variance clipping, Salvi 2016), which removes what the motion test cannot see (changes of light,
 //    reflections, transparent surfaces).
 //  - Blend in a tonemapped space (Karis 2014): a bright glint cannot dominate its neighbours' history
-//    and flicker. The current frame weighs 10% (more when the history is uncertain or the pixel moves
+//    and flicker. The current frame weighs 7% (with the tight
+//    reconstruction kernel, 10% let the jitter through as shimmer on asphalt and edges) (more when the history is uncertain or the pixel moves
 //    fast, so fast motion stays sharp), 100% after a camera cut or where the history is rejected.
 import * as THREE from 'three/webgpu'
 import * as tsl from 'three/tsl'
@@ -33,7 +34,7 @@ export const taaU = {
   /** 1 on the frame of a camera cut: the history is dropped */
   reset: uniform(0),
   /** weight of the current frame where the history is trusted and still (at native resolution) */
-  alpha: uniform(0.1),
+  alpha: uniform(0.07),
   /** variance clipping width (standard deviations) */
   gamma: uniform(1.0),
   /** sharpness of the current frame's reconstruction kernel exp(-k d^2) (d in input pixels) at native
