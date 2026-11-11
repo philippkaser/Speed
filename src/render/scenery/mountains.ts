@@ -74,8 +74,8 @@ export function buildMountains(center: THREE.Vector3, inner: number, outer: numb
       const foot = footAmp * (25 + 190 * roll * (0.6 + 0.4 * rid))
       // broad eroded ridges, not needles: the ridged noise only sculpts a broad body, and the summits
       // are compressed towards a common level (accordant summits of an old, eroded range)
-      const raw = high * (0.35 + 0.65 * massif) * 1700 * (0.42 * body + 0.58 * Math.pow(rid, 1.15))
-      const range = 1000 * Math.tanh(raw / 1000)
+      const raw = high * (0.4 + 0.6 * massif) * 2300 * (0.4 * body + 0.6 * Math.pow(rid, 1.15))
+      const range = 1250 * Math.tanh(raw / 1250)
       H[i] = foot + range - 12
     }
   }

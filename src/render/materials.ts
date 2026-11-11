@@ -541,14 +541,14 @@ export function mountainMaterial() {
   m.metalnessNode = float(0)
   m.aoNode = ao.mul(mix(float(1), float(0.8), forest))
   // rock and canopy relief below the mesh's resolution (fades out with distance)
-  const relief = n2.mul(12).add(n3.mul(5)).mul(mix(float(0.4), float(1), rocky)).mul(float(1).sub(snow.mul(0.6))).mul(near.mul(0.7).add(0.3))
+  const relief = n2.mul(15).add(n3.mul(5)).mul(mix(float(0.4), float(1), rocky)).mul(float(1).sub(snow.mul(0.6))).mul(near.mul(0.7).add(0.3))
   m.normalNode = bumpView(relief)
 
   // aerial perspective (before the scene's fog): extinction and the sky's horizon light
   const dir = toCam.div(max(dist, 1))
-  // aerosol + Rayleigh extinction of hazy summer air (visibility ~25 km at the valley floor), the
+  // aerosol + Rayleigh extinction of hazy summer air (visibility ~30 km at the valley floor), the
   // density falling with a ~1.8 km scale height along a path that climbs from the camera to the point
-  const k = float(0.00013).mul(exp(max(h, 0).div(-1800)).mul(0.7).add(0.3))
+  const k = float(0.000105).mul(exp(max(h, 0).div(-1800)).mul(0.7).add(0.3))
   const T = exp(dist.mul(k).negate())
   const haze = photoSkyHorizon(dir).mul(vec3(0.86, 0.93, 1.06))
   m.colorNode = col.mul(T)
