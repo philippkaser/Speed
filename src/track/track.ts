@@ -651,7 +651,7 @@ export class Track implements Ground {
   /** Quasi steady-state lap speed profile along the racing line. */
   /** loadSens / fz0_m: the tyre's friction loss per unit of load above its nominal load (fz0_m = nominal
    *  wheel load / car mass), so downforce adds grip with the same diminishing return as in the tyre model */
-  computeSpeedProfile(p: { mu: number; clA_m: number; power_m: number; cdA_m: number; brakeMu: number; loadSens?: number; fz0_m?: number; trailExp?: number; rearBrake?: { wr: number; bf: number; hL: number; aeroR: number; mu: number } }, out?: Float32Array) {
+  computeSpeedProfile(p: { mu: number; clA_m: number; power_m: number; cdA_m: number; brakeMu: number; loadSens?: number; fz0_m?: number; trailExp?: number; lat?: { mu: number; clA_m: number; jerk?: number }; rearBrake?: { wr: number; bf: number; hL: number; aeroR: number; mu: number } }, out?: Float32Array) {
     const n = this.n
     const v = out ?? new Float32Array(n)
     const g = 9.81
@@ -660,13 +660,22 @@ export class Track implements Ground {
       fz0 = p.fz0_m ?? 1
     // friction at a vertical load of (g + rho clA/m v^2) per unit mass, shared by four wheels
     const muAt = (mu: number, v2: number) => mu * Math.max(0.5, 1 - ls * ((g + rho * p.clA_m * v2) / (4 * fz0) - 1))
+    // cornering: the car's measured lateral capability (lat), else the traction model's
+    const latMu = p.lat?.mu ?? p.mu,
+      latClA = p.lat?.clA_m ?? p.clA_m
+    const muLat = (v2: number) => latMu * Math.max(0.5, 1 - ls * ((g + rho * latClA * v2) / (4 * fz0) - 1))
+    const jerk = p.lat?.jerk ?? 0
     for (let i = 0; i < n; i++) {
       const k = Math.abs(this.racingCurv[i])
+      // how quickly the curvature changes here (1/m^2): in a direction change the car needs time to
+      // roll, yaw and move its load across, so lateral grip is derated by the lateral jerk v^3 dk/ds
+      const dk = jerk > 0 ? Math.abs(this.racingCurv[(i + 3) % n] - this.racingCurv[(i - 3 + n) % n]) / (6 * DS) : 0
       // k v^2 = mu(v) (g + c v^2): fixed point on v^2 (mu falls slowly with v^2, converges in a few steps)
       let v2 = 95 * 95
-      for (let it = 0; it < 8; it++) {
-        const mu = muAt(p.mu, v2)
-        const den = k - mu * rho * p.clA_m
+      for (let it = 0; it < 10; it++) {
+        const der = jerk > 0 ? 1 / (1 + (v2 * Math.sqrt(v2) * dk) / jerk) : 1
+        const mu = muLat(v2) * der
+        const den = k - mu * rho * latClA
         v2 = den <= 1e-6 ? 95 * 95 : Math.min(95 * 95, (mu * g) / den)
       }
       v[i] = Math.sqrt(v2)
@@ -679,7 +688,9 @@ export class Track implements Ground {
         const va = v[a]
         const latG = va * va * Math.abs(this.racingCurv[a])
         const maxA = muAt(p.mu, va * va) * (g + rho * p.clA_m * va * va)
-        const avail = Math.sqrt(Math.max(0, maxA * maxA - latG * latG)) * 0.75
+        // traction left over by the cornering, as a share of the car's lateral capability
+        const fl = Math.min(1, latG / (muLat(va * va) * (g + rho * latClA * va * va)))
+        const avail = maxA * Math.sqrt(1 - fl * fl) * 0.75
         const powerA = p.power_m / Math.max(va, 5)
         const acc = Math.min(avail, powerA) - rho * p.cdA_m * va * va
         const vn = Math.sqrt(Math.max(0, va * va + 2 * acc * DS))
@@ -702,7 +713,7 @@ export class Track implements Ground {
         }
         // braking left over by the cornering: friction ellipse (trailExp 0.5), or less when the rear
         // axle, unloaded by the braking, limits combined braking and turning (trailExp > 0.5)
-        const f = Math.min(1, latG / maxA)
+        const f = Math.min(1, Math.max(latG / maxA, latG / (muLat(vb * vb) * (g + rho * latClA * vb * vb))))
         const avail = maxA * Math.pow(1 - f * f, p.trailExp ?? 0.5) * 0.9 + rho * p.cdA_m * vb * vb
         const vn = Math.sqrt(vb * vb + 2 * avail * DS)
         if (vn < v[i]) v[i] = vn

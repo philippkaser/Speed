@@ -15,10 +15,15 @@ export interface TrafficCar {
 
 /** Share of the tyre's peak friction the AI's speed profile plans with (cornering / braking). */
 export const GRIP_SHARE = 0.94
-/** The share of the downforce's grip the speed plan counts on. Calibrated on the fast corners of the
- *  minimum-curvature line (150-230 km/h): with all of it the car reaches the limit mid-corner with no margin
- *  for the line's transients and spins; the old inside line had no corner above 140 km/h to show it. */
-export const AERO_GRIP_SHARE = 0.35
+/** The car's steady-state cornering capability, fitted to the skidpad of scripts/physics-audit.ts (Vanta GT3
+ *  on 18/57/126/250 m circles: 1.55/1.63/1.76/2.13 g at 60/109/169/260 km/h, fit rms 0.01 g): the compound's
+ *  peak friction scaled by LAT_MU_CAL (load transfer across the axles, slip-angle spread) and the
+ *  downforce by LAT_AERO_CAL (pitch / ride height at speed). LAT_SHARE: the driver's share of it. */
+export const LAT_MU_CAL = 0.9125
+export const LAT_AERO_CAL = 0.77
+export const LAT_SHARE = 0.96
+/** lateral jerk (m/s^3) at which a direction change halves the usable lateral grip */
+export const LAT_JERK = 30
 export const BRAKE_SHARE = 0.89
 /** Wheel power at full throttle, averaged over the shift band with drivetrain and rolling losses,
  * as a share of the engine's peak (measured on the straights by scripts/ai-lap-trace.ts: 0.78). */
@@ -38,7 +43,8 @@ export function speedProfileFor(v: Vehicle, track: Track, skill = 1, out?: Float
   return track.computeSpeedProfile(
     {
       mu: cp.mu * GRIP_SHARE * skill,
-      clA_m: ((v.clAF + v.clAR) / m) * AERO_GRIP_SHARE,
+      clA_m: (v.clAF + v.clAR) / m,
+      lat: { mu: cp.mu * LAT_MU_CAL * LAT_SHARE * skill, clA_m: ((v.clAF + v.clAR) / m) * LAT_AERO_CAL, jerk: LAT_JERK },
       power_m: peakPower / m,
       cdA_m: v.cdA / m,
       brakeMu: cp.mu * BRAKE_SHARE * skill,
@@ -206,7 +212,7 @@ export class AIDriver {
     let chi = course - psiLine
     chi -= Math.round(chi / (2 * Math.PI)) * 2 * Math.PI
     const e = this.d - lineD0
-    const Lc = 7 + 0.3 * speed
+    const Lc = 7 + 0.25 * speed
     const kFF = tr.racingCurv[tr.idx(this.s + 2 + speed * 0.2)]
     // far off the line (rejoining from the grass or the pit exit): converge at a bounded angle
     // instead of a full-lock dart across the track
@@ -225,7 +231,7 @@ export class AIDriver {
     // 0..1: how far the rear is past its working range (a slide to catch)
     const slide = clamp((Math.abs(betaR) - 0.09) / 0.07, 0, 1)
     this.slide = slide
-    if (speed > 4 && !frontSat && slide === 0) this.us = clamp(this.us + dErr * dt * 5, -0.12, 0.12)
+    if (speed > 4 && !frontSat && slide === 0) this.us = clamp(this.us + dErr * dt * 8, -0.12, 0.12)
     else if (speed <= 4) this.us *= 0.9
     let delta = Math.atan(L * kCmd) + this.us + 0.6 * dErr
     // counter-steer on a rear slide (body slip at the rear axle beyond the tyres' working range)

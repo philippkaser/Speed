@@ -109,6 +109,7 @@ function angleDiff(a: number, b: number) {
 
 interface Frame {
   t: number
+  kerb: boolean
   sx: number
   sy: number
   yaw: number
@@ -167,7 +168,7 @@ function film(world: PhysicsWorld, sim: SimCar, impl: CamImpl, mode: DriveCam, f
     const heading = Math.atan2(v.fwd.x, v.fwd.z)
     const vl = v.vel.x * v.left.x + v.vel.z * v.left.z,
       vf = v.vel.x * v.fwd.x + v.vel.z * v.fwd.z
-    out.push({ t: time, sx: ((p.x + 1) / 2) * W, sy: ((1 - p.y) / 2) * H, yaw: yawAcc, pitch: Math.asin(clamp(f.y, -1, 1)), camY: cam.position.y, fov: cam.fov, shown: angleDiff(heading, y), slip: Math.atan2(vl, Math.max(Math.abs(vf), 1)) })
+    out.push({ kerb: car.kerb > 0, t: time, sx: ((p.x + 1) / 2) * W, sy: ((1 - p.y) / 2) * H, yaw: yawAcc, pitch: Math.asin(clamp(f.y, -1, 1)), camY: cam.position.y, fov: cam.fov, shown: angleDiff(heading, y), slip: Math.atan2(vl, Math.max(Math.abs(vf), 1)) })
   }
   return out
 }
@@ -177,7 +178,7 @@ function film(world: PhysicsWorld, sim: SimCar, impl: CamImpl, mode: DriveCam, f
  * +-0.25 s, so the road's slopes and crests (slow, curved trends) do not count as jolts, and uneven
  * frame times do not either.
  */
-function hf(fr: Frame[], get: (f: Frame) => number) {
+function hf(fr: Frame[], get: (f: Frame) => number, offKerb = false) {
   const n = fr.length
   let sum = 0,
     cnt = 0
@@ -188,6 +189,11 @@ function hf(fr: Frame[], get: (f: Frame) => number) {
     if (t0 - fr[0].t < 0.25 || fr[n - 1].t - t0 < 0.25) continue
     while (fr[lo].t < t0 - 0.25) lo++
     while (hi < n - 1 && fr[hi + 1].t <= t0 + 0.25) hi++
+    if (offKerb) {
+      let k = false
+      for (let j = lo; j <= hi && !k; j++) k = fr[j].kerb
+      if (k) continue
+    }
     // normal equations of y = a + b u + c u^2, u = t - t0
     let s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, y0 = 0, y1 = 0, y2 = 0
     for (let j = lo; j <= hi; j++) {
@@ -209,6 +215,8 @@ function hf(fr: Frame[], get: (f: Frame) => number) {
 
 export interface CamMetrics {
   'car jitter px': number
+  /** the same, leaving out +-0.25 s around any wheel on a kerb (the car's real vibration there) */
+  'car jitter px off kerbs': number
   'frame jitter deg': number
   'frame bob mm': number
   'car drift x px': number
@@ -222,6 +230,7 @@ function metrics(fr: Frame[], skip = 0.5): CamMetrics {
     my = f.reduce((a, x) => a + x.sy, 0) / f.length
   return {
     'car jitter px': Math.hypot(hf(f, (x) => x.sx), hf(f, (x) => x.sy)),
+    'car jitter px off kerbs': Math.hypot(hf(f, (x) => x.sx, true), hf(f, (x) => x.sy, true)),
     'frame jitter deg': Math.hypot(hf(f, (x) => x.yaw), hf(f, (x) => x.pitch)) * DEG,
     'frame bob mm': hf(f, (x) => x.camY) * 1000,
     'car drift x px': Math.max(...f.map((x) => Math.abs(x.sx - mx))),
