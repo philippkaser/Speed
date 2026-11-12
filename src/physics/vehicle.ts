@@ -157,7 +157,10 @@ interface HullPoint {
 }
 
 export interface VehicleEnv {
-  slipstream: number // 0..1 drag reduction factor from car ahead
+  /** fraction of the drag removed by the wake of a car ahead (slipstream) */
+  dragCut: number
+  /** fraction of the front downforce lost in a car ahead's dirty air */
+  frontWash: number
 }
 
 const _env = new Float64Array(8)
@@ -638,7 +641,8 @@ export class Vehicle {
 
     // ---------------------------------------------------------------- aero
     const vf2 = vf * vf
-    const slip = env?.slipstream ?? 0
+    const dragCut = env?.dragCut ?? 0
+    const wash = env?.frontWash ?? 0
     const q = 0.5 * AIR_DENSITY
     let rhF = 0,
       rhR = 0
@@ -667,12 +671,12 @@ export class Vehicle {
     const yawFactor = Math.max(0.25, Math.cos(beta) ** 2 * (1 - 0.9 * Math.min(beta, 0.5)))
     const rollAng = (this.wheels[0].c - this.wheels[1].c + this.wheels[2].c - this.wheels[3].c) / (sp.trackFront + sp.trackRear)
     const rollFactor = clamp(1 - 6 * rollAng * rollAng, 0.7, 1)
-    const dfF = q * this.clAF * groundEffect(rhF, ref, 0.03) * (1 + 1.4 * rake) * vf2 * yawFactor * rollFactor * (1 - slip * 0.25)
-    const dfR = q * this.clAR * groundEffect(rhR * 0.85 + rhF * 0.15, ref * 1.05, 0.035) * (1 - 0.7 * rake) * vf2 * yawFactor * rollFactor * (1 - slip * 0.1)
+    const dfF = q * this.clAF * groundEffect(rhF, ref, 0.03) * (1 + 1.4 * rake) * vf2 * yawFactor * rollFactor * (1 - wash)
+    const dfR = q * this.clAR * groundEffect(rhR * 0.85 + rhF * 0.15, ref * 1.05, 0.035) * (1 - 0.7 * rake) * vf2 * yawFactor * rollFactor * (1 - wash * 0.3)
     this.downforce = dfF + dfR
     this.aeroBalance = this.downforce > 1 ? dfF / this.downforce : this.clAF / (this.clAF + this.clAR)
     // drag
-    const cd = this.cdA * (1 - slip * 0.38) * (1 + 2.5 * beta * beta)
+    const cd = this.cdA * (1 - dragCut) * (1 + 2.5 * beta * beta)
     const spd = this.speed
     this.dragForce = q * cd * spd * spd
     // The front/rear downforce coefficients are axle loads as a rolling-road balance measures them:
@@ -680,7 +684,7 @@ export class Vehicle {
     // line of action (CoG + dragHeight), so that moment is taken back out of the axle split here;
     // otherwise it would be counted twice and the high-speed balance would drift ~6 % rearwards.
     // (straight-line drag only: the extra drag of a yawed car is not in the balance's axle loads)
-    const dragShift = (q * this.cdA * (1 - slip * 0.38) * vf * Math.abs(vf) * (sp.cgHeight + ae.dragHeight)) / sp.wheelbase
+    const dragShift = (q * this.cdA * (1 - dragCut) * vf * Math.abs(vf) * (sp.cgHeight + ae.dragHeight)) / sp.wheelbase
     // downforce along -up at axle positions
     this.applyBodyForceAtLocal(0, 0, this.a, -(dfF + dragShift), up)
     this.applyBodyForceAtLocal(0, 0, -this.b, -(dfR - dragShift), up)

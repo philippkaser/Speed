@@ -8,6 +8,7 @@ import { CARS, getCar } from '../src/physics/spec'
 import { RIBS, TyreModel } from '../src/physics/tyre'
 import { makeInput, Vehicle } from '../src/physics/vehicle'
 import { PhysicsWorld, PHYSICS_DT } from '../src/physics/world'
+import { V3 } from '../src/physics/math'
 import { Track } from '../src/track/track'
 import { TRACKS } from '../src/track/trackDef'
 
@@ -100,6 +101,26 @@ const yawRate = (v: Vehicle) => v.w.x * v.up.x + v.w.y * v.up.y + v.w.z * v.up.z
 const heading = (v: Vehicle) => Math.atan2(v.fwd.x, v.fwd.z)
 const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a))
 const roadSteer = (v: Vehicle) => (v.wheels[0].steer + v.wheels[1].steer) / 2
+
+// ---------------------------------------------------------------- slipstream / dirty air
+function tow(gap: number) {
+  const { world, v, car } = setup(undefined, { tc: 3 })
+  car.input.throttle = 1
+  const body = { id: 'lead', pos: new V3(), vel: new V3(), fwd: new V3(), halfLength: 2.3, halfWidth: 1, active: gap > 0 }
+  world.kinematics.push(body)
+  let vmax = 0
+  let v20 = 0
+  run(world, quick ? 25 : 60, (t) => {
+    if (t <= 10) v20 = v.speed * 3.6
+    body.fwd.copy(v.fwd)
+    body.pos.copy(v.pos).add(_tw.copy(v.fwd).scale(gap + 4.6))
+    body.vel.copy(v.vel)
+    world.updateWakes(PHYSICS_DT)
+    vmax = Math.max(vmax, v.speed * 3.6)
+  })
+  return { vmax, v20, drag: car.dragCut, wash: car.frontWash }
+}
+const _tw = new V3()
 
 // ---------------------------------------------------------------- straight line
 function acceleration(tc: number) {
@@ -533,6 +554,11 @@ row('0-200 km/h (TC3)', `${f(acc.t200)} s`, '10-11 s')
 row('top speed', `${f(acc.vmax, 0)} km/h`, '270-290')
 const acc0 = acceleration(0)
 row('0-100 km/h (TC off)', `${f(acc0.t100)} s`, '3.2-3.6 s')
+{
+  const t0 = tow(0)
+  const tw = [10, 20, 40].map((g) => ({ g, ...tow(g) }))
+  row('slipstream (gap 10/20/40 m)', tw.map((t) => `drag -${f(t.drag * 100, 0)}% frontDF -${f(t.wash * 100, 0)}% v(10 s) +${f(t.v20 - t0.v20, 1)} vmax +${f(t.vmax - t0.vmax, 1)} km/h`).join('  '), '~-25%/-20%/-12% drag; DF -10%/-2%/0')
+}
 for (const k of [100, 200]) {
   const b = braking(k)
   row(`${k}-0 km/h braking (ABS)`, `${f(b.d, 1)} m  peak ${f(b.peak)} g  mean ${f(b.mean)} g`, k === 100 ? '~30-33 m, 1.5-1.7 g' : '~70-80 m, peak 2.2-2.6 g')

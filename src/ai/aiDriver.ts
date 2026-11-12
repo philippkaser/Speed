@@ -155,7 +155,10 @@ export class AIDriver {
       if (ds > tr.length / 2) ds -= tr.length
       const lat = o.d - this.d
       const alat = Math.abs(lat)
-      if (ds > 0 && ds < 120 && alat < 2.3) {
+      // a car much slower than us ahead (spun, sideways, crawling back) may lie across the track:
+      // treat it as wider than a car on its line
+      const pathW = o.speed < speed * 0.6 && speed > 10 ? 3.6 : 2.3
+      if (ds > 0 && ds < 120 && alat < pathW) {
         const gap = ds - 4.8
         const gapMin = 1.2 + 0.18 * speed
         blockSpeed = Math.min(blockSpeed, Math.sqrt(Math.max(0, o.speed * o.speed + 2 * aB * (gap - gapMin))))

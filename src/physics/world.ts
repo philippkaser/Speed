@@ -8,6 +8,16 @@ export const PHYSICS_HZ = 600
 export const PHYSICS_DT = 1 / PHYSICS_HZ
 
 /** A body that takes part in collisions but is driven externally (network players). */
+// Wake behind a car (measured trends for GT/single-seater wakes, sized for a GT3): drag cut ~30 %
+// a car length behind, ~20 % at 20 m, under 5 % past ~100 m; front downforce lost in the
+// turbulent, slower air close behind: ~20 % at one car length, ~10 % at two, gone by ~40 m
+export const WAKE_DRAG = 0.32
+export const WAKE_DRAG_LEN = 40
+export const WAKE_FRONT_DF = 0.25
+export const WAKE_DF_LEN = 10
+const WAKE_REACH = 120
+const _wake = { drag: 0, wash: 0 }
+
 export interface KinematicBody {
   id: string
   pos: V3
@@ -32,7 +42,12 @@ export class SimCar {
   prevPos = new V3()
   prevQuat = new Quat()
   hullSamples: GroundSample[] = []
+  /** 0..1 strength of the tow (for HUD / audio) */
   slipstream = 0
+  /** fraction of the drag removed by the wake of a car ahead */
+  dragCut = 0
+  /** fraction of the front downforce lost in the dirty air of a car ahead */
+  frontWash = 0
   frozen = false // e.g. on the grid before the start
   /** pose driven from outside (pit lane): no dynamics, no collisions */
   scripted = false
@@ -101,7 +116,7 @@ export class PhysicsWorld {
       }
     }
     this.alpha = this.accumulator / PHYSICS_DT
-    if (n > 0) this.computeSlipstream()
+    if (n > 0) this.updateWakes(n * PHYSICS_DT)
     return n
   }
 
@@ -280,28 +295,55 @@ export class PhysicsWorld {
     if (jn > 50) this.events.push({ x: res.px, y: a.pos.y, z: res.pz, impulse: jn, kind: 'car', car: ai })
   }
 
-  private computeSlipstream() {
-    const all: { pos: V3; fwd: V3 }[] = [...this.cars.map((c) => c.vehicle), ...this.kinematics.filter((k) => k.active)]
+  /** Wake of the car (or kinematic body) at (ox, oz) heading (fx, fz) at speed vo, felt by car c:
+   * accumulates the strongest drag cut and front downforce loss. */
+  private wakeFrom(c: SimCar, ox: number, oz: number, fx: number, fz: number, vo: number, halfLen: number) {
+    const v = c.vehicle
+    const dx = ox - v.pos.x,
+      dz = oz - v.pos.z
+    // gap from our nose to its tail, measured along its heading (the wake trails behind it)
+    const gap = dx * fx + dz * fz - halfLen - 2.3
+    if (gap < 0 || gap > WAKE_REACH) return
+    // following the same way only (a car crossing or coming back does not tow)
+    if (v.fwd.x * fx + v.fwd.z * fz < 0.8) return
+    // the wake widens behind the car: ~a car's width close up, ~4 m wide 80 m back
+    const lat = Math.abs(dx * fz - dz * fx)
+    const half = 1.0 + 0.012 * gap
+    if (lat > half + 0.8) return
+    const latF = lat < half ? 1 : 1 - (lat - half) / 0.8
+    // the wake's strength scales with the leader's dynamic pressure relative to ours
+    const qr = Math.min(1, (vo * vo) / Math.max(1, v.speed * v.speed))
+    const drag = WAKE_DRAG * Math.exp(-gap / WAKE_DRAG_LEN) * latF * qr
+    const wash = WAKE_FRONT_DF * Math.exp(-gap / WAKE_DF_LEN) * latF * qr
+    if (drag > _wake.drag) _wake.drag = drag
+    if (wash > _wake.wash) _wake.wash = wash
+  }
+
+  /** Slipstream and dirty air for every car: O(n^2) over 12 cars with early outs, no allocation. */
+  updateWakes(dt: number) {
+    const k = 1 - Math.exp(-dt / 0.15)
     for (const c of this.cars) {
       const v = c.vehicle
-      let best = 0
-      if (v.speed > 20) {
-        for (const o of all) {
-          if (o === v) continue
-          const dx = o.pos.x - v.pos.x,
-            dz = o.pos.z - v.pos.z
-          const along = dx * v.fwd.x + dz * v.fwd.z
-          if (along < 3 || along > 45) continue
-          const lat = Math.abs(dx * v.fwd.z - dz * v.fwd.x)
-          const cone = 1.2 + along * 0.03
-          if (lat > cone) continue
-          const f = (1 - along / 45) * (1 - lat / cone)
-          if (f > best) best = f
+      _wake.drag = 0
+      _wake.wash = 0
+      if (v.speed > 15 && !c.scripted) {
+        for (const o of this.cars) {
+          if (o === c || o.scripted) continue
+          const ov = o.vehicle
+          this.wakeFrom(c, ov.pos.x, ov.pos.z, ov.fwd.x, ov.fwd.z, ov.speed, 2.3)
+        }
+        for (const o of this.kinematics) {
+          if (!o.active) continue
+          const fl = Math.hypot(o.fwd.x, o.fwd.z) || 1
+          this.wakeFrom(c, o.pos.x, o.pos.z, o.fwd.x / fl, o.fwd.z / fl, Math.hypot(o.vel.x, o.vel.z), o.halfLength)
         }
       }
-      c.slipstream += (clamp(best, 0, 1) - c.slipstream) * 0.1
+      c.dragCut += (_wake.drag - c.dragCut) * k
+      c.frontWash += (_wake.wash - c.frontWash) * k
+      c.slipstream = clamp(c.dragCut / WAKE_DRAG, 0, 1)
     }
   }
+
 }
 
 const _res = { nx: 0, nz: 0, depth: 0, px: 0, pz: 0 }
