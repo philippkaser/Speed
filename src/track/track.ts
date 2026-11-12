@@ -715,7 +715,7 @@ export class Track implements Ground {
   /** Quasi steady-state lap speed profile along the racing line. */
   /** loadSens / fz0_m: the tyre's friction loss per unit of load above its nominal load (fz0_m = nominal
    *  wheel load / car mass), so downforce adds grip with the same diminishing return as in the tyre model */
-  computeSpeedProfile(p: { mu: number; clA_m: number; power_m: number; cdA_m: number; brakeMu: number; loadSens?: number; fz0_m?: number; trailExp?: number; lat?: { mu: number; clA_m: number; jerk?: number }; rearBrake?: { wr: number; bf: number; hL: number; aeroR: number; mu: number } }, out?: Float32Array, curv: Float32Array = this.racingCurv) {
+  computeSpeedProfile(p: { mu: number; clA_m: number; power_m: number; cdA_m: number; brakeMu: number; loadSens?: number; fz0_m?: number; trailExp?: number; lat?: { mu: number; clA_m: number; jerk?: number }; rearBrake?: { wr: number; bf: number; hL: number; aeroR: number; mu: number }; noAccel?: boolean }, out?: Float32Array, curv: Float32Array = this.racingCurv) {
     const n = this.n
     const v = out ?? new Float32Array(n)
     const g = 9.81
@@ -744,8 +744,9 @@ export class Track implements Ground {
       }
       v[i] = Math.sqrt(v2)
     }
-    // forward pass (acceleration limited by traction circle and power)
-    for (let pass = 0; pass < 2; pass++)
+    // forward pass (acceleration limited by traction circle and power); without it (noAccel) the result
+    // is the limit: the fastest the car may be anywhere and still make the corners ahead
+    for (let pass = 0; pass < (p.noAccel ? 0 : 2); pass++)
       for (let j = 0; j < n; j++) {
         const i = (j + 1) % n,
           a = j

@@ -35,7 +35,7 @@ export const POWER_SHARE = 0.79
 export const TRAIL_EXP = 1
 
 /** Quasi-steady-state target speed along the racing line for a given car. */
-export function speedProfileFor(v: Vehicle, track: Track, skill = 1, out?: Float32Array, curv?: Float32Array) {
+export function speedProfileFor(v: Vehicle, track: Track, skill = 1, out?: Float32Array, curv?: Float32Array, noAccel = false) {
   const sp = v.spec
   const cp = COMPOUNDS[v.setup.compound] ?? COMPOUNDS.RM
   const m = v.totalMass
@@ -58,6 +58,7 @@ export function speedProfileFor(v: Vehicle, track: Track, skill = 1, out?: Float
         aeroR: v.clAR / Math.max(v.clAF + v.clAR, 1e-6),
         mu: cp.mu * cp.muLong * REAR_BRAKE_SHARE * skill,
       },
+      noAccel,
     },
     out ?? new Float32Array(track.n),
     curv,
@@ -70,6 +71,11 @@ export class AIDriver {
   /** speed plans on the left / right lane lines (track.laneL / laneR) */
   profL: Float32Array
   profR: Float32Array
+  /** the same three lines' limits: corner speeds and braking curves without the acceleration a car manages
+   *  alone (on a straight the plan is what it reaches by itself, not a limit: in a tow it runs faster) */
+  limit: Float32Array
+  limL: Float32Array
+  limR: Float32Array
   /** 0..1: blend from the ideal line to the lane line on side `lane` (+1 left, -1 right) */
   w = 0
   lane = 0
@@ -91,6 +97,8 @@ export class AIDriver {
   aheadId = ''
   /** the car being attacked (kept while pulled out beside it, cleared when the move is over) */
   attackId = ''
+  /** the car alongside this driver has given the corner to (it lifts until that car is clear) */
+  yieldId = ''
   /** diagnostics: the speed target was cut by a car ahead (or one alongside owning a corner) this step */
   held = false
   aheadDs = Infinity
@@ -124,6 +132,9 @@ export class AIDriver {
     this.profile = new Float32Array(track.n)
     this.profL = new Float32Array(track.n)
     this.profR = new Float32Array(track.n)
+    this.limit = new Float32Array(track.n)
+    this.limL = new Float32Array(track.n)
+    this.limR = new Float32Array(track.n)
     this.rebuildProfile()
     vehicle.assists = { abs: true, tc: 2, steering: 0, autoGear: true, stability: false }
     // race cars (sequential box): shift like a racing driver; road cars keep their road schedule
@@ -135,6 +146,9 @@ export class AIDriver {
     speedProfileFor(this.vehicle, this.track, this.skill, this.profile)
     speedProfileFor(this.vehicle, this.track, this.skill, this.profL, this.track.laneLCurv)
     speedProfileFor(this.vehicle, this.track, this.skill, this.profR, this.track.laneRCurv)
+    speedProfileFor(this.vehicle, this.track, this.skill, this.limit, undefined, true)
+    speedProfileFor(this.vehicle, this.track, this.skill, this.limL, this.track.laneLCurv, true)
+    speedProfileFor(this.vehicle, this.track, this.skill, this.limR, this.track.laneRCurv, true)
     const v = this.vehicle
     const cp = COMPOUNDS[v.setup.compound] ?? COMPOUNDS.RM
     const m = v.totalMass
@@ -167,11 +181,22 @@ export class AIDriver {
     if (this.ws <= 0) return k
     return k + this.ws * ((this.lane > 0 ? tr.laneLCurv[i] : tr.laneRCurv[i]) - k)
   }
-  /** Speed plan of the line the car is on: the ideal line's, the lane's, the lower of the two while blending. */
+  /** Speed plan of the line the car is on: the ideal line's, the lane's, and between the two the speed of
+   *  the blended curvature (corner speed^2 goes as 1 / curvature, so 1 / v^2 blends as the curvature
+   *  does), less up to 3 % for the lateral move of the blend itself. */
   planAt(i: number) {
     if (this.ws <= 0) return this.profile[i]
-    const pl = this.lane > 0 ? this.profL[i] : this.profR[i]
-    return this.ws >= 0.999 ? pl : Math.min(pl, this.profile[i])
+    return this.blendV(this.profile[i], this.lane > 0 ? this.profL[i] : this.profR[i])
+  }
+  private blendV(a: number, b: number) {
+    const w = this.ws
+    if (w >= 0.999) return b
+    return (1 - 0.12 * w * (1 - w)) / Math.sqrt((1 - w) / (a * a) + w / (b * b))
+  }
+  /** The limit of the line the car is on (see planAt). */
+  limAt(i: number) {
+    if (this.ws <= 0) return this.limit[i]
+    return this.blendV(this.limit[i], this.lane > 0 ? this.limL[i] : this.limR[i])
   }
   /** No other car on the lane line on `side` from just behind us to past the car we attack. */
   laneFree(traffic: TrafficCar[], side: number, blockerDs: number) {
@@ -201,6 +226,16 @@ export class AIDriver {
       }
     }
     return kMax > 1 / 150 ? side : 0
+  }
+  /** Metres of straight left on the ideal line: to where its plan falls below `speed` (the braking zone)
+   *  or it turns tighter than R 300 m, up to 400. */
+  straightLeft(speed: number) {
+    const tr = this.track
+    for (let x = 0; x < 400; x += 8) {
+      const j = tr.idx(this.s + x)
+      if (this.profile[j] < speed - 3 || Math.abs(tr.racingCurv[j]) > 1 / 300) return x
+    }
+    return 400
   }
   /** Time (s) the lane plan `prof` loses to the ideal line's over the next 300 m from sample i0. */
   laneLoss(prof: Float32Array, i0: number) {
@@ -277,8 +312,16 @@ export class AIDriver {
       clearBehind = true,
       blockerV = 0,
       blockerId = '',
+      blockerGapMin = 0,
       tgtDs = Infinity,
-      concedeV = Infinity
+      tgtV = 0,
+      concedeV = Infinity,
+      concedeId = '',
+      yielding = false,
+      // found on first need: the straight left (m), the tow's share (0..1), the next corner's inside
+      toBrake = -1,
+      tow = 0,
+      inside = 2
     for (const o of traffic) {
       if (o.id === this.id) continue
       let ds = o.s - this.s
@@ -286,25 +329,59 @@ export class AIDriver {
       if (ds > tr.length / 2) ds -= tr.length
       const lat = o.d - this.d
       const alat = Math.abs(lat)
-      if (o.id === this.attackId) tgtDs = ds
+      if (o.id === this.attackId) {
+        tgtDs = ds
+        tgtV = o.speed
+      }
       // alongside with its nose ahead into a corner: its corner (lifts to it, applied below if a corner is near)
       // (a clear lift, so the pair resolves: otherwise both run on their lanes at lane pace, side by side)
-      if (ds > 1.5 && ds < 7 && alat > 1.6 && alat < 9) concedeV = Math.min(concedeV, o.speed - 1)
       // which side of it we are on (ties broken by id, so the two cars agree)
       const mySide = lat < 0 || (lat === 0 && this.id > o.id) ? 1 : -1
+      // the corner belongs to the car on the inside if its nose is past the other's rear axle (an overlap
+      // of ~1.5 m) at turn-in, else to the car ahead: the other lifts and follows it through
+      // (decided once, at turn-in, and kept through a sequence of corners until the pair is apart: the
+      // inside changes sides in an S-bend)
+      if (ds > -7 && ds < 7 && alat > 1.6 && alat < 9) {
+        if (o.id === this.yieldId) {
+          // (not if it has dropped back or is itself slowing: then the corner is ours after all)
+          if (ds > -3.3 && o.speed > speed - 3) {
+            yielding = true
+            concedeV = Math.min(concedeV, o.speed - 1)
+          }
+        } else {
+          // (the corner looked for from the leading car's position, so the two agree on it)
+          if (inside === 2) inside = this.insideSide(Math.max(ds, 0), Math.max(ds, 0) + 40 + 2 * speed)
+          const lim = inside === 0 ? 1.5 : mySide === inside ? 3.3 : -3.3
+          if (ds > lim && o.speed - 1 < concedeV) {
+            concedeV = o.speed - 1
+            concedeId = o.id
+          }
+        }
+      }
       // a car much slower than us ahead (spun, sideways, crawling back) may lie across the track:
       // treat it as wider than a car on its line (a yellow flag: it may be coming back across)
       const pathW = o.speed < speed * 0.6 && speed > 10 ? 4.8 : 2.3
       if (ds > 0 && ds < 120 && alat < pathW) {
         const gap = ds - 4.8
-        const gapMin = 1.2 + 0.18 * speed
-        blockSpeed = Math.min(blockSpeed, Math.sqrt(Math.max(0, o.speed * o.speed + 2 * aB * (gap - gapMin))))
+        // in its tow on a straight (no braking zone or corner for the next seconds, the car ahead at racing
+        // speed): it will not brake, so the driver tucks in to about a car's length and may close on it at
+        // what a lift takes off again within the gap (a run), instead of what a full stop would need
+        if (toBrake < 0) {
+          toBrake = this.straightLeft(speed)
+          tow = speed > 30 ? clamp((toBrake / speed - 2) / 1.5, 0, 1) : 0
+        }
+        const share = o.speed > 0.85 * speed ? tow : 0
+        const gapStrict = 1.2 + 0.18 * speed
+        const gapMin = gapStrict + share * (2 + 0.06 * speed - gapStrict)
+        const strict = Math.sqrt(Math.max(0, o.speed * o.speed + 2 * aB * (gap - gapMin)))
+        blockSpeed = Math.min(blockSpeed, share > 0 ? strict + share * Math.max(0, o.speed + Math.sqrt(10 * Math.max(0, gap - gapMin)) - strict) : strict)
         // held up (within a few car lengths at similar speed) or closing: a car to pass
         if (ds < blockerDs && ds > 6 && ds < 20 + speed * 0.5 && (speed - o.speed > 0.3 || gap < gapMin + 6)) {
           blockerDs = ds
           blockerD = o.d
           blockerV = o.speed
           blockerId = o.id
+          blockerGapMin = gapMin
         }
         // dirty air within ~1.5 car lengths (the physics' wake: front downforce lost, decaying over 10 m)
         if (gap < 12 && alat < 1.8) wash = Math.max(wash, 0.25 * Math.exp(-Math.max(0, gap) / 10) * Math.min(1, (o.speed * o.speed) / Math.max(1, speed * speed)))
@@ -330,7 +407,9 @@ export class AIDriver {
         }
       }
       // still sharing the road: hold the lane until it is a safe gap ahead or behind
-      if (Math.abs(ds) < safe && alat < 9) holdSide = mySide
+      // (the car behind until the other's tail is past its nose: then it falls in behind it; the car ahead
+      // until it is clear of the other's nose by half a car's length and whatever the other closes in a second)
+      if (alat < 9 && (ds > 0 ? ds < 6.5 : -ds < 7.5 + closing)) holdSide = mySide
       if (ds < -6 && ds > -30 && alat < 2.5 && o.speed > speed + 0.3) threat = true
       if (ds < 0 && ds > -40) anyBehind = true
       if (ds < 0 && ds > -150) clearBehind = false
@@ -373,14 +452,16 @@ export class AIDriver {
       // the car beside is not yet a safe gap away
       want = 1
       wantSide = holdSide
-    } else if (this.mode === 2 && this.lane !== 0 && tgtDs > -safe && tgtDs < 30 + 0.6 * speed && (this.w > 0.5 || this.laneFree(traffic, this.lane, Math.max(0, tgtDs))) && (tgtDs < 7 || this.laneLoss(this.lane > 0 ? this.profL : this.profR, i00) < 0.25)) {
-      // pulled out beside the car it attacks (no longer in its path): stay on the move, unless not yet
-      // alongside and the lane runs into a corner where it only loses ground (back in behind)
+    } else if (this.mode === 2 && this.lane !== 0 && tgtDs > -safe && tgtDs < 11 + 0.12 * speed + 1.5 * Math.max(0, speed - tgtV) && (this.w > 0.5 || this.laneFree(traffic, this.lane, Math.max(0, tgtDs))) && (tgtDs < (this.lane === this.insideSide(0, 300) ? 14 : 7) || this.laneLoss(this.lane > 0 ? this.profL : this.profR, i00) < 0.25)) {
+      // pulled out beside the car it attacks (no longer in its path): stay on the move while within two or
+      // three car lengths of it or closing (further back the move is over: back into its tow), unless not
+      // yet alongside and the lane runs into a corner where it only loses ground (back in behind)
       want = 1
       wantSide = this.lane
       this.gate = 5
-    } else if (blockerDs < Infinity && tr.laneTwo[tr.idx(this.s + blockerDs)] && blockerDs - 4.8 > 1.2 + 0.18 * speed + 8 && this.mode !== 2) {
-      // closing in its tow: stay in it, pull out late
+    } else if (blockerDs < Infinity && tr.laneTwo[tr.idx(this.s + blockerDs)] && this.mode !== 2 && blockerDs - 4.8 > blockerGapMin + 1.5 + 0.6 * Math.max(0, speed - blockerV) && !(toBrake > 0.8 * speed && toBrake < 4.5 * speed && blockerDs - 4.8 < 6 + 0.12 * speed)) {
+      // closing in its tow: stay in it and pull out late, with the run it gives (about half a second
+      // before the gap is gone), or, close behind it with the braking zone a few seconds off, for the inside
       this.gate = 6
       this.mode = 0
     } else if (blockerDs < Infinity && tr.laneTwo[tr.idx(this.s + blockerDs)]) {
@@ -393,8 +474,12 @@ export class AIDriver {
       const cL = this.laneLoss(this.profL, i00),
         cR = this.laneLoss(this.profR, i00)
       let side = Math.abs(cL - cR) < 0.05 ? away : cL < cR ? 1 : -1
-      if (!this.laneFree(traffic, side, blockerDs) && this.laneFree(traffic, -side, blockerDs)) side = -side
-      if (Math.min(cL, cR) < 0.25 && (side > 0 ? cL : cR) < 0.25 && this.laneFree(traffic, side, blockerDs) && this.canMeet(side > 0 ? this.profL : this.profR, i00, speed)) {
+      // close behind it into a braking zone: the inside of the corner, whatever the lane loses there (the
+      // corner is the inside car's if it gets its nose alongside)
+      const lunge = toBrake > 0.8 * speed && toBrake < 4.5 * speed && blockerDs - 4.8 < 6 + 0.12 * speed ? this.insideSide(0, toBrake + 150) : 0
+      if (lunge !== 0) side = lunge
+      else if (!this.laneFree(traffic, side, blockerDs) && this.laneFree(traffic, -side, blockerDs)) side = -side
+      if ((lunge !== 0 || (Math.min(cL, cR) < 0.25 && (side > 0 ? cL : cR) < 0.25)) && this.laneFree(traffic, side, blockerDs) && this.canMeet(side > 0 ? this.limL : this.limR, i00, speed)) {
         this.mode = 2
         want = 1
         wantSide = side
@@ -404,12 +489,13 @@ export class AIDriver {
         this.gate = this.laneFree(traffic, side, blockerDs) ? 3 : 2
         this.mode = 0
       }
-    } else if (this.mode === 3 && anyBehind) {
+    } else if (this.mode === 3 && anyBehind && this.insideSide(0, 90) === this.lane) {
+      // (the defence is for one corner: held to its apex, then back to the ideal line)
       want = 1
     } else if (threat && !this.defended && this.w < 0.02) {
       // defence: one early move to the inside lane of the next corner, then hold
       const side = this.insideSide(20, 160)
-      if (side !== 0 && this.canMeet(side > 0 ? this.profL : this.profR, i00, speed)) {
+      if (side !== 0 && this.canMeet(side > 0 ? this.limL : this.limR, i00, speed)) {
         this.defended = true
         this.mode = 3
         want = 1
@@ -431,7 +517,14 @@ export class AIDriver {
       cornerSoon = Math.max(Math.abs(tr.racingCurv[j]), Math.abs(this.curvAt(j))) > 1 / 250 || this.planAt(j) < speed - 4
     }
     // (at turn-in: the corner within ~0.6 s)
-    if (concedeV < Infinity && Math.abs(this.curvAt(tr.idx(this.s + 0.6 * speed))) > 1 / 150) blockSpeed = Math.min(blockSpeed, concedeV)
+    if (yielding) blockSpeed = Math.min(blockSpeed, concedeV)
+    else {
+      this.yieldId = ''
+      if (concedeId !== '' && Math.abs(this.curvAt(tr.idx(this.s + 0.6 * speed))) > 1 / 150) {
+        blockSpeed = Math.min(blockSpeed, concedeV)
+        this.yieldId = concedeId
+      }
+    }
     // back to the ideal line off the corners; with nobody around (free), gently through them too (a lane
     // line is ~4 % slower: held on it until the next straight, a car lost seconds a lap in clear air)
     // (except crossing over to make room for a car alongside on the side it was on: frozen part way, the
@@ -519,6 +612,12 @@ export class AIDriver {
       kB = this.curvAt(iB)
     let pa = this.planAt(iA) * Math.sqrt(clamp(1 - kA * (this.lineAt(iA) - this.nominalAt(iA)), 0.5, 1))
     let pb = this.planAt(iB) * Math.sqrt(clamp(1 - kB * (this.lineAt(iB) - this.nominalAt(iB)), 0.5, 1))
+    // on a straight the plan is the speed the car reaches alone, not a limit: with a tow it runs on at full
+    // throttle and brakes where its own braking curve says
+    if (Math.abs(kA) < 1 / 500 && Math.abs(kB) < 1 / 500) {
+      pa = Math.max(pa, this.limAt(iA))
+      pb = Math.max(pb, this.limAt(iB))
+    }
     // dirty air: the front downforce lost (share `wash`) takes the cornering speed from v^2 to
     // v^2 g / (g + rho clA wash v^2) on a grip-limited (front-limited) corner
     if (wash > 0.01) {
@@ -557,7 +656,7 @@ export class AIDriver {
     const gf = Math.min(w[0].tyre.gripFactor, w[1].tyre.gripFactor, w[2].tyre.gripFactor, w[3].tyre.gripFactor)
     this.grip += ((1 - 0.4 * clamp(hot, 0, 1)) * clamp(gf / 0.85, 0.5, 1) - this.grip) * clamp(dt * 2, 0, 1)
     vt *= Math.sqrt(this.grip)
-    this.held = blockSpeed < vt
+    this.held = blockSpeed < Math.min(vt, speed + 2)
     vt = Math.min(vt, blockSpeed)
     let aCmd = (pb * pb - pa * pa) / (2 * dA)
     if (vt < pa) aCmd = Math.min(aCmd, 0)
