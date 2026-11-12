@@ -116,7 +116,7 @@ function lawnTone(xz: N): N {
   const n2 = mx_noise_float(vec3(xz.x.mul(0.035), 4.5, xz.y.mul(0.035))).mul(0.5).add(0.5)
   // and patches a few metres across: clover, thinner and lusher spots
   const n3 = mx_noise_float(vec3(xz.x.mul(0.21), 7.5, xz.y.mul(0.21))).mul(0.5).add(0.5)
-  return mix(vec3(0.84, 0.93, 0.8), vec3(1.08, 1.03, 0.84), n).mul(mix(float(0.84), float(1.08), n2)).mul(mix(vec3(0.86, 0.9, 0.86), vec3(1.06, 1.04, 0.94), n3))
+  return mix(vec3(0.84, 0.93, 0.8), vec3(1.08, 1.03, 0.84), n).mul(mix(float(0.84), float(1.08), n2)).mul(mix(vec3(0.8, 0.88, 0.8), vec3(1.1, 1.07, 0.92), n3))
 }
 
 /** Grass ground (photo-scanned), a little greener than the dry scan, with patches of leafy ground. */
@@ -426,7 +426,7 @@ export function vergeMaterial() {
 /** Drier, straw-coloured patches a couple of metres across (shared with the 3D grass standing there). */
 function dryTone(xz: N): N {
   const dry = smoothstep(0.15, 0.6, mx_noise_float(vec3(xz.x.mul(0.45), 6.2, xz.y.mul(0.45))))
-  return mix(vec3(1), vec3(1.1, 1.03, 0.74), dry.mul(0.6))
+  return mix(vec3(1), vec3(1.14, 1.04, 0.7), dry.mul(0.75))
 }
 
 /**
@@ -456,7 +456,9 @@ function grassColor(leafy: N = float(0)) {
   const dist = length(positionWorld.sub(cameraPosition))
   const far = smoothstep(120, 900, dist)
   col = mix(col, col.mul(0.25).add(vec3(0.05, 0.065, 0.026).mul(mix(float(0.85), float(1.15), n))), far.mul(0.6))
-  return { color: col, rough: g.rough, nxy: mix(g.nxy, vec2(0.5, 0.5), far), relief: t.relief }
+  // living blades are waxy: a lawn seen towards the sun is clearly lighter, a silvery sheen at grazing
+  // angles (the scan's roughness is the dry, matte photographed ground's)
+  return { color: col, rough: g.rough.mul(0.68).max(0.42), nxy: mix(g.nxy, vec2(0.5, 0.5), far), relief: t.relief }
 }
 
 export function terrainMaterial() {

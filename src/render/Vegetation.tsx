@@ -94,6 +94,32 @@ const lensOf = (camera: THREE.Camera) => {
  */
 const vertexPos = (): N => attribute('position', 'vec3')
 
+/**
+ * The crowns as volumes of leaves: an ellipsoid per model (centre height, vertical and horizontal
+ * radius, in the model's units). Sunlight reaching a leaf has crossed the crown between it and the sun;
+ * the shadow cascades are far too coarse for that self-shadowing, so it is analytic (crownSunPath).
+ */
+const CROWN: Record<string, [number, number, number]> = { pine: [8, 7, 4.2], broadleaf: [10, 6, 6.2] }
+/** extinction of sunlight per metre of crown (gaps between the leaf clumps let some through) */
+const CROWN_K = 0.42
+
+/**
+ * Metres of crown the sunlight crosses to reach q (q: offset from the crown's centre in units of its
+ * radii, world axes; r: the radii in metres).
+ */
+/** skylight inside the crown: little in its core and under it, all on its rim and top */
+function crownSky(q: N): N {
+  return mix(float(0.28), float(1), smoothstep(0.25, 1.0, q.length())).mul(mix(float(0.6), float(1), smoothstep(-0.9, 0.3, q.y)))
+}
+
+function crownSunPath(q: N, r: N): N {
+  const Lq = vegSunDir.div(r)
+  const a = dot(Lq, Lq),
+    b = dot(q, Lq),
+    c = dot(q, q).sub(1)
+  return b.negate().add(max(b.mul(b).sub(a.mul(c)), 0).sqrt()).div(a).max(0)
+}
+
 /** Interleaved gradient noise: the dither of the cross-fades (stable per pixel). */
 const ign = (p: N) => fract(float(52.9829189).mul(fract(p.x.mul(0.06711056).add(p.y.mul(0.00583715)))))
 
@@ -124,16 +150,28 @@ function placeTrees(track: Track, heights: TerrainHeight, density: number) {
       const px = x + (r() - 0.5) * step,
         pz = z + (r() - 0.5) * step
       const forest = forestNoise(px, pz)
-      if (forest < 0.48) continue
+      if (forest < 0.36) continue
       track.sample(px, pz, s)
       const S = s.d >= 0 ? track.L : track.R
       const wall = S.wall[track.idx(s.s)]
       const ad = Math.abs(s.d)
       // a ragged forest edge: bays and promontories tens of metres deep, not a hedge along the barrier
       const bay = Math.max(0, valueNoise2(px * 0.012 + 4.4, pz * 0.012 - 2.2) - 0.35) * 55
-      if (ad < wall + 14 + bay + r() * 14) continue
+      const cut = wall + 14 + bay + r() * 14
       // keep the inside of the start straight clear for the grandstands & pits
       if ((s.s > track.length - 420 || s.s < 460) && ad < wall + 90) continue
+      if (forest < 0.48 || ad < cut) {
+        // the forest's edge: a mantle of shrubs and saplings where it meets the meadow (squat, young
+        // broadleaves), not trunks standing straight out of mown grass
+        if (ad < Math.max(wall + 7, cut - 9) || forest < 0.36 + r() * 0.06) continue
+        for (let k = 0, n = 2 + Math.floor(r() * 2.5); k < n; k++) {
+          const bx = px + (r() - 0.5) * step,
+            bz = pz + (r() - 0.5) * step
+          const bs = 0.22 + 0.24 * r()
+          broad.push(bx, heights.height(bx, bz) - 0.25 - bs * 3, bz, r() * Math.PI * 2, bs, bs * (0.45 + r() * 0.3), r(), r() * 6.283)
+        }
+        continue
+      }
       if (r() > treeChance(forest)) continue
       const y = heights.height(px, pz)
       // stands of one species blending into each other (no clean borders)
@@ -188,6 +226,18 @@ function placeGrass(track: Track, density: number) {
         const x = Math.sin((behind * Math.PI) / 2.5) / 0.3
         const stripe = behind > 0 ? 0.2 : Math.min(1, Math.max(0, x * 0.5 + 0.5))
         out.push(p.x, p.y - 0.02, p.z, r() * Math.PI * 2, sc, sy, stripe * 0.85 + r() * 0.15, r() * 6.283)
+      }
+      // the sward's own edge: the mower leaves a ragged fringe of longer grass whose blades lean over
+      // the worn margin and, in places, the edge of the asphalt (no ruler-straight line)
+      if (gravel) continue
+      for (let k = 0; k < 2; k++) {
+        const sc = 0.85 + r() * 0.4
+        const dd = edge - 0.3 + sc * (0.12 + r() * 0.5)
+        if (side > 0 && sw > -830 && sw < 330 && Math.abs(dd - lane.roadD(sw)) < 7) continue
+        if (side > 0 && sw > -270 && sw < 80 && dd > wall - 1) continue
+        if (side < 0 && sw > -190 && sw < 240 && dd > wall) continue
+        track.pointAt(s + (r() - 0.5) * step, side * dd, p)
+        out.push(p.x, p.y - 0.02, p.z, r() * Math.PI * 2, sc, 0.3 + r() * 0.16, 0.35 + r() * 0.3, r() * 6.283)
       }
     }
   }
@@ -488,6 +538,8 @@ interface VegMaterialOpts {
   roughLeaf: number
   /** crown radius for the canopy's ambient occlusion (0: none) */
   crown: number
+  /** the crown's volume (CROWN): self-shadowing and skylight occlusion inside it */
+  shape?: [number, number, number]
   /** grass: shrink with the fade instead of only dithering */
   shrink?: boolean
   /** grass: colour from the ground under the patch, detail from the blades */
@@ -538,7 +590,26 @@ function vegMaterial(o: VegMaterialOpts) {
     // per tree: value and hue (olive-yellow .. blue-green), the same hash as its impostor's
     const h1 = fract(sin(dot(iA.xz, vec2(12.9898, 78.233))).mul(43758.5453))
     const h2 = fract(h1.mul(23.17).add(0.31))
-    albedo = albedo.mul(mix(vec3(1), mix(vec3(1.1, 1.04, 0.78), vec3(0.84, 0.97, 1.1), h2).mul(mix(float(0.68), float(1.18), h1)), leaf))
+    albedo = albedo.mul(mix(vec3(1), mix(vec3(1.14, 1.05, 0.7), vec3(0.8, 0.96, 1.12), h2).mul(mix(float(0.6), float(1.2), h1)), leaf))
+  }
+  let crownQ: N = undefined
+  if (o.shape) {
+    const [cy, ry, rxz] = o.shape
+    const pl: N = vertexPos()
+    const cs = cos(tf.iA.w),
+      sn = sin(tf.iA.w)
+    const ql = pl.sub(vec3(0, cy, 0)).div(vec3(rxz, ry, rxz))
+    // leaf clumps (one per card, roughly) catch more or less light through the gaps, and differ a
+    // little in colour: the crown breaks up into masses instead of one lump
+    const hc = fract(sin(dot(floor(pl.mul(0.9)) as N, vec3(12.9898, 78.233, 37.719))).mul(43758.5453))
+    // one varying (the stages share few): the offset in crown radii (world axes) and the clump's hash
+    const vq: N = varying(vec4(ql.x.mul(cs).sub(ql.z.mul(sn)), ql.y, ql.x.mul(sn).add(ql.z.mul(cs)), hc), 'vCrown')
+    crownQ = vq.xyz
+    const clump: N = vq.w
+    const rW = vec3(rxz, ry, rxz).mul(vec3(tf.iB.x, tf.iB.y, tf.iB.x))
+    const path: N = crownSunPath(crownQ, rW).mul(mix(float(0.5), float(1.5), clump))
+    setSunShadowTerm(m, path.mul(-CROWN_K).exp())
+    albedo = albedo.mul(mix(float(1), mix(float(0.82), float(1.12), clump), leaf))
   }
   m.colorNode = vec4(albedo, tex.a)
   m.roughnessNode = mix(float(o.roughTrunk), float(o.roughLeaf), leaf)
@@ -555,6 +626,8 @@ function vegMaterial(o: VegMaterialOpts) {
     // ambient occlusion inside the crown: darker towards the trunk and the bottom of the canopy
     const radial = vertexPos().xz.length().div(o.crown).clamp(0, 1)
     m.aoNode = mix(float(1), mix(float(0.45), float(1), radial).mul(mix(float(0.75), float(1), tf.w.x)), leaf)
+    // the sky is hidden deep inside the crown and under it
+    if (crownQ) m.aoNode = mix(float(1), crownSky(crownQ), leaf)
   }
   if (o.canopy) {
     const h = tf.w.x.clamp(0, 1)
@@ -824,10 +897,8 @@ function cascadeOf(camera: THREE.Camera | undefined) {
 const impostorsForAll: N = (uniform(0) as N).onObjectUpdate((frame: { camera?: THREE.Camera }) => (frame.camera && (frame.camera.userData.probe || cascadeOf(frame.camera) >= 2) ? 1 : 0))
 
 /** One quad per tree (all species), facing the camera about its vertical axis. */
-function impostorMaterial(imp: Impostors, fadeIn: [number, number], maxDist: number, tints: THREE.Color[][]) {
+function impostorMaterial(imp: Impostors, fadeIn: [number, number], maxDist: number, tints: THREE.Color[][], shapes: [number, number, number][]) {
   const m = new THREE.MeshStandardNodeMaterial({ side: THREE.DoubleSide, alphaTest: 0.4 })
-  // distant trees stand in each other's shadows (sunShadow.ts)
-  setSunShadowTerm(m, farTreeShadow())
   const iA: N = attribute('iA', 'vec4'),
     iB: N = attribute('iB', 'vec4')
   const species = iB.w.floor()
@@ -872,13 +943,28 @@ function impostorMaterial(imp: Impostors, fadeIn: [number, number], maxDist: num
   // per tree: value and hue (olive-yellow .. blue-green) from a hash of its position
   const h1 = fract(sin(dot(iA.xz, vec2(12.9898, 78.233))).mul(43758.5453))
   const h2 = fract(h1.mul(23.17).add(0.31))
-  const hue = mix(vec3(1.1, 1.04, 0.78), vec3(0.84, 0.97, 1.1), h2)
-  const val = mix(float(0.68), float(1.18), h1)
+  const hue = mix(vec3(1.14, 1.05, 0.7), vec3(0.8, 0.96, 1.12), h2)
+  const val = mix(float(0.6), float(1.2), h1)
   // crown structure: the lower crown and the dense core darker (self-shadowed), the thin rim lighter
   const ly: N = varying(corner.y.mul(0.5).add(0.5), 'vImpY')
   const core = smoothstep(0.75, 1.0, alpha)
   const shade = mix(float(0.55), float(1), smoothstep(0.0, 0.6, ly)).mul(mix(float(1), float(0.72), core))
   const albT = alb.mul(alb).mul(tn).mul(hue).mul(val)
+  // the crown's volume as the meshes have it (CROWN): the visible leaf is taken on the crown's front
+  // surface (deeper where the foliage is dense), its sunlight attenuated by the crown in front of it
+  const shp: N = uniformArray(
+    shapes.map((v) => new THREE.Vector4(...v, 0)),
+    'vec4',
+  ).element(species.toInt())
+  const qx = corner.x.mul(fr.x).div(shp.z),
+    qy = fr.z.add(corner.y.mul(fr.y)).sub(shp.x).div(shp.y)
+  // one varying (the stages share few): the quad position in crown radii and the view's heading
+  const vq: N = varying(vec4(qx, qy, flatN.x, flatN.y), 'vImpCrown')
+  const qz = float(1).sub(vq.x.mul(vq.x)).sub(vq.y.mul(vq.y)).max(0).sqrt().mul(mix(float(1), float(0.45), core))
+  const q = vec3(vq.w, 0, vq.z.negate()).mul(vq.x).add(vec3(0, vq.y, 0)).add(vec3(vq.z, 0, vq.w).mul(qz))
+  const rW = vec3(shp.z, shp.y, shp.z).mul(vec3(sc, sy, sc))
+  // distant trees also stand in each other's shadows (sunShadow.ts)
+  setSunShadowTerm(m, farTreeShadow().mul(crownSunPath(q, rW).mul(-CROWN_K).exp()))
   m.colorNode = vec4(albT.mul(shade), alpha)
   // translucency: sunlight through the thin outer foliage, strongest looking towards the sun
   const V = normalize(positionWorld.sub(cameraPosition))
@@ -937,6 +1023,8 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
       broad = meshes.get('broadleaf'),
       grass = meshes.get('grass')
     const trees = placeTrees(track, heights, density)
+    // look development: the placed trees, for cameras aimed at them (scripts/shot.cjs evals)
+    ;(window as unknown as { __vegTrees?: unknown }).__vegTrees = trees
     const tints = [
       [new THREE.Color(0.78, 0.86, 0.74), new THREE.Color(1.02, 1.04, 0.92)],
       [new THREE.Color(0.85, 0.9, 0.7), new THREE.Color(1.08, 1.05, 0.82)],
@@ -950,7 +1038,7 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
           name: 'pine',
           instances: trees.conifers,
           geometry: pine.geometry,
-          material: vegMaterial({ atlas: pine.atlas, wind, alphaTest: 0.5, fadeOut: FADE, tintA: tints[0][0], tintB: tints[0][1], roughTrunk: 0.92, roughLeaf: 0.7, crown: 5 }),
+          material: vegMaterial({ atlas: pine.atlas, wind, alphaTest: 0.5, fadeOut: FADE, tintA: tints[0][0], tintB: tints[0][1], roughTrunk: 0.92, roughLeaf: 0.7, crown: 5, shape: CROWN.pine }),
           cell: 64,
           maxDist: NEAR_TREES,
           height: 23,
@@ -966,7 +1054,7 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
           name: 'broadleaf',
           instances: trees.broad,
           geometry: broad.geometry,
-          material: vegMaterial({ atlas: broad.atlas, wind: { ...wind, sway: 0.3, flutter: 0.05 }, alphaTest: 0.5, fadeOut: FADE, tintA: tints[1][0], tintB: tints[1][1], roughTrunk: 0.9, roughLeaf: 0.6, crown: 6 }),
+          material: vegMaterial({ atlas: broad.atlas, wind: { ...wind, sway: 0.3, flutter: 0.05 }, alphaTest: 0.5, fadeOut: FADE, tintA: tints[1][0], tintB: tints[1][1], roughTrunk: 0.9, roughLeaf: 0.6, crown: 6, shape: CROWN.broadleaf }),
           cell: 64,
           maxDist: NEAR_TREES,
           height: 17,
@@ -992,7 +1080,7 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
           name: 'impostors',
           instances: all,
           geometry: quad,
-          material: impostorMaterial(impostors, withMeshes ? FADE : [-2, -1], FAR_TREES, tints),
+          material: impostorMaterial(impostors, withMeshes ? FADE : [-2, -1], FAR_TREES, tints, [CROWN.pine, CROWN.broadleaf]),
           cell: 160,
           maxDist: FAR_TREES,
           height: 23,
@@ -1019,7 +1107,7 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
         tintB: new THREE.Color(0.98, 1.0, 0.94),
         groundColour: grassGroundColour,
         roughTrunk: 0.85,
-        roughLeaf: 0.85,
+        roughLeaf: 0.62,
         crown: 0,
         canopy: { root: 0.78, selfShadow: 0.75 },
         upNormal: 0.75,
