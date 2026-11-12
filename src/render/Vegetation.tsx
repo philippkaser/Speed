@@ -101,7 +101,9 @@ const vertexPos = (): N => attribute('position', 'vec3')
  */
 const CROWN: Record<string, [number, number, number]> = { pine: [8, 7, 4.2], broadleaf: [10, 6, 6.2] }
 /** extinction of sunlight per metre of crown (gaps between the leaf clumps let some through) */
-const CROWN_K = 0.42
+const CROWN_K = 0.34
+/** the outer shell of leaves (m) is lit in full: the ellipsoid is a little larger than the foliage */
+const CROWN_SHELL = 0.9
 
 /**
  * Metres of crown the sunlight crosses to reach q (q: offset from the crown's centre in units of its
@@ -608,7 +610,7 @@ function vegMaterial(o: VegMaterialOpts) {
     const clump: N = vq.w
     const rW = vec3(rxz, ry, rxz).mul(vec3(tf.iB.x, tf.iB.y, tf.iB.x))
     const path: N = crownSunPath(crownQ, rW).mul(mix(float(0.5), float(1.5), clump))
-    setSunShadowTerm(m, path.mul(-CROWN_K).exp())
+    setSunShadowTerm(m, path.sub(CROWN_SHELL).max(0).mul(-CROWN_K).exp())
     albedo = albedo.mul(mix(float(1), mix(float(0.82), float(1.12), clump), leaf))
   }
   m.colorNode = vec4(albedo, tex.a)
@@ -964,7 +966,7 @@ function impostorMaterial(imp: Impostors, fadeIn: [number, number], maxDist: num
   const q = vec3(vq.w, 0, vq.z.negate()).mul(vq.x).add(vec3(0, vq.y, 0)).add(vec3(vq.z, 0, vq.w).mul(qz))
   const rW = vec3(shp.z, shp.y, shp.z).mul(vec3(sc, sy, sc))
   // distant trees also stand in each other's shadows (sunShadow.ts)
-  setSunShadowTerm(m, farTreeShadow().mul(crownSunPath(q, rW).mul(-CROWN_K).exp()))
+  setSunShadowTerm(m, farTreeShadow().mul(crownSunPath(q, rW).sub(CROWN_SHELL).max(0).mul(-CROWN_K).exp()))
   m.colorNode = vec4(albT.mul(shade), alpha)
   // translucency: sunlight through the thin outer foliage, strongest looking towards the sun
   const V = normalize(positionWorld.sub(cameraPosition))
