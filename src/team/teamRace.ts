@@ -2,6 +2,7 @@
 // principal manages: fuel load and burn, tyre compounds with race-length scaled wear, driving
 // instructions, pit stops through the real pit lane (scripted path, box queueing, crew variance),
 // rival strategies, timing intervals, and the events the broadcast and the team radio are built from.
+import { raceRandom } from './rng'
 import type { CarEntry, Game, TeamRaceHooks } from '../game/game'
 import { clamp } from '../physics/math'
 import { COMPOUNDS } from '../physics/spec'
@@ -142,7 +143,7 @@ const AIR_LINES = {
   save: ['Understood, managing.', 'Copy, lifting and coasting.'],
   race: ['Copy, race pace.'],
 }
-const pick = (a: string[]) => a[Math.floor(Math.random() * a.length)]
+const pick = (a: string[]) => a[Math.floor(raceRandom() * a.length)]
 
 export class TeamRace implements TeamRaceHooks {
   rules: RaceRules
@@ -313,11 +314,11 @@ export class TeamRace implements TeamRaceHooks {
         if (racing && this.game.raceTime > 6 && ai.overdriveTime <= 0) {
           const fight = c.interval > 0 && c.interval < 0.8 ? 1.6 : 1
           const hazard = 0.0028 * MODES[c.mode].risk * (1.35 - c.driver.consistency) * (1 + 5 * Math.max(0, 0.95 - c.grip)) * fight
-          if (Math.random() < hazard * dt) {
+          if (raceRandom() < hazard * dt) {
             // only matters on the way into a braking zone
             const i = tr.idx(c.entry.timing.s + 40 + v.speed * 0.8)
             if (ai.profile[i] < v.speed - 6) {
-              ai.overdrive = 0.06 + Math.random() * 0.08
+              ai.overdrive = 0.06 + raceRandom() * 0.08
               ai.overdriveTime = 1.6
               c.lastMistakeAt = this.game.raceTime
               this.emit({ kind: 'mistake', car: c.id })
@@ -502,9 +503,9 @@ export class TeamRace implements TeamRaceHooks {
     const p = c.pit!
     const fuel = Math.max(0, Math.min(p.fuel, this.rules.tank - c.vehicle.fuel))
     p.fuel = fuel
-    const crew = 0.92 + Math.random() * 0.2
-    p.slow = Math.random() < 0.06
-    const tyres = this.rules.tyreTime * crew + (p.slow ? 2 + Math.random() * 4 : 0)
+    const crew = 0.92 + raceRandom() * 0.2
+    p.slow = raceRandom() < 0.06
+    const tyres = this.rules.tyreTime * crew + (p.slow ? 2 + raceRandom() * 4 : 0)
     p.serviceTotal = 0.6 + Math.max(tyres, fuel / this.rules.refuelRate)
     p.serviceLeft = p.serviceTotal
     p.speed = 0

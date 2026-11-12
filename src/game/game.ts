@@ -1,5 +1,6 @@
 // Imperative game runtime. Owns the track, the physics world, cars (player / AI / remote),
 // timing and race flow. React reads from it through refs and a lightweight store.
+import { raceRandom } from '../team/rng'
 import { AIDriver, type TrafficCar } from '../ai/aiDriver'
 import { ffb } from '../input/ffb'
 import { input } from '../input/input'
@@ -304,7 +305,7 @@ export class Game {
       sim.frozen = true
     })
     this.phase = 'grid'
-    this.countdown = this.countdownTotal = TEAM_COUNTDOWN + 0.3 + Math.random() * 1.1
+    this.countdown = this.countdownTotal = TEAM_COUNTDOWN + 0.3 + raceRandom() * 1.1
     for (const c of this.cars) this.initTiming(c)
     this.version++
     this.emit({ type: 'session' })

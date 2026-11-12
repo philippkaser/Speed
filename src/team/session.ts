@@ -1,4 +1,5 @@
 // Builds a team race: qualifying order, rival strategies, the grid, the race engine.
+import { raceRandom, seedRace } from './rng'
 import { game, type TeamEntryConfig } from '../game/game'
 import { getCar } from '../physics/spec'
 import { useGameStore } from '../state/gameStore'
@@ -22,9 +23,11 @@ export function teamRace(): TeamRace | null {
 
 export const lastGrid: { slots: GridSlot[] } = { slots: [] }
 
-export function startTeamRace() {
+/** `seed`: the race's random seed (grid, driver errors, pit crews); by default the season round. */
+export function startTeamRace(seed?: number) {
   const ts = useTeamStore.getState()
   const round = SEASON[Math.min(ts.round, SEASON.length - 1)]
+  seedRace(seed ?? 0x5eed + ts.round * 7919)
   const laps = round.laps
   const rules = raceRules(laps)
   const teams = allTeams(ts.team)
@@ -35,7 +38,7 @@ export function startTeamRace() {
   const cands = optimise(rules)
   const rivalStrategy = (k: number): Strategy => {
     const top = cands.slice(0, Math.min(6, cands.length))
-    const c = top[(k * 3 + Math.floor(Math.random() * 3)) % top.length]
+    const c = top[(k * 3 + Math.floor(raceRandom() * 3)) % top.length]
     return structuredClone(c.strategy)
   }
 
@@ -50,7 +53,7 @@ export function startTeamRace() {
       const skill = driverSkill(dr)
       const strategy = mine ? structuredClone(ts.strategies[idx]) : rivalStrategy(k++)
       setup.compound = strategy.startCompound
-      const qualy = estimateLap(track, TEAM_CAR, { ...setup, compound: 'RS' }, skill + 0.004) + (Math.random() - 0.5) * 0.45 - dr.consistency * 0.1
+      const qualy = estimateLap(track, TEAM_CAR, { ...setup, compound: 'RS' }, skill + 0.004) + (raceRandom() - 0.5) * 0.45 - dr.consistency * 0.1
       slots.push({
         id: `${team.id}-${dr.id}`,
         team,

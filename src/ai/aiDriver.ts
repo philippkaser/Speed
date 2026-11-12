@@ -72,6 +72,9 @@ export class AIDriver {
   private thrCap = 1
   private brkCap = 1
   private slide = 0
+  private passSide = 0
+  private lo = -Infinity
+  private hi = Infinity
   private grip = 1
   private muBrk = 1.5
   private clA_m = 0
@@ -110,7 +113,9 @@ export class AIDriver {
   /** Target lateral position at sample i: racing line plus the traffic offset, inside the track. */
   lineAt(i: number) {
     const hw = this.track.hw[i]
-    return clamp(this.track.racing[i] + this.offset, -hw + 1.2, hw - 1.2)
+    const a = Math.max(-hw + 1.2, this.lo),
+      b = Math.min(hw - 1.2, this.hi)
+    return a <= b ? clamp(this.track.racing[i] + this.offset, a, b) : 0.5 * (a + b)
   }
 
   /** Compute controls for this frame. */
@@ -130,34 +135,51 @@ export class AIDriver {
       return
     }
 
-    // ---- traffic: pick a lane to pass slower cars ahead
+    // ---- traffic
+    // following: never closer than the braking distance allows (the car ahead may brake as hard as
+    // we can, or earlier), a short time gap behind it; passing: pull out to the side with room when
+    // faster, the slipstream does the rest; alongside: leave a car's width (bounds on the line)
     let blockSpeed = Infinity
     let wantOffset = 0
     let alongside = false
+    let lo = -Infinity,
+      hi = Infinity
+    const aB = 0.7 * this.muBrk * (9.81 + 0.6 * this.clA_m * speed * speed)
+    let passTarget = false
     for (const o of traffic) {
       if (o.id === this.id) continue
       let ds = o.s - this.s
       if (ds < -tr.length / 2) ds += tr.length
       if (ds > tr.length / 2) ds -= tr.length
       const lat = o.d - this.d
-      if (ds > 0 && ds < 30 + speed * 0.6 && Math.abs(lat) < 3.2) {
-        const closing = speed - o.speed
-        if (closing > -1) {
-          // move to the side with more room
+      const alat = Math.abs(lat)
+      if (ds > 0 && ds < 120 && alat < 2.3) {
+        const gap = ds - 4.8
+        const gapMin = 1.2 + 0.18 * speed
+        blockSpeed = Math.min(blockSpeed, Math.sqrt(Math.max(0, o.speed * o.speed + 2 * aB * (gap - gapMin))))
+        // a pass: closing, or held up (within a few car lengths at similar speed)
+        if (ds < 20 + speed * 0.5 && (speed - o.speed > 0.3 || gap < gapMin + 6)) {
+          passTarget = true
           const i = tr.idx(o.s)
           const roomLeft = tr.hw[i] - o.d
           const roomRight = tr.hw[i] + o.d
-          const side = roomLeft > roomRight ? 1 : -1
-          wantOffset = side * 3.3 * clamp(1 - ds / (40 + speed * 0.6), 0.2, 1)
-          if (ds < 12 + speed * 0.25 && Math.abs(lat) < 2.4) blockSpeed = Math.min(blockSpeed, o.speed - 0.5 + ds * 0.08)
+          if (this.passSide === 0) this.passSide = roomLeft > roomRight ? 1 : -1
+          const want = o.d + this.passSide * 2.6 - tr.racing[tr.idx(this.s)]
+          if (Math.abs(want) > Math.abs(wantOffset)) wantOffset = want
         }
       }
-      // side by side: keep away
-      if (Math.abs(ds) < 6 && Math.abs(lat) < 2.6) wantOffset += (lat > 0 ? -1 : 1) * 1.5
-      if (ds > -3 && ds < 9 && Math.abs(lat) > 1.6 && Math.abs(lat) < 4.5) alongside = true
+      // alongside: keep a car's width from it, whoever is ahead
+      if (ds > -5.5 && ds < 5.5 && alat >= 0.9) {
+        if (lat > 0) hi = Math.min(hi, o.d - 2.4)
+        else lo = Math.max(lo, o.d + 2.4)
+        if (ds > -3 && ds < 4) alongside = true
+      }
     }
+    if (!passTarget) this.passSide = 0
+    this.lo = lo
+    this.hi = hi
     this.targetOffset = wantOffset
-    this.offset = lerp(this.offset, this.targetOffset, clamp(dt * 1.2, 0, 1))
+    this.offset = lerp(this.offset, this.targetOffset, clamp(dt * 1.5, 0, 1))
 
     // ---- steering: path-following on the line (curvature feed-forward + lateral/course feedback)
     // and an inner path-curvature loop whose integrator learns the car's understeer at the limit.
@@ -176,7 +198,10 @@ export class AIDriver {
     const e = this.d - lineD0
     const Lc = 7 + 0.3 * speed
     const kFF = tr.racingCurv[tr.idx(this.s + 2 + speed * 0.1)]
-    let kCmd = kFF - e / (Lc * Lc) - (1.8 * Math.sin(chi)) / Lc
+    // far off the line (rejoining from the grass or the pit exit): converge at a bounded angle
+    // instead of a full-lock dart across the track
+    const eC = clamp(e, -2.5, 2.5)
+    let kCmd = kFF - eC / (Lc * Lc) - (1.8 * Math.sin(clamp(chi, -0.35, 0.35))) / Lc
     kCmd = clamp(kCmd, -0.25, 0.25)
     const L = v.spec.wheelbase
     const vRef = Math.max(vf, 3)
@@ -218,7 +243,7 @@ export class AIDriver {
     const lineErr = Math.abs(e)
     vt *= clamp(1 - Math.max(0, lineErr - 2) * 0.03, 0.75, 1)
     // a committed pass: out-brake the car alongside
-    if (alongside && this.attack > 0) vt *= 1 + 0.045 * this.attack
+    if (alongside && this.attack > 0) vt *= 1 + 0.015 * this.attack
     if (this.overdriveTime > 0) {
       this.overdriveTime -= dt
       vt *= 1 + this.overdrive

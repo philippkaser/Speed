@@ -1,9 +1,10 @@
 // Live commentary: broadcast lines from race events, optionally spoken (Web Speech API).
+import { raceRandom } from './rng'
 import { fmtTime } from '../ui/components'
 import { TYRES } from './strategy'
 import type { Stamped, TeamRace } from './teamRace'
 
-const one = <T,>(a: T[]) => a[Math.floor(Math.random() * a.length)]
+const one = <T,>(a: T[]) => a[Math.floor(raceRandom() * a.length)]
 
 export interface Line {
   text: string

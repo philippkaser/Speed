@@ -29,10 +29,10 @@ export interface AuditResult {
   fastContacts: number
 }
 
-export function raceAudit(laps = 4, opts: { slowPlayer?: boolean; fastLast?: boolean; quiet?: boolean } = {}): AuditResult {
+export function raceAudit(laps = 4, opts: { slowPlayer?: boolean; fastLast?: boolean; quiet?: boolean; seed?: number } = {}): AuditResult {
   SEASON[0].laps = laps
   useTeamStore.getState().newSeason()
-  const tr = startTeamRace()
+  const tr = startTeamRace(opts.seed)
   const log = opts.quiet ? () => {} : console.log
   const cars = tr.cars
   const N = cars.length
@@ -72,6 +72,7 @@ export function raceAudit(laps = 4, opts: { slowPlayer?: boolean; fastLast?: boo
   const off = new Uint8Array(N),
     spun = new Uint8Array(N)
   const stuckT = new Float64Array(N)
+  const spinAt = new Float64Array(N).fill(-1e9)
   const stuckFlag = new Uint8Array(N)
   const overtakes: { t: number; a: number; b: number }[] = []
   tr.on((e) => {
@@ -127,16 +128,20 @@ export function raceAudit(laps = 4, opts: { slowPlayer?: boolean; fastLast?: boo
     }
     for (let k = 0; k < N; k++) {
       const c = cars[k]
-      if (c.pit || c.retired || c.finished) { stuckT[k] = 0; continue }
+      // the pit road (and its merge, a few seconds after the stop) is not an off-track
+      if (c.pit || c.retired || c.finished || game.raceTime - c.lastPitAt < 6) { stuckT[k] = 0; continue }
       const v = c.entry.sim.vehicle
       const i = track.idx(c.entry.timing.s)
       const isOff = Math.abs(c.entry.sample.d) > track.hw[i] + 0.6
-      if (isOff && !off[k]) { r.offs++; if (lap1(k)) r.firstCorner++; log(`${fmt(t)}  off-track ${name(k)} s ${c.entry.timing.s.toFixed(0)}`) }
+      if (isOff && !off[k]) { r.offs++; if (lap1(k)) r.firstCorner++; log(`${fmt(t)}  off-track ${name(k)} s ${c.entry.timing.s.toFixed(0)} d ${c.entry.sample.d.toFixed(1)} v ${(v.speed * 3.6).toFixed(0)} since pit ${(t - c.lastPitAt).toFixed(1)}`) }
       off[k] = isOff ? 1 : 0
       const vf = v.vel.x * v.fwd.x + v.vel.z * v.fwd.z
       const vl = v.vel.x * v.left.x + v.vel.z * v.left.z
       const isSpin = v.speed > 5 && Math.abs(Math.atan2(vl, Math.abs(vf))) > (30 * Math.PI) / 180
-      if (isSpin && !spun[k]) { r.spins++; if (lap1(k)) r.firstCorner++; log(`${fmt(t)}  spin ${name(k)} s ${c.entry.timing.s.toFixed(0)}`) }
+      if (isSpin && !spun[k] && t - spinAt[k] > 8) {
+        spinAt[k] = t
+        r.spins++
+        if (lap1(k)) r.firstCorner++; log(`${fmt(t)}  spin ${name(k)} s ${c.entry.timing.s.toFixed(0)} d ${c.entry.sample.d.toFixed(1)} v ${(v.speed * 3.6).toFixed(0)} since pit ${(t - c.lastPitAt).toFixed(1)}`) }
       spun[k] = isSpin ? 1 : 0
       stuckT[k] = v.speed < 2 ? stuckT[k] + dt : 0
       if (stuckT[k] > 3 && !stuckFlag[k]) { stuckFlag[k] = 1; r.stuck++; log(`${fmt(t)}  STUCK ${name(k)} s ${c.entry.timing.s.toFixed(0)}`) }
@@ -173,5 +178,17 @@ export function raceAudit(laps = 4, opts: { slowPlayer?: boolean; fastLast?: boo
 
 if (import.meta.main) {
   const a = process.argv.slice(2)
-  raceAudit(+(a.find((x) => !x.startsWith('--')) ?? 4), { slowPlayer: a.includes('--slow-player'), fastLast: a.includes('--fast-last'), quiet: a.includes('--quiet') })
+  const laps = +(a.find((x) => !x.startsWith('--')) ?? 4)
+  const seeds = +(a.find((x) => x.startsWith('--seeds='))?.slice(8) ?? 1)
+  const opts = { slowPlayer: a.includes('--slow-player'), fastLast: a.includes('--fast-last'), quiet: a.includes('--quiet') || seeds > 1 }
+  const all: AuditResult[] = []
+  for (let k = 0; k < seeds; k++) all.push(raceAudit(laps, { ...opts, seed: seeds > 1 ? 1000 + k : undefined }))
+  if (seeds > 1) {
+    const sum = (f: (r: AuditResult) => number) => all.reduce((x, r) => x + f(r), 0)
+    const mx = (f: (r: AuditResult) => number) => Math.max(...all.map(f))
+    console.log(`${seeds} races x ${laps} laps: contacts ${sum((r) => r.contacts)} (${(sum((r) => r.contacts) / sum((r) => r.cars * r.laps)).toFixed(3)}/car/lap; nose-to-tail ${sum((r) => r.rearEnds)}, side ${sum((r) => r.sides)}, max rear closing ${(mx((r) => r.maxClosing) * 3.6).toFixed(0)} km/h)  off-tracks ${sum((r) => r.offs)}  spins ${sum((r) => r.spins)}  stuck ${sum((r) => r.stuck)}`)
+    console.log(`overtakes ${sum((r) => r.overtakes)} (clean ${sum((r) => r.cleanOvertakes)})  side-by-side ${sum((r) => r.sideBySide).toFixed(0)} s  first-corner incidents ${sum((r) => r.firstCorner)}`)
+    if (opts.slowPlayer) console.log(`slow player hit from behind ${sum((r) => r.slowHitFromBehind)}x, max closing ${(mx((r) => r.slowMaxClosing) * 3.6).toFixed(0)} km/h`)
+    if (opts.fastLast) console.log(`fast from last: gained ${all.map((r) => r.fastGained).join('/')} places, contacts ${all.map((r) => r.fastContacts).join('/')}`)
+  }
 }
