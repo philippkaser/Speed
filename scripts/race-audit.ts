@@ -85,6 +85,8 @@ export function raceAudit(laps = 4, opts: { slowPlayer?: boolean; fastLast?: boo
   const ids = cars.map((c) => c.id)
   const sim = game.cars.map((gc) => ids.indexOf(gc.id)) // game car index -> race car index
   let evSeen = 0
+  // the fast car's racecraft: time in the tow, attack gates, attacks started / completed / aborted
+  const fs = { tow: 0, follow: 0, gateT: [0, 0, 0, 0, 0, 0, 0], started: 0, done: 0, aborted: 0, abortWhy: [0, 0, 0, 0, 0, 0, 0], outDv: 0, outT: 0, inDv: 0, inT: 0, target: '' }
   const dt = 1 / 60
   const sdiff = (a: number, b: number) => {
     let d = a - b
@@ -128,7 +130,30 @@ export function raceAudit(laps = 4, opts: { slowPlayer?: boolean; fastLast?: boo
       if (lap1(a) || lap1(b)) r.firstCorner++
       if (front === slow && rear) { r.slowHitFromBehind++; r.slowMaxClosing = Math.max(r.slowMaxClosing, closing) }
       if (a === fast || b === fast) r.fastContacts++
-      log(`${fmt(t)}  contact ${rear ? 'nose-to-tail' : 'side'}  ${name(back)} -> ${name(front)}  closing ${(closing * 3.6).toFixed(0)} km/h  lat ${dd.toFixed(1)} m  s ${ea.timing.s.toFixed(0)}`)
+      log(`${fmt(t)}  contact ${rear ? 'nose-to-tail' : 'side'}  ${name(back)} -> ${name(front)}  closing ${(closing * 3.6).toFixed(0)} km/h  lat ${dd.toFixed(1)} m  s ${ea.timing.s.toFixed(0)}  ${[back, front].map((k) => { const ai = cars[k].entry.ai; return ai ? `${name(k)} d ${cars[k].entry.sample.d.toFixed(1)} m${ai.mode} l${ai.lane} w${ai.w.toFixed(2)}${ai.attackId ? ' atk' : ''}` : '' }).join(' | ')}`)
+    }
+    if (fast >= 0 && cars[fast].entry.ai && !cars[fast].pit) {
+      const ai = cars[fast].entry.ai!
+      const sp = cars[fast].entry.sim.vehicle.speed
+      if (ai.aheadDs < Infinity) {
+        fs.follow += dt
+        if ((ai.aheadDs - 4.8) / Math.max(sp, 1) < 1) fs.tow += dt
+        fs.gateT[ai.gate] += dt
+        if (Math.abs(track.racingCurv[track.idx(ai.s)]) < 1 / 400) {
+          if (ai.mode === 2 && ai.w > 0.7) { fs.outDv += (sp - ai.aheadV) * dt; fs.outT += dt }
+          else if (ai.w < 0.1 && ai.aheadDs < 30) { fs.inDv += (sp - ai.aheadV) * dt; fs.inT += dt }
+        }
+      }
+      if (ai.attackId !== '' && fs.target === '') { fs.started++; fs.target = ai.attackId }
+      if (ai.attackId !== fs.target && fs.target !== '') {
+        const tk = ids.indexOf(fs.target)
+        const passed = tk >= 0 && sdiff(cars[fast].entry.timing.s, cars[tk].entry.timing.s) > 0
+        if (passed) fs.done++
+        else { fs.aborted++; fs.abortWhy[ai.gate]++ }
+        fs.target = ai.attackId
+        if (fs.target !== '') fs.started++
+        log(`${fmt(t)}  attack ${passed ? 'done' : 'aborted (gate ' + ai.gate + ', mode ' + ai.mode + ')'} on ${tk >= 0 ? name(tk) : '?'} s ${ai.s.toFixed(0)}`)
+      }
     }
     for (let k = 0; k < N; k++) {
       const c = cars[k]
@@ -177,7 +202,11 @@ export function raceAudit(laps = 4, opts: { slowPlayer?: boolean; fastLast?: boo
     log(`\ncontacts ${r.contacts} (${perLap.toFixed(3)}/car/lap; nose-to-tail ${r.rearEnds}, side ${r.sides}; max rear closing ${(r.maxClosing * 3.6).toFixed(0)} km/h)  off-tracks ${r.offs}  spins ${r.spins}  stuck ${r.stuck}`)
     log(`overtakes ${r.overtakes} (clean ${r.cleanOvertakes})  side-by-side ${r.sideBySide.toFixed(1)} s  first-corner incidents ${r.firstCorner}  finishing spread ${r.spread.toFixed(1)} s`)
     if (slow >= 0) log(`slow player: hit from behind ${r.slowHitFromBehind}x, max closing ${(r.slowMaxClosing * 3.6).toFixed(0)} km/h`)
-    if (fast >= 0) log(`fast from last: gained ${r.fastGained} places, ${r.fastContacts} contacts`)
+    if (fast >= 0) {
+      log(`fast from last: gained ${r.fastGained} places, ${r.fastContacts} contacts`)
+      log(`  following ${fs.follow.toFixed(0)} s, within 1 s ${fs.tow.toFixed(0)} s; gate time (n/a, single file, lane taken, plan, held: corner, moving, towing) ${fs.gateT.map((x) => x.toFixed(0)).join('/')} s`)
+      log(`  attacks ${fs.started}: done ${fs.done}, aborted ${fs.aborted} (by gate ${fs.abortWhy.join('/')}); straights: pulled out ${(fs.outDv / Math.max(fs.outT, 1e-9) * 3.6).toFixed(1)} km/h faster than the car ahead (${fs.outT.toFixed(0)} s), in its tow ${(fs.inDv / Math.max(fs.inT, 1e-9) * 3.6).toFixed(1)} km/h (${fs.inT.toFixed(0)} s)`)
+    }
   }
   return r
 }
