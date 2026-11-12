@@ -164,8 +164,11 @@ function circle(R: number, startKmh: number, pin = true) {
   let best = 0,
     bestV = 0,
     bestSteer = 0,
-    sustained = 0
+    sustained = 0,
+    latF = 0,
+    steerF = 0
   const pts: [number, number][] = []
+  const held: [number, number][] = []
   run(world, 90, (t) => {
     if (pin) pinTemps(v)
     const c = circleSteer(v, R)
@@ -176,18 +179,27 @@ function circle(R: number, startKmh: number, pin = true) {
     car.input.brake = err < -1 ? Math.min(1, -err * 0.2) : 0
     if (Math.abs(c.ce) < 3 && Math.abs(c.he) < 0.15) {
       const lat = (v.speed * v.speed) / c.r / G
+      // the limit is the highest lateral g held for ~0.5 s (filtered), with the steering held there,
+      // not the spike of the moment the car leaves the circle with the steering winding on
+      latF += (lat - latF) * (PHYSICS_DT / 0.5)
+      steerF += (roadSteer(v) - steerF) * (PHYSICS_DT / 0.5)
       sustained++
       if (sustained > 600) {
-        if (lat > best) {
-          best = lat
+        if (latF > best) {
+          best = latF
           bestV = v.speed
-          bestSteer = roadSteer(v)
+          bestSteer = steerF
         }
         if (sustained % 60 === 0) pts.push([lat, roadSteer(v) - Math.atan(spec.wheelbase / c.r)])
+        if (sustained % 30 === 0) held.push([latF, steerF])
       }
-    } else sustained = 0
+    } else {
+      sustained = 0
+      latF = (v.speed * v.speed) / c.r / G
+      steerF = roadSteer(v)
+    }
     if (process.env.DIAG && Math.round(t * 600) % 1200 === 0)
-      console.log(`t ${f(t, 0)} v ${f(v.speed * 3.6, 0)} lat ${f((v.speed * v.speed) / c.r / G)} ay ${f(v.accelLat)} DF ${f(v.downforce, 0)} rh ${f(v.rideHeightF * 1000, 0)}/${f(v.rideHeightR * 1000, 0)} aF ${f(v.wheels[0].tyre.slipAngle / DEG, 1)}/${f(v.wheels[1].tyre.slipAngle / DEG, 1)} aR ${f(v.wheels[2].tyre.slipAngle / DEG, 1)}/${f(v.wheels[3].tyre.slipAngle / DEG, 1)} Fz ${v.wheels.map((w) => f(w.tyre.Fz, 0)).join('/')} d ${f(roadSteer(v) / DEG, 1)} ce ${f(c.ce, 1)} he ${f(c.he, 2)} thr ${f(car.input.throttle)} T ${f(v.wheels[1].tyre.surfTemp, 0)} lean ${v.wheels.map((w) => f(w.lean / DEG, 1)).join("/")} grip ${v.wheels.map((w) => f(w.tyre.gripFactor, 2)).join("/")} p ${f(v.wheels[1].tyre.pressure, 2)} rib ${Array.from(v.wheels[1].tyre.ribLoad).map((x) => f(x, 2)).join(",")} mu ${Array.from(v.wheels[1].tyre.ribMu).map((x) => f(x, 2)).join(",")} rT ${Array.from(v.wheels[1].tyre.ribSurf).map((x) => f(x, 0)).join(",")} opt ${f(v.wheels[1].model.optPressure, 2)} Fy ${v.wheels.map((w) => f(w.tyre.Fy, 0)).join("/")}`)
+      console.log(`t ${f(t, 0)} v ${f(v.speed * 3.6, 0)} lat ${f((v.speed * v.speed) / c.r / G)} ay ${f(v.accelLat)} DF ${f(v.downforce, 0)} bal ${f(v.aeroBalance)} drag ${f(v.dragForce, 0)} rh ${f(v.rideHeightF * 1000, 0)}/${f(v.rideHeightR * 1000, 0)} aF ${f(v.wheels[0].tyre.slipAngle / DEG, 1)}/${f(v.wheels[1].tyre.slipAngle / DEG, 1)} aR ${f(v.wheels[2].tyre.slipAngle / DEG, 1)}/${f(v.wheels[3].tyre.slipAngle / DEG, 1)} Fz ${v.wheels.map((w) => f(w.tyre.Fz, 0)).join('/')} d ${f(roadSteer(v) / DEG, 1)} ce ${f(c.ce, 1)} he ${f(c.he, 2)} thr ${f(car.input.throttle)} T ${f(v.wheels[1].tyre.surfTemp, 0)} lean ${v.wheels.map((w) => f(w.lean / DEG, 1)).join("/")} grip ${v.wheels.map((w) => f(w.tyre.gripFactor, 2)).join("/")} p ${f(v.wheels[1].tyre.pressure, 2)} rib ${Array.from(v.wheels[1].tyre.ribLoad).map((x) => f(x, 2)).join(",")} mu ${Array.from(v.wheels[1].tyre.ribMu).map((x) => f(x, 2)).join(",")} rT ${Array.from(v.wheels[1].tyre.ribSurf).map((x) => f(x, 0)).join(",")} opt ${f(v.wheels[1].model.optPressure, 2)} Fy ${v.wheels.map((w) => f(w.tyre.Fy, 0)).join("/")} Fx ${v.wheels.map((w) => f(w.tyre.Fx, 0)).join("/")} Mz ${v.wheels.map((w) => f(w.tyre.Mz, 0)).join("/")} beta ${f(Math.atan2(v.vel.x * v.left.x + v.vel.z * v.left.z, v.speed) / DEG, 2)}`)
     return Math.abs(c.ce) > 8
   })
   // understeer gradient: slope of (delta - L/R) vs ay over 30..80 % of the limit
@@ -204,7 +216,10 @@ function circle(R: number, startKmh: number, pin = true) {
     }
     K = sxy / sxx / DEG
   }
-  return { best, kmh: bestV * 3.6, steer: bestSteer / DEG, K }
+  // steering where the car first holds 98 % of its limit: past that point an understeering car only
+  // buys the last per cent with a lot more lock, which says little about its balance
+  const at98 = held.find((p) => p[0] >= best * 0.98)
+  return { best, kmh: bestV * 3.6, steer: (at98 ? at98[1] : bestSteer) / DEG, K }
 }
 
 // ---------------------------------------------------------------- step steer
@@ -229,9 +244,36 @@ function stepSteer(kmh: number, deltaDeg: number) {
   return { rise: t90 - t10, t90, over: (peak / ss - 1) * 100, settle, ss: ss / DEG, ay: Math.abs(v.accelLat) }
 }
 
+// ---------------------------------------------------------------- lane change
+/** one full sine period of steering at speed (a lane change and back), then straight ahead */
+function laneChange(kmh: number, deltaDeg: number, period = 2.4) {
+  const { world, v, car } = setup(undefined, { tc: 2 })
+  v.setVelocityForward(kmh / 3.6)
+  v.gear = 6
+  let ay = 0,
+    b = 0,
+    rEnd = 0,
+    spun = false
+  run(world, 1 + period + 2, (t) => {
+    const u = t - 1
+    car.input.steer = u > 0 && u < period ? -(deltaDeg * DEG * Math.sin((2 * Math.PI * u) / period)) / spec.steerLock : 0
+    const err = kmh / 3.6 - vf(v)
+    car.input.throttle = Math.max(0, Math.min(1, 0.5 + err * 0.5))
+    if (u > 0) {
+      ay = Math.max(ay, Math.abs(v.accelLat))
+      b = Math.max(b, Math.abs(beta(v)))
+      if (Math.abs(beta(v)) > 30) spun = true
+      if (u > period + 1.5) rEnd = Math.max(rEnd, Math.abs(yawRate(v)) / DEG)
+    }
+  })
+  return { ay, beta: b, rEnd, spun }
+}
+
 // ---------------------------------------------------------------- transient in a corner
 /** steady state on R at a fraction of the limit speed, then apply the event; report the yaw response */
-function cornerEvent(R: number, kmh: number, ev: 'lift' | 'trail' | 'power', tc = 0, gear = 0) {
+/** drive = the driver keeps steering for the circle during the event (closed loop); otherwise the
+ *  steering is frozen at its steady-state angle (open loop, the harsher test) */
+function cornerEvent(R: number, kmh: number, ev: 'lift' | 'trail' | 'power', tc = 0, gear = 0, drive = false) {
   const { world, v, car } = setup(undefined, { tc: ev === 'power' ? tc : 2, autoGear: gear === 0 })
   v.reset(-R, 0, 0, world.ground)
   warm(v)
@@ -258,7 +300,7 @@ function cornerEvent(R: number, kmh: number, ev: 'lift' | 'trail' | 'power', tc 
       b0 = beta(v)
       return
     }
-    car.input.steer = steerHold
+    car.input.steer = drive ? -circleSteer(v, R).cmd / spec.steerLock : steerHold
     if (ev === 'lift') {
       car.input.throttle = 0
       car.input.brake = 0
@@ -269,6 +311,8 @@ function cornerEvent(R: number, kmh: number, ev: 'lift' | 'trail' | 'power', tc 
       car.input.throttle = 1
       car.input.brake = 0
     }
+    if (process.env.DIAGEV === ev && Math.round(t * 600) % 60 === 0 && t < 7.5)
+      console.log(`ev t ${f(t, 1)} v ${f(v.speed * 3.6, 0)} beta ${f(beta(v), 1)} r ${f(yawRate(v) / DEG, 1)} ay ${f(v.accelLat)} ax ${f(v.accelLong)} Fz ${v.wheels.map((w) => f(w.tyre.Fz, 0)).join('/')} sr ${v.wheels.map((w) => f(w.tyre.slipRatio, 2)).join('/')} a ${v.wheels.map((w) => f(w.tyre.slipAngle / DEG, 1)).join('/')} Fx ${v.wheels.map((w) => f(w.tyre.Fx, 0)).join('/')} gear ${v.gear} rh ${f(v.rideHeightF * 1000, 0)}/${f(v.rideHeightR * 1000, 0)} bal ${f(v.aeroBalance)}`)
     if (t < 8) {
       const r = yawRate(v) / r0
       maxR = Math.max(maxR, r)
@@ -492,12 +536,14 @@ for (const k of [100, 200]) {
 
 sec('steady state (constant radius, speed ramp 0.25 m/s2, TC2, tread pinned at optimum temp)')
 for (const [R, kmh, ref] of [
-  [18, 30, '1.5-1.7 g @ ~60'],
-  [57, 70, '1.8-2.1 g @ ~120'],
-  [126, 120, '2.3-2.8 g @ ~200'],
+  [18, 30, '>=1.5 g @ ~60'],
+  [57, 70, '>=1.65 g @ ~110, delta <~2 L/R'],
+  [126, 120, '>=1.9 g @ ~165'],
+  [250, 200, '>=2.2 g @ ~220'],
 ] as [number, number, string][]) {
   const c = circle(R, kmh)
-  row(`R=${R} m max lateral`, `${f(c.best)} g @ ${f(c.kmh, 0)} km/h, delta ${f(c.steer, 1)} deg, K ${f(c.K, 2)} deg/g`, `${ref}; K +0.2..+1 deg/g`)
+  const geo = Math.atan(spec.wheelbase / R) / DEG
+  row(`R=${R} m max lateral`, `${f(c.best)} g @ ${f(c.kmh, 0)} km/h, delta@98% ${f(c.steer, 1)} deg (L/R ${f(geo, 1)}), K ${f(c.K, 2)} deg/g`, `${ref}; K +0.2..+1 deg/g`)
 }
 
 sec('step steer 120 km/h, 1.5 deg road wheel')
@@ -513,6 +559,12 @@ const lift = cornerEvent(57, v85, 'lift')
 row('lift-off: body slip +, yaw r/r0 max', `${f(lift.dBeta, 1)} deg  ${f(lift.rMax)}  spun ${lift.spun}`, 'mild: +1..4 deg, r/r0 1.05-1.3')
 const trail = cornerEvent(57, v85, 'trail')
 row('trail brake 35 %: body slip +, r/r0', `${f(trail.dBeta, 1)} deg  ${f(trail.rMax)}/${f(trail.rMin)}  spun ${trail.spun}`, 'rotation, no snap')
+const liftHi = cornerEvent(250, 200, 'lift')
+row('lift-off R=250 m @ 200 km/h: slip +, r/r0', `${f(liftHi.dBeta, 1)} deg  ${f(liftHi.rMax)}/${f(liftHi.rMin)}  spun ${liftHi.spun}`, 'stable: < +2 deg, r/r0 < 1.2')
+const trailHi = cornerEvent(250, 200, 'trail', 0, 0, true)
+row('trail brake R=250 m @ 200 km/h, driver holds the line: slip +, r/r0', `${f(trailHi.dBeta, 1)} deg  ${f(trailHi.rMax)}/${f(trailHi.rMin)}  spun ${trailHi.spun}`, 'rotation, no snap')
+const lc = laneChange(200, 0.8)
+row('lane change 200 km/h, 0.8 deg sine 2.4 s', `peak ${f(lc.ay)} g  beta max ${f(lc.beta, 1)} deg  yaw rate after +1.5 s ${f(lc.rEnd, 1)} deg/s  spun ${lc.spun}`, 'beta < 2 deg, settles, no snap')
 for (const tc of [0, 3]) {
   const p = cornerEvent(25, 60, 'power', tc, 2)
   row(`power-on R=25 2nd gear TC${tc}`, `dBeta ${f(p.dBeta, 1)} deg  r/r0 ${f(p.rMax)}  rear slip ${f(p.rearSlip * 100, 0)} %  +10deg after ${f(p.tSpin, 2)} s`, tc ? 'contained, slip ~10 %' : 'progressive: >0.5 s to +10 deg')
