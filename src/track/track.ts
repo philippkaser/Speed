@@ -1,5 +1,6 @@
 // Track model: spline -> dense centreline samples with per-sample cross-section description.
 // Implements the physics Ground interface (height, normal, surface, track coords, barriers).
+import { expandStations, lineBounds, LINE_STEP, minCurvatureLine } from './racingLine'
 import { type Ground, type GroundSample, Surface } from '../physics/ground'
 import { clamp, hash2, lerp, smoothstep, valueNoise2 } from '../physics/math'
 import type { TrackDef } from './trackDef'
@@ -149,6 +150,7 @@ export class Track implements Ground {
     smoothArray(this.slope, 15)
 
     this.buildGrid()
+    this.buildKerbs()
     this.computeRacingLine()
     this.computeSpeedProfile({ mu: 1.55, clA_m: 2.7 / 1340, power_m: 400000 / 1340, cdA_m: 1.0 / 1340, brakeMu: 1.6 })
     this.buildSides()
@@ -164,7 +166,8 @@ export class Track implements Ground {
     this.resetRubber(0.45)
   }
 
-  private buildSides() {
+  /** Kerbs depend only on the centreline curvature; built before the racing line, which runs over them. */
+  private buildKerbs() {
     const n = this.n
     const mk = (): SideInfo => ({ kerb: new Float32Array(n), paved: new Float32Array(n), outer: new Uint8Array(n), wall: new Float32Array(n) })
     this.L = mk()
@@ -190,6 +193,15 @@ export class Track implements Ground {
         }
       }
       for (let i = 0; i < n; i++) S.kerb[i] = dil[i] === 1 ? 1.6 : dil[i] === 2 ? 1.2 : 0
+    }
+  }
+
+  private buildSides() {
+    const n = this.n
+    const absC = new Float32Array(n)
+    for (let i = 0; i < n; i++) absC[i] = Math.abs(this.curv[i])
+    for (const side of [1, -1]) {
+      const S = side > 0 ? this.L : this.R
       // runoff: outside of fast corners gets big asphalt runoff, slow corners gravel traps
       const raw = new Float32Array(n)
       for (let i = 0; i < n; i++) {
@@ -604,50 +616,16 @@ export class Track implements Ground {
   }
 
   // ----------------------------------------------------------------------------- racing line
+  /** Lateral bounds of the racing line (+ left): asphalt plus usable kerb, minus half a car and a margin. */
+  lineLo!: Float32Array
+  lineHi!: Float32Array
+
   private computeRacingLine() {
     const n = this.n
-    const STEP = 4
-    const m = Math.floor(n / STEP)
-    const off = new Float64Array(m)
-    const cx = new Float64Array(m),
-      cz = new Float64Array(m),
-      lx = new Float64Array(m),
-      lz = new Float64Array(m),
-      lo = new Float64Array(m),
-      hi = new Float64Array(m)
-    for (let k = 0; k < m; k++) {
-      const i = k * STEP
-      cx[k] = this.px[i]
-      cz[k] = this.pz[i]
-      lx[k] = this.lx[i]
-      lz[k] = this.lz[i]
-      const margin = 1.35
-      hi[k] = this.hw[i] - margin
-      lo[k] = -this.hw[i] + margin
-    }
-    // Gauss-Seidel SOR on the discrete second difference (min curvature path)
-    for (let it = 0; it < 4000; it++) {
-      for (let k = 0; k < m; k++) {
-        const a = (k - 1 + m) % m,
-          b = (k + 1) % m
-        const ax = cx[a] + lx[a] * off[a],
-          az = cz[a] + lz[a] * off[a]
-        const bx = cx[b] + lx[b] * off[b],
-          bz = cz[b] + lz[b] * off[b]
-        const mx = (ax + bx) * 0.5,
-          mz = (az + bz) * 0.5
-        const target = (mx - cx[k]) * lx[k] + (mz - cz[k]) * lz[k]
-        off[k] = clamp(off[k] + 1.7 * (target - off[k]), lo[k], hi[k])
-      }
-    }
-    this.racing = new Float32Array(n)
-    for (let i = 0; i < n; i++) {
-      const k0 = Math.floor(i / STEP) % m,
-        k1 = (k0 + 1) % m
-      const f = (i % STEP) / STEP
-      this.racing[i] = lerp(off[k0], off[k1], f)
-    }
-    smoothArray(this.racing, 6)
+    const { lo, hi } = lineBounds(this)
+    this.lineLo = lo
+    this.lineHi = hi
+    this.racing = expandStations(minCurvatureLine(this, lo, hi), LINE_STEP, n, lo, hi)
     // racing line curvature
     this.racingCurv = new Float32Array(n)
     const rx = new Float64Array(n),

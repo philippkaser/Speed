@@ -134,7 +134,9 @@ export function raceAudit(laps = 4, opts: { slowPlayer?: boolean; fastLast?: boo
       if (c.pit || c.retired || c.finished || game.raceTime - c.lastPitAt < 6) { stuckT[k] = 0; continue }
       const v = c.entry.sim.vehicle
       const i = track.idx(c.entry.timing.s)
-      const isOff = Math.abs(c.entry.sample.d) > track.hw[i] + 0.6
+      // past the kerb (the racing line runs over the flat kerbs)
+      const dd = c.entry.sample.d
+      const isOff = Math.abs(dd) > track.hw[i] + (dd > 0 ? track.L : track.R).kerb[i] + 0.4
       if (isOff && !off[k]) { r.offs++; if (lap1(k)) r.firstCorner++; log(`${fmt(t)}  off-track ${name(k)} s ${c.entry.timing.s.toFixed(0)} d ${c.entry.sample.d.toFixed(1)} v ${(v.speed * 3.6).toFixed(0)} since pit ${(t - c.lastPitAt).toFixed(1)}`) }
       off[k] = isOff ? 1 : 0
       const vf = v.vel.x * v.fwd.x + v.vel.z * v.fwd.z

@@ -15,6 +15,10 @@ export interface TrafficCar {
 
 /** Share of the tyre's peak friction the AI's speed profile plans with (cornering / braking). */
 export const GRIP_SHARE = 0.94
+/** The share of the downforce's grip the speed plan counts on. Calibrated on the fast corners of the
+ *  minimum-curvature line (150-230 km/h): with all of it the car reaches the limit mid-corner with no margin
+ *  for the line's transients and spins; the old inside line had no corner above 140 km/h to show it. */
+export const AERO_GRIP_SHARE = 0.35
 export const BRAKE_SHARE = 0.89
 /** Wheel power at full throttle, averaged over the shift band with drivetrain and rolling losses,
  * as a share of the engine's peak (measured on the straights by scripts/ai-lap-trace.ts: 0.78). */
@@ -34,7 +38,7 @@ export function speedProfileFor(v: Vehicle, track: Track, skill = 1, out?: Float
   return track.computeSpeedProfile(
     {
       mu: cp.mu * GRIP_SHARE * skill,
-      clA_m: (v.clAF + v.clAR) / m,
+      clA_m: ((v.clAF + v.clAR) / m) * AERO_GRIP_SHARE,
       power_m: peakPower / m,
       cdA_m: v.cdA / m,
       brakeMu: cp.mu * BRAKE_SHARE * skill,
@@ -112,9 +116,8 @@ export class AIDriver {
 
   /** Target lateral position at sample i: racing line plus the traffic offset, inside the track. */
   lineAt(i: number) {
-    const hw = this.track.hw[i]
-    const a = Math.max(-hw + 1.2, this.lo),
-      b = Math.min(hw - 1.2, this.hi)
+    const a = Math.max(this.track.lineLo[i], this.lo),
+      b = Math.min(this.track.lineHi[i], this.hi)
     return a <= b ? clamp(this.track.racing[i] + this.offset, a, b) : 0.5 * (a + b)
   }
 
@@ -204,7 +207,7 @@ export class AIDriver {
     chi -= Math.round(chi / (2 * Math.PI)) * 2 * Math.PI
     const e = this.d - lineD0
     const Lc = 7 + 0.3 * speed
-    const kFF = tr.racingCurv[tr.idx(this.s + 2 + speed * 0.1)]
+    const kFF = tr.racingCurv[tr.idx(this.s + 2 + speed * 0.2)]
     // far off the line (rejoining from the grass or the pit exit): converge at a bounded angle
     // instead of a full-lock dart across the track
     const eC = clamp(e, -2.5, 2.5)
@@ -243,12 +246,19 @@ export class AIDriver {
     // rear tyres' peak combined slip.
     const sA = this.s + 1 + speed * 0.05
     const dA = 4 + speed * 0.15
-    const pa = this.profile[tr.idx(sA)]
-    const pb = this.profile[tr.idx(sA + dA)]
+    // the plan is for the racing line: on an offset line (traffic) the corner is tighter on the inside,
+    // R' = R - o, so the grip-limited speed scales by sqrt(1 - k o); the same off the line in a corner
+    const iA = tr.idx(sA),
+      iB = tr.idx(sA + dA)
+    const kA = tr.racingCurv[iA],
+      kB = tr.racingCurv[iB]
+    const pa = this.profile[iA] * Math.sqrt(clamp(1 - kA * (this.lineAt(iA) - tr.racing[iA]), 0.5, 1))
+    const pb = this.profile[iB] * Math.sqrt(clamp(1 - kB * (this.lineAt(iB) - tr.racing[iB]), 0.5, 1))
     let vt = pa
-    // reduce target if off line (driving on the wrong part of the track)
+    // reduce target if off line (driving on the wrong part of the track): rejoining in a corner is a
+    // tighter arc than the line's
     const lineErr = Math.abs(e)
-    vt *= clamp(1 - Math.max(0, lineErr - 2) * 0.03, 0.75, 1)
+    vt *= clamp(1 - Math.max(0, lineErr - 2) * 0.03 - Math.max(0, lineErr - 0.7) * Math.abs(kA) * 3, 0.75, 1)
     // a committed pass: out-brake the car alongside
     if (alongside && this.attack > 0) vt *= 1 + 0.015 * this.attack
     if (this.overdriveTime > 0) {

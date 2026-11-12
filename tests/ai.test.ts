@@ -52,10 +52,13 @@ for (const spec of CARS) {
     expect(laps.length).toBeGreaterThanOrEqual(2)
     expect(resets).toBe(0)
     if (spec.id === 'vanta-gt3') {
-      // the race car at the limit: flying laps within 1.5 % of its own speed profile's estimate,
-      // repeatable to 0.3 s, never off the track or into a wall
+      // the race car at the limit: flying laps within 3 % of its own speed profile's estimate (the
+      // minimum-curvature line's 150-230 km/h corners and S-bends cost the follower more than the old
+      // inside line's slow corners did) and under 89 s (95.5 s on the old line), repeatable to 0.3 s,
+      // never off the track or into a wall
       const est = track.lapTime(ai.profile)
-      expect(laps[2]).toBeLessThan(est * 1.015)
+      expect(laps[2]).toBeLessThan(est * 1.03)
+      expect(laps[2]).toBeLessThan(89)
       expect(Math.abs(laps[2] - laps[1])).toBeLessThan(0.3)
       expect(offTrack).toBe(0)
       expect(walls).toBe(0)

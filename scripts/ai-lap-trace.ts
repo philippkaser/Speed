@@ -31,8 +31,8 @@ for (let i = 0; i < n; i++) {
 }
 let est = 0
 for (let i = 0; i < n; i++) est += ds / Math.max(ai.profile[i], 1)
-type C = { minV: number; maxBeta: number; sat: number; tLost: number; thrExit: number; exitN: number; walls: number; off: number }
-const mk = (): C => ({ minV: 1e9, maxBeta: 0, sat: 0, tLost: 0, thrExit: 0, exitN: 0, walls: 0, off: 0 })
+type C = { minV: number; maxBeta: number; sat: number; tLost: number; thrExit: number; exitN: number; walls: number; off: number; dev: number }
+const mk = (): C => ({ minV: 1e9, maxBeta: 0, sat: 0, tLost: 0, thrExit: 0, exitN: 0, walls: 0, off: 0, dev: 0 })
 const lapTimes: number[] = []
 const phase = [0, 0, 0]
 const accS = [0, 0]
@@ -92,7 +92,9 @@ while (lapTimes.length < laps && t < laps * 140 + 30) {
       phase[inp.brake > 0 ? 0 : inp.throttle > 0.95 ? 2 : 1] += steps
     }
     if (d > 10 && d < 120) { c.thrExit += inp.throttle; c.exitN++ }
-    if (Math.abs(ai.d) > track.hw[i] + 0.3) c.off += steps
+    // off track: past the kerb (the line itself runs over the flat kerbs)
+    if (Math.abs(ai.d) > track.hw[i] + (ai.d > 0 ? track.L : track.R).kerb[i] + 0.1) c.off += steps
+    c.dev = Math.max(c.dev, Math.abs(ai.d - track.racing[i]))
   }
   const W = process.env.DETAIL ? process.env.DETAIL.split(':').map(Number) : null
   if (W && started && ai.s > W[0] && ai.s < W[1] && Math.round(t * 60) % 6 === 0)
@@ -109,11 +111,11 @@ while (lapTimes.length < laps && t < laps * 140 + 30) {
   lastS = ai.s
 }
 console.log(`${spec.name} skill ${skill}  profile estimate ${f(est)} s  corners ${corners.length}`)
-console.log('corner   s     vProf  vMin(lap1..)  tLost(s)  beta  sat(s)  exitThr  off(s) walls')
+console.log('corner   s     vProf  vMin(lap1..)  tLost(s)  beta  sat(s)  exitThr  off(s) walls  dev(m)')
 for (let k = 0; k < corners.length; k++) {
   const i = corners[k]
   const row = all.map((st) => st[k])
-  console.log(`C${String(k + 1).padStart(2)} ${f(i * ds, 0).padStart(5)}  ${f(ai.profile[i] * 3.6, 0).padStart(5)}  ${row.map((r) => f(r.minV * 3.6, 0)).join('/').padEnd(12)}  ${row.map((r) => f(r.tLost)).join('/').padEnd(15)} ${f(Math.max(...row.map((r) => r.maxBeta)), 1).padStart(5)}  ${f(Math.max(...row.map((r) => r.sat)), 2)}  ${f(row[0].thrExit / Math.max(row[0].exitN, 1))}   ${f(Math.max(...row.map((r) => r.off)), 2)}  ${row.reduce((a, r) => a + r.walls, 0)}`)
+  console.log(`C${String(k + 1).padStart(2)} ${f(i * ds, 0).padStart(5)}  ${f(ai.profile[i] * 3.6, 0).padStart(5)}  ${row.map((r) => f(r.minV * 3.6, 0)).join('/').padEnd(12)}  ${row.map((r) => f(r.tLost)).join('/').padEnd(15)} ${f(Math.max(...row.map((r) => r.maxBeta)), 1).padStart(5)}  ${f(Math.max(...row.map((r) => r.sat)), 2)}  ${f(row[0].thrExit / Math.max(row[0].exitN, 1))}   ${f(Math.max(...row.map((r) => r.off)), 2)}  ${row.reduce((a, r) => a + r.walls, 0)}  ${row.map((r) => f(r.dev, 1)).join('/')}`)
 }
 console.log(`time lost by phase (all laps): braking ${f(phase[0])} s  partial throttle ${f(phase[1])} s  full throttle ${f(phase[2])} s`)
 console.log(`full-throttle straight-line acceleration / (peak power / v): ${f(accS[0] / accS[1], 3)}`)
