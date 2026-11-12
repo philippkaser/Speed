@@ -30,9 +30,11 @@ export interface AuditResult {
 }
 
 export function raceAudit(laps = 4, opts: { slowPlayer?: boolean; fastLast?: boolean; quiet?: boolean; seed?: number } = {}): AuditResult {
+  const seasonLaps = SEASON[0].laps
   SEASON[0].laps = laps
   useTeamStore.getState().newSeason()
   const tr = startTeamRace(opts.seed)
+  SEASON[0].laps = seasonLaps
   const log = opts.quiet ? () => {} : console.log
   const cars = tr.cars
   const N = cars.length
