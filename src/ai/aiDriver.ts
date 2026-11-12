@@ -78,6 +78,8 @@ export class AIDriver {
   private wTarget = 0
   private ws = 0
   private defended = false
+  /** s left of recovering from a spin (rejoin through the side lane) */
+  private recover = 0
   stuckTime = 0
   reverseTime = 0
   s = 0
@@ -220,7 +222,10 @@ export class AIDriver {
     const aB = 0.7 * this.muBrk * (9.81 + 0.6 * this.clA_m * speed * speed)
     const i00 = tr.idx(this.s)
     // rejoining: off the usable width (grass, gravel, pit exit), or crawling back after a spin
-    const rejoin = this.d > tr.lineHi[i00] + 0.6 || this.d < tr.lineLo[i00] - 0.6 || (speed < 20 && speed < 0.5 * this.profile[i00])
+    const bodySlip = speed > 3 ? Math.abs(Math.atan2(v.vel.x * v.left.x + v.vel.z * v.left.z, Math.abs(v.vel.x * v.fwd.x + v.vel.z * v.fwd.z))) : 0
+    if (bodySlip > 0.6) this.recover = 6
+    else this.recover = Math.max(0, this.recover - dt)
+    const rejoin = this.d > tr.lineHi[i00] + 0.6 || this.d < tr.lineLo[i00] - 0.6 || (this.recover > 0 && speed < 20 && Math.abs(this.d - tr.racing[i00]) > 1.5)
     const safe = 8 + 0.15 * speed
     let blockerDs = Infinity,
       blockerD = 0,
