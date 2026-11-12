@@ -161,6 +161,20 @@ export class AIDriver {
     const pl = this.lane > 0 ? this.profL[i] : this.profR[i]
     return this.ws >= 0.999 ? pl : Math.min(pl, this.profile[i])
   }
+  /** No other car on the lane line on `side` from just behind us to past the car we attack. */
+  laneFree(traffic: TrafficCar[], side: number, blockerDs: number) {
+    const tr = this.track
+    for (const o of traffic) {
+      if (o.id === this.id) continue
+      let ds = o.s - this.s
+      if (ds < -tr.length / 2) ds += tr.length
+      if (ds > tr.length / 2) ds -= tr.length
+      if (ds < -10 || ds > blockerDs + 15) continue
+      const j = tr.idx(o.s)
+      if (Math.abs(o.d - (side > 0 ? tr.laneL[j] : tr.laneR[j])) < 2.3) return false
+    }
+    return true
+  }
   /** Can the car, at `speed` from sample i0, still meet the plan `prof` over the next 250 m with a margin
    *  on its braking (the commit / back-out test for a move to a lane)? */
   canMeet(prof: Float32Array, i0: number, speed: number) {
@@ -205,7 +219,8 @@ export class AIDriver {
       hi = Infinity
     const aB = 0.7 * this.muBrk * (9.81 + 0.6 * this.clA_m * speed * speed)
     const i00 = tr.idx(this.s)
-    const rejoin = Math.abs(this.d) > tr.hw[i00] - 0.8 && Math.abs(this.d - tr.racing[i00]) > 3
+    // rejoining: off the usable width (grass, gravel, pit exit), or crawling back after a spin
+    const rejoin = this.d > tr.lineHi[i00] + 0.6 || this.d < tr.lineLo[i00] - 0.6 || (speed < 20 && speed < 0.5 * this.profile[i00])
     const safe = 8 + 0.15 * speed
     let blockerDs = Infinity,
       blockerD = 0,
@@ -214,7 +229,12 @@ export class AIDriver {
       holdSide = 0,
       threat = false,
       anyBehind = false,
-      wash = 0
+      wash = 0,
+      squeezeL = Infinity,
+      squeezeR = Infinity,
+      squeezeDsL = 0,
+      squeezeDsR = 0,
+      clearBehind = true
     for (const o of traffic) {
       if (o.id === this.id) continue
       let ds = o.s - this.s
@@ -225,8 +245,8 @@ export class AIDriver {
       // which side of it we are on (ties broken by id, so the two cars agree)
       const mySide = lat < 0 || (lat === 0 && this.id > o.id) ? 1 : -1
       // a car much slower than us ahead (spun, sideways, crawling back) may lie across the track:
-      // treat it as wider than a car on its line
-      const pathW = o.speed < speed * 0.6 && speed > 10 ? 3.6 : 2.3
+      // treat it as wider than a car on its line (a yellow flag: it may be coming back across)
+      const pathW = o.speed < speed * 0.6 && speed > 10 ? 4.8 : 2.3
       if (ds > 0 && ds < 120 && alat < pathW) {
         const gap = ds - 4.8
         const gapMin = 1.2 + 0.18 * speed
@@ -242,14 +262,27 @@ export class AIDriver {
       // alongside (overlapping, within half a car length, or closing to that within ~1 s): each takes
       // the lane on its own side
       const closing = clamp(ds > 0 ? speed - o.speed : o.speed - speed, 0, 12)
-      if (Math.abs(ds) < 7 + closing && alat < 6 && Math.abs(ds) < alongDs) {
-        alongDs = Math.abs(ds)
-        alongSide = mySide
+      if (Math.abs(ds) < 7 + closing && alat < 6) {
+        if (Math.abs(ds) < alongDs) {
+          alongDs = Math.abs(ds)
+          alongSide = mySide
+        }
+        // a car on each side: three wide
+        if (ds > -5 && alat < 4.5) {
+          if (mySide > 0 && o.speed < squeezeR) {
+            squeezeR = o.speed
+            squeezeDsR = ds
+          } else if (mySide < 0 && o.speed < squeezeL) {
+            squeezeL = o.speed
+            squeezeDsL = ds
+          }
+        }
       }
       // still sharing the road: hold the lane until it is a safe gap ahead or behind
       if (Math.abs(ds) < safe && alat < 6) holdSide = mySide
       if (ds < -6 && ds > -30 && alat < 2.5 && o.speed > speed + 0.3) threat = true
       if (ds < 0 && ds > -40) anyBehind = true
+      if (ds < 0 && ds > -150) clearBehind = false
       // safety: keep a car's width from a car alongside, and when rejoining (pit exit, grass) from
       // any car coming up behind: merge behind it, not into it
       const soon = rejoin && ds <= -5.5 && ds > -60 && o.speed > speed - 2
@@ -270,6 +303,13 @@ export class AIDriver {
       this.mode = 4
       want = 1
       wantSide = this.lane
+    } else if (squeezeL < Infinity && squeezeR < Infinity) {
+      // in the middle of three wide: there are two lanes. Drop back, behind the car further ahead
+      // (the one on the left if that is it: we take the left lane behind it)
+      this.mode = 1
+      blockSpeed = Math.min(blockSpeed, Math.min(squeezeL, squeezeR) - 3)
+      want = 1
+      wantSide = squeezeDsL > squeezeDsR ? 1 : -1
     } else if (alongSide !== 0) {
       this.mode = 1
       want = 1
@@ -282,7 +322,7 @@ export class AIDriver {
       // attack: to the lane away from the car ahead, only if its plan can still be met from here
       const ib = tr.idx(this.s + blockerDs)
       const side = tr.laneL[ib] - blockerD > blockerD - tr.laneR[ib] ? 1 : -1
-      if (this.canMeet(side > 0 ? this.profL : this.profR, i00, speed)) {
+      if (this.laneFree(traffic, side, blockerDs) && this.canMeet(side > 0 ? this.profL : this.profR, i00, speed)) {
         this.mode = 2
         want = 1
         wantSide = side
@@ -313,9 +353,21 @@ export class AIDriver {
       this.lane = wantSide
       this.wTarget = this.lane === 0 ? 0 : want
     }
-    // blend rate: the lateral move at <= ~2.5 m/s, smoothstepped
+    // a corner or a braking zone within ~1.5 s: a lateral move there adds to what the tyres already do
+    let cornerSoon = false
+    for (let x = 0; x < 20 + speed * 1.5 && !cornerSoon; x += 6) {
+      const j = tr.idx(this.s + x)
+      cornerSoon = Math.max(Math.abs(tr.racingCurv[j]), Math.abs(this.curvAt(j))) > 1 / 250 || this.planAt(j) < speed - 4
+    }
+    // back to the ideal line only off the corners
+    if (this.wTarget < this.w && this.mode !== 4 && cornerSoon) this.wTarget = this.w
+    // an attack starts before the braking zone, not in it (once half way over, it is committed)
+    if (this.mode === 2 && this.wTarget > this.w && this.w < 0.5 && cornerSoon) this.wTarget = this.w
+    // blend rate: a smoothstep over the lane's distance D from the ideal line has a peak lateral
+    // acceleration of 6 D rate^2, held to ~3 m/s^2 into a lane (urgent: a car alongside) and
+    // ~1.5 m/s^2 back to the ideal line
     const dLane = Math.abs((this.lane > 0 ? tr.laneL[i00] : this.lane < 0 ? tr.laneR[i00] : tr.racing[i00]) - tr.racing[i00])
-    const rate = clamp(2.5 / Math.max(1, dLane), 0.35, 2)
+    const rate = clamp(Math.sqrt((this.wTarget > this.w && !cornerSoon ? 3 : 1.5) / (6 * Math.max(0.5, dLane))), 0.15, 2)
     this.w = clamp(this.w + clamp(this.wTarget - this.w, -rate * dt, rate * dt), 0, 1)
     if (this.w < 1e-4 && this.wTarget === 0) {
       this.w = 0
@@ -459,9 +511,10 @@ export class AIDriver {
       out.handbrake = 0
       return
     }
-    if (this.stuckTime > 3.5) {
+    // (not into the path of a car coming: wait until the road behind is clear)
+    if (this.stuckTime > 3.5 && clearBehind) {
       this.stuckTime = 0
-      this.reset()
+      this.reset(this.d > 0 ? 1 : -1)
       return
     }
     out.steer = steer
@@ -470,14 +523,16 @@ export class AIDriver {
     out.handbrake = 0
   }
 
-  /** Teleport back onto the racing line a little behind the current position. */
-  reset() {
+  /** Teleport back onto the track a little behind the current position: onto the racing line, or with
+   *  `side` onto the lane line on that side, rejoining from there. */
+  reset(side = 0) {
     const tr = this.track
     const s = this.s - 10
     const i = tr.idx(s)
-    this.w = this.ws = 0
-    this.lane = this.mode = 0
-    const p = tr.pointAt(s, tr.racing[i], { x: 0, y: 0, z: 0 })
+    this.w = this.ws = side === 0 ? 0 : 1
+    this.lane = side
+    this.mode = side === 0 ? 0 : 4
+    const p = tr.pointAt(s, side > 0 ? tr.laneL[i] : side < 0 ? tr.laneR[i] : tr.racing[i], { x: 0, y: 0, z: 0 })
     this.vehicle.reset(p.x, p.z, tr.headingAt(s), tr, true)
   }
 }
