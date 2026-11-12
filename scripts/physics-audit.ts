@@ -492,7 +492,8 @@ function aiLap() {
     t = 0,
     gLat = 0,
     gBrake = 0,
-    gAcc = 0
+    gAcc = 0,
+    maxBeta = 0
   while (t < 260 && laps.length < 2) {
     ai.drive(1 / 60, inp, [], true)
     Object.assign(car.input, inp)
@@ -502,6 +503,7 @@ function aiLap() {
       gLat = Math.max(gLat, Math.abs(v.accelLat))
       gBrake = Math.max(gBrake, -v.accelLong)
       gAcc = Math.max(gAcc, v.accelLong)
+      maxBeta = Math.max(maxBeta, Math.abs(beta(v)))
     }
     if (lastS > track.length - 200 && ai.s < 200) {
       if (t - lapStart > 20) laps.push(t - lapStart)
@@ -509,7 +511,9 @@ function aiLap() {
     }
     lastS = ai.s
   }
-  return { laps, gLat, gBrake, gAcc, walls: world.events.filter((e) => e.kind === 'wall').length }
+  let est = 0
+  for (let i = 0; i < track.n; i++) est += track.length / track.n / Math.max(ai.profile[i], 1)
+  return { laps, gLat, gBrake, gAcc, est, maxBeta, walls: world.events.filter((e) => e.kind === 'wall').length }
 }
 
 // ================================================================= run
@@ -621,7 +625,7 @@ for (const [k, c] of [
 if (!quick) {
   sec('AI lap, default circuit')
   const l = aiLap()
-  row('lap times / peak g lat brake acc', `${l.laps.map((x) => f(x)).join(', ')} s  ${f(l.gLat)} / ${f(l.gBrake)} / ${f(l.gAcc)} g  walls ${l.walls}`, '')
+  row('lap times / peak g lat brake acc', `${l.laps.map((x) => f(x)).join(', ')} s  ${f(l.gLat)} / ${f(l.gBrake)} / ${f(l.gAcc)} g  walls ${l.walls}  max body slip ${f(l.maxBeta, 1)} deg  profile estimate ${f(l.est)} s`, '')
 }
 
 const w0 = Math.max(...rows.map((r) => r[0].length)),

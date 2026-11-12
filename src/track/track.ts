@@ -671,16 +671,27 @@ export class Track implements Ground {
   }
 
   /** Quasi steady-state lap speed profile along the racing line. */
-  computeSpeedProfile(p: { mu: number; clA_m: number; power_m: number; cdA_m: number; brakeMu: number }, out?: Float32Array) {
+  /** loadSens / fz0_m: the tyre's friction loss per unit of load above its nominal load (fz0_m = nominal
+   *  wheel load / car mass), so downforce adds grip with the same diminishing return as in the tyre model */
+  computeSpeedProfile(p: { mu: number; clA_m: number; power_m: number; cdA_m: number; brakeMu: number; loadSens?: number; fz0_m?: number }, out?: Float32Array) {
     const n = this.n
     const v = out ?? new Float32Array(n)
     const g = 9.81
     const rho = 0.6
+    const ls = p.loadSens ?? 0,
+      fz0 = p.fz0_m ?? 1
+    // friction at a vertical load of (g + rho clA/m v^2) per unit mass, shared by four wheels
+    const muAt = (mu: number, v2: number) => mu * Math.max(0.5, 1 - ls * ((g + rho * p.clA_m * v2) / (4 * fz0) - 1))
     for (let i = 0; i < n; i++) {
       const k = Math.abs(this.racingCurv[i])
-      const c = p.mu * rho * p.clA_m
-      const den = k - c
-      v[i] = den <= 1e-6 ? 95 : Math.min(95, Math.sqrt((p.mu * g) / den))
+      // k v^2 = mu(v) (g + c v^2): fixed point on v^2 (mu falls slowly with v^2, converges in a few steps)
+      let v2 = 95 * 95
+      for (let it = 0; it < 8; it++) {
+        const mu = muAt(p.mu, v2)
+        const den = k - mu * rho * p.clA_m
+        v2 = den <= 1e-6 ? 95 * 95 : Math.min(95 * 95, (mu * g) / den)
+      }
+      v[i] = Math.sqrt(v2)
     }
     // forward pass (acceleration limited by traction circle and power)
     for (let pass = 0; pass < 2; pass++)
@@ -689,7 +700,7 @@ export class Track implements Ground {
           a = j
         const va = v[a]
         const latG = va * va * Math.abs(this.racingCurv[a])
-        const maxA = p.mu * (g + rho * p.clA_m * va * va)
+        const maxA = muAt(p.mu, va * va) * (g + rho * p.clA_m * va * va)
         const avail = Math.sqrt(Math.max(0, maxA * maxA - latG * latG)) * 0.75
         const powerA = p.power_m / Math.max(va, 5)
         const acc = Math.min(avail, powerA) - rho * p.cdA_m * va * va
@@ -703,7 +714,7 @@ export class Track implements Ground {
           b = (j + 1) % n
         const vb = v[b]
         const latG = vb * vb * Math.abs(this.racingCurv[b])
-        const maxA = p.brakeMu * (g + rho * p.clA_m * vb * vb)
+        const maxA = muAt(p.brakeMu, vb * vb) * (g + rho * p.clA_m * vb * vb)
         const avail = Math.sqrt(Math.max(0, maxA * maxA - latG * latG)) * 0.9 + rho * p.cdA_m * vb * vb
         const vn = Math.sqrt(vb * vb + 2 * avail * DS)
         if (vn < v[i]) v[i] = vn

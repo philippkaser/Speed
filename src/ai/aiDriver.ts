@@ -21,11 +21,13 @@ export function speedProfileFor(v: Vehicle, track: Track, skill = 1, out?: Float
   const peakPower = Math.max(...sp.engine.torque.map(([rpm, t]) => (t * rpm * Math.PI) / 30)) * 0.9
   return track.computeSpeedProfile(
     {
-      mu: cp.mu * 0.85 * skill,
+      mu: cp.mu * 0.88 * skill,
       clA_m: (v.clAF + v.clAR) / m,
       power_m: peakPower / m,
       cdA_m: v.cdA / m,
-      brakeMu: cp.mu * 0.82 * skill,
+      brakeMu: cp.mu * 0.84 * skill,
+      loadSens: cp.loadSens,
+      fz0_m: cp.nominalLoad / m,
     },
     out ?? new Float32Array(track.n),
   )
