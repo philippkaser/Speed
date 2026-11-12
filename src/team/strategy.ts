@@ -59,11 +59,11 @@ export interface RaceRules {
 
 // --- calibration (Vanta R-GT3, AI at skill 0.97, empty tank; scripts/calibrate-race.ts)
 /** lap time on new tyres, empty tank */
-export const BASE_LAP: Record<Compound, number> = { RS: 92.45, RM: 93.5, RH: 95.25 }
+export const BASE_LAP: Record<Compound, number> = { RS: 95.25, RM: 96.42, RH: 98.09 }
 /** physical tread loss per lap of the most worn tyre (fraction) */
-const PHYS_TREAD_PER_LAP: Record<Compound, number> = { RS: 0.00296, RM: 0.00158, RH: 0.00089 }
+const PHYS_TREAD_PER_LAP: Record<Compound, number> = { RS: 0.00313, RM: 0.00174, RH: 0.00102 }
 /** engine work per lap, J */
-export const ENGINE_WORK_PER_LAP = 8.15 * 3.6e6
+export const ENGINE_WORK_PER_LAP = 7.38 * 3.6e6
 /** lap time per kg carried, s (measured: +60 kg costs 0.6 s) */
 export const FUEL_EFFECT = 0.0105
 /** lap time per unit of grip lost, s */
@@ -74,7 +74,9 @@ const FIRST_LAP = 4.5
 export const TREAD_LIMIT = 0.12
 
 export function raceRules(laps: number): RaceRules {
-  const softLife = Math.max(3, laps * 0.3)
+  // a soft lasts 30 % of a long race; in a short one (up to ~5 laps) a set lasts the distance
+  // with some margin, so nobody has to pit (3 laps used to end on 21-39 % tread)
+  const softLife = Math.max(laps * 0.3, Math.min(laps * 1.6, 8))
   const rs = (1 - 0.38) / softLife
   const treadPerLap: Record<Compound, number> = {
     RS: rs,
