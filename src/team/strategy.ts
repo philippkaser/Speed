@@ -59,7 +59,7 @@ export interface RaceRules {
 
 // --- calibration (Vanta R-GT3, AI at skill 0.97, empty tank; scripts/calibrate-race.ts)
 /** lap time on new tyres, empty tank */
-export const BASE_LAP: Record<Compound, number> = { RS: 95.25, RM: 96.42, RH: 98.09 }
+export const BASE_LAP: Record<Compound, number> = { RS: 89.42, RM: 89.2, RH: 90.6 }
 /** physical tread loss per lap of the most worn tyre (fraction) */
 const PHYS_TREAD_PER_LAP: Record<Compound, number> = { RS: 0.00313, RM: 0.00174, RH: 0.00102 }
 /** engine work per lap, J */
