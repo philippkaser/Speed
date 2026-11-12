@@ -396,10 +396,12 @@ export const CHASE = {
   /** vertical follow of the camera's position: kerbs and bumps do not jolt the frame */
   heightW: 4,
   /**
-   * share of the car's own (unsmoothed) vertical motion the aim follows: all of it, so the car stays
-   * put on screen; with the position smoothed that takes a rotation of hundredths of a degree
+   * share of the car's own (unsmoothed) vertical motion the aim follows. The aim point is 3 m beyond
+   * the car, so 1 leaves a third of that motion on screen and (dist + 3) / dist = 1.48 none of it,
+   * at the price of rotating the frame instead. 1.12 splits it: measured on the lap (scripts/feel/
+   * camera.ts) the car moves 0.030 px (0.039 at 1, 0.017 at 1.48) and the frame 0.0089 deg (0.0084, 0.0102)
    */
-  aimRaw: 1,
+  aimRaw: 1.12,
   /** road pitch follow and its share (the body's dive and squat are not the road's slope) */
   pitchW: 2.2,
   pitchShare: 0.8,
