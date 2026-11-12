@@ -180,6 +180,9 @@ export class Game {
     this.config = cfg
     this.mode = cfg.mode
     this.track = this.getTrack(cfg.trackId)
+    // the track object is cached: each session starts from the same rubber (the last race's
+    // rubber made the same seed race differently in one process)
+    this.track.resetRubber(0.45)
     this.world = new PhysicsWorld(this.track)
     this.cars = []
     this.player = null
@@ -280,6 +283,9 @@ export class Game {
     this.config = { mode: 'team', trackId, carId: cars[0]?.carId ?? 'vanta-gt3', color: '#fff', opponents: cars.length, laps, aiSkill: 1, playerName: '' }
     this.mode = 'team'
     this.track = this.getTrack(trackId)
+    // the track object is cached: each session starts from the same rubber (the last race's
+    // rubber made the same seed race differently in one process)
+    this.track.resetRubber(0.45)
     this.world = new PhysicsWorld(this.track)
     this.cars = []
     this.player = null
@@ -342,6 +348,9 @@ export class Game {
     this.config = { mode: 'online', trackId: room.trackId, carId: me.carId, color: me.color, setup, opponents: 0, laps: room.laps, aiSkill: 1, playerName: me.name }
     this.mode = 'online'
     this.track = this.getTrack(room.trackId)
+    // the track object is cached: each session starts from the same rubber (the last race's
+    // rubber made the same seed race differently in one process)
+    this.track.resetRubber(0.45)
     this.world = new PhysicsWorld(this.track)
     this.cars = []
     this.player = null

@@ -19,3 +19,9 @@ test('a slow, weaving, early-braking car mid-pack is passed, not rammed', () => 
   expect(a.slowHitFromBehind).toBeLessThanOrEqual(1)
   expect(a.stuck).toBeLessThanOrEqual(1)
 }, 180000)
+
+test('the same seed replays identically in one process (no state survives between races)', () => {
+  const a = raceAudit(1, { quiet: true, seed: 1002 })
+  const b = raceAudit(1, { quiet: true, seed: 1002 })
+  expect(b).toEqual(a)
+}, 120_000)

@@ -943,7 +943,12 @@ export class Vehicle {
       // as the lower gear fits, on the throttle when below the power band. Never up on the brakes
       // or a lift (the road box below upshifts at 3900 rpm with the pedals off, so braking
       // downshifts were followed by upshifts and the gear hunted 6-5-6-5 into the corners)
-      if (rpm > eng.limiterRpm - 150 && this.gear < sp.gears.length && brake < 0.05 && this.clutchEngage > 0.9) this.requestShift(1)
+      // up when the next gear puts at least as much torque on the wheels (full-throttle curve), or
+      // at the limiter: a fixed limiter-150 point was never reached where the limiter cut or the
+      // torque curve held the revs just below it, and the car sat in 1st near 7,200 rpm
+      const up = this.gear < sp.gears.length && brake < 0.05 && this.clutchEngage > 0.9 && Math.max(this.wheels[2].tyre.slipRatio, this.wheels[3].tyre.slipRatio) < 0.3
+      const rUp = up ? this.ratioFor(this.gear + 1) / this.ratioFor(this.gear) : 1
+      if (up && (rpm > eng.limiterRpm - 150 || (rpm > this.peakTorqueRpm() && lookup(eng.torque, rpm * rUp) * rUp >= lookup(eng.torque, rpm)))) this.requestShift(1)
       else if (this.gear > 1) {
         const rpmDown = (rpm * this.ratioFor(this.gear - 1)) / this.ratioFor(this.gear)
         // engine braking goes to the rear: no downshift while the rears are already slipping
@@ -969,6 +974,15 @@ export class Vehicle {
       const threshold = kick ? eng.limiterRpm - 700 : eng.limiterRpm * (brake > 0.2 ? 0.78 : 0.55)
       if (rpmDown < threshold) this.requestShift(-1)
     }
+  }
+
+  private tqPeakRpm = 0
+  /** where the engine makes its peak torque */
+  peakTorqueRpm() {
+    if (this.tqPeakRpm) return this.tqPeakRpm
+    let best = 0
+    for (const [rpm, t] of this.spec.engine.torque) if (t > best && rpm < this.spec.engine.limiterRpm) (best = t), (this.tqPeakRpm = rpm)
+    return this.tqPeakRpm
   }
 
   private bandRpm = 0
