@@ -187,6 +187,8 @@ export class Vehicle {
   spec: CarSpec
   setup: CarSetup
   assists: Assists = { ...DEFAULT_ASSISTS }
+  /** auto box shifts like a racing driver (set by the AI) instead of the road-car schedule */
+  racingShift = false
   // rigid body (sprung mass)
   mass = 1000
   invMass = 0.001
@@ -936,6 +938,20 @@ export class Vehicle {
       return
     }
     const rpm = this.rpm
+    if (this.racingShift) {
+      // racing driver's shifting (AI): up at the limiter only, down on the brakes or a lift as soon
+      // as the lower gear fits, on the throttle when below the power band. Never up on the brakes
+      // or a lift (the road box below upshifts at 3900 rpm with the pedals off, so braking
+      // downshifts were followed by upshifts and the gear hunted 6-5-6-5 into the corners)
+      if (rpm > eng.limiterRpm - 150 && this.gear < sp.gears.length && brake < 0.05 && this.clutchEngage > 0.9) this.requestShift(1)
+      else if (this.gear > 1) {
+        const rpmDown = (rpm * this.ratioFor(this.gear - 1)) / this.ratioFor(this.gear)
+        // engine braking goes to the rear: no downshift while the rears are already slipping
+        const rearSr = Math.min(this.wheels[2].tyre.slipRatio, this.wheels[3].tyre.slipRatio)
+        if (throttle < 0.3 ? rpmDown < eng.limiterRpm * 0.85 && rearSr > -0.04 && Math.max(this.wheels[2].tyre.combinedSlip, this.wheels[3].tyre.combinedSlip) < 0.85 : rpm < this.powerBandRpm() && rpmDown < eng.limiterRpm - 900) this.requestShift(-1)
+      }
+      return
+    }
     const wheelOmega = (this.wheels[2].omega + this.wheels[3].omega) * 0.5
     const slipping = Math.max(this.wheels[2].tyre.slipRatio, this.wheels[3].tyre.slipRatio) > 0.25
     // early upshifts when cruising, at the limiter when pushing

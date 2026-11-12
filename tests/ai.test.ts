@@ -51,5 +51,14 @@ for (const spec of CARS) {
     console.log(`[${spec.name}] laps: ${laps.map((l) => l.toFixed(2)).join(', ')}  offtrack ${offTrack.toFixed(1)}s  wallHits ${walls} resets ${resets}  tyres(surf/core) ${temps} max ${maxTemp.toFixed(0)}  est ${track.lapTime(ai.profile).toFixed(1)}s`)
     expect(laps.length).toBeGreaterThanOrEqual(2)
     expect(resets).toBe(0)
+    if (spec.id === 'vanta-gt3') {
+      // the race car at the limit: flying laps within 1.5 % of its own speed profile's estimate,
+      // repeatable to 0.3 s, never off the track or into a wall
+      const est = track.lapTime(ai.profile)
+      expect(laps[2]).toBeLessThan(est * 1.015)
+      expect(Math.abs(laps[2] - laps[1])).toBeLessThan(0.3)
+      expect(offTrack).toBe(0)
+      expect(walls).toBe(0)
+    }
   }, 120000)
 }

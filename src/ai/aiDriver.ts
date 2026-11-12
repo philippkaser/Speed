@@ -13,21 +13,41 @@ export interface TrafficCar {
   id: string
 }
 
+/** Share of the tyre's peak friction the AI's speed profile plans with (cornering / braking). */
+export const GRIP_SHARE = 0.94
+export const BRAKE_SHARE = 0.89
+/** Wheel power at full throttle, averaged over the shift band with drivetrain and rolling losses,
+ * as a share of the engine's peak (measured on the straights by scripts/ai-lap-trace.ts: 0.78). */
+/** Share of the rear axle's friction the AI brakes up to with the car's brake balance */
+export const REAR_BRAKE_SHARE = 0.97
+export const POWER_SHARE = 0.79
+/** Braking left over while cornering: 1 - (lat/max)^2 instead of the ellipse's square root, since
+ * braking unloads the rear axle that has to hold the car's yaw (the ellipse spun it on trail-braked entries). */
+export const TRAIL_EXP = 1
+
 /** Quasi-steady-state target speed along the racing line for a given car. */
 export function speedProfileFor(v: Vehicle, track: Track, skill = 1, out?: Float32Array) {
   const sp = v.spec
   const cp = COMPOUNDS[v.setup.compound] ?? COMPOUNDS.RM
   const m = v.totalMass
-  const peakPower = Math.max(...sp.engine.torque.map(([rpm, t]) => (t * rpm * Math.PI) / 30)) * 0.9
+  const peakPower = Math.max(...sp.engine.torque.map(([rpm, t]) => (t * rpm * Math.PI) / 30)) * POWER_SHARE
   return track.computeSpeedProfile(
     {
-      mu: cp.mu * 0.88 * skill,
+      mu: cp.mu * GRIP_SHARE * skill,
       clA_m: (v.clAF + v.clAR) / m,
       power_m: peakPower / m,
       cdA_m: v.cdA / m,
-      brakeMu: cp.mu * 0.84 * skill,
+      brakeMu: cp.mu * BRAKE_SHARE * skill,
       loadSens: cp.loadSens,
       fz0_m: cp.nominalLoad / m,
+      trailExp: TRAIL_EXP,
+      rearBrake: {
+        wr: 1 - sp.weightFront,
+        bf: v.setup.brakeBias,
+        hL: sp.cgHeight / sp.wheelbase,
+        aeroR: v.clAR / Math.max(v.clAF + v.clAR, 1e-6),
+        mu: cp.mu * cp.muLong * REAR_BRAKE_SHARE * skill,
+      },
     },
     out ?? new Float32Array(track.n),
   )
@@ -48,7 +68,17 @@ export class AIDriver {
   overdrive = 0
   overdriveTime = 0
   private steerPrev = 0
-  private trace = 0
+  private us = 0 // learnt steering offset (understeer / slip) at the current corner
+  private thrCap = 1
+  private brkCap = 1
+  private slide = 0
+  private grip = 1
+  private muBrk = 1.5
+  private clA_m = 0
+  private cdA_m = 0
+  private power_m = 300
+  private loadSens = 0
+  private fz0_m = 1
   id = ''
   constructor(
     public vehicle: Vehicle,
@@ -59,10 +89,28 @@ export class AIDriver {
     this.profile = new Float32Array(track.n)
     this.rebuildProfile()
     vehicle.assists = { abs: true, tc: 2, steering: 0, autoGear: true, stability: false }
+    // race cars (sequential box): shift like a racing driver; road cars keep their road schedule
+    // (on the Aurel the racing downshifts put engine braking into a rear that already locks)
+    vehicle.racingShift = vehicle.spec.shiftTime <= 0.08
   }
 
   rebuildProfile() {
     speedProfileFor(this.vehicle, this.track, this.skill, this.profile)
+    const v = this.vehicle
+    const cp = COMPOUNDS[v.setup.compound] ?? COMPOUNDS.RM
+    const m = v.totalMass
+    this.muBrk = cp.mu * BRAKE_SHARE * this.skill
+    this.clA_m = (v.clAF + v.clAR) / m
+    this.cdA_m = v.cdA / m
+    this.power_m = Math.max(...v.spec.engine.torque.map(([rpm, t]) => (t * rpm * Math.PI) / 30)) * POWER_SHARE / m
+    this.loadSens = cp.loadSens
+    this.fz0_m = cp.nominalLoad / m
+  }
+
+  /** Target lateral position at sample i: racing line plus the traffic offset, inside the track. */
+  lineAt(i: number) {
+    const hw = this.track.hw[i]
+    return clamp(this.track.racing[i] + this.offset, -hw + 1.2, hw - 1.2)
   }
 
   /** Compute controls for this frame. */
@@ -111,39 +159,63 @@ export class AIDriver {
     this.targetOffset = wantOffset
     this.offset = lerp(this.offset, this.targetOffset, clamp(dt * 1.2, 0, 1))
 
-    // ---- steering: pure pursuit on racing line (+ offset)
-    const look = 7 + speed * 0.42
-    const ts = this.s + look
-    const ti = tr.idx(ts)
-    const hw = tr.hw[ti]
-    const lineD = clamp(tr.racing[ti] + this.offset, -hw + 1.2, hw - 1.2)
-    const p = tr.pointAt(ts, lineD, { x: 0, y: 0, z: 0 })
-    const dx = p.x - v.pos.x,
-      dz = p.z - v.pos.z
-    const localLeft = dx * v.left.x + dz * v.left.z
-    const localFwd = dx * v.fwd.x + dz * v.fwd.z
-    const L2 = localLeft * localLeft + localFwd * localFwd
-    const curvature = (2 * localLeft) / Math.max(L2, 1)
-    let delta = Math.atan(curvature * v.spec.wheelbase * 1.05)
-    // counter-steer using body slip angle at the rear axle
+    // ---- steering: path-following on the line (curvature feed-forward + lateral/course feedback)
+    // and an inner path-curvature loop whose integrator learns the car's understeer at the limit.
+    const DSm = tr.length / n
+    const i0 = tr.idx(this.s)
+    const ia = (i0 + 3) % n,
+      ib = (i0 - 3 + n) % n
+    const lineD0 = this.lineAt(i0)
+    const lineSlope = (this.lineAt(ia) - this.lineAt(ib)) / (6 * DSm)
     const vl = v.vel.x * v.left.x + v.vel.z * v.left.z
     const vf = v.vel.x * v.fwd.x + v.vel.z * v.fwd.z
-    if (vf > 3) {
-      const yaw = v.w.y
-      const vRear = vl - yaw * v.b // lateral velocity at the rear axle
-      const beta = Math.atan2(vRear, vf)
-      if (Math.abs(beta) > 0.05) delta += beta * 0.9
+    const psiLine = Math.atan2(tr.tx[i0], tr.tz[i0]) + Math.atan(lineSlope)
+    const course = speed > 2 ? Math.atan2(v.vel.x, v.vel.z) : Math.atan2(v.fwd.x, v.fwd.z)
+    let chi = course - psiLine
+    chi -= Math.round(chi / (2 * Math.PI)) * 2 * Math.PI
+    const e = this.d - lineD0
+    const Lc = 7 + 0.3 * speed
+    const kFF = tr.racingCurv[tr.idx(this.s + 2 + speed * 0.1)]
+    let kCmd = kFF - e / (Lc * Lc) - (1.8 * Math.sin(chi)) / Lc
+    kCmd = clamp(kCmd, -0.25, 0.25)
+    const L = v.spec.wheelbase
+    const vRef = Math.max(vf, 3)
+    const kMeas = v.w.y / vRef
+    const dErr = Math.atan(L * kCmd) - Math.atan(L * kMeas)
+    // front axle saturation: do not wind more lock into a front that is past its peak
+    const aF = 0.5 * (v.wheels[0].tyre.slipAngle + v.wheels[1].tyre.slipAngle)
+    const peakF = v.wheels[0].model.compound.peakSlipAngle
+    const frontSat = Math.abs(aF) > peakF * 1.05 && Math.sign(dErr) === Math.sign(this.us + 1e-9)
+    const betaR = vf > 3 ? Math.atan2(vl - v.w.y * v.b, vf) : 0
+    // 0..1: how far the rear is past its working range (a slide to catch)
+    const slide = clamp((Math.abs(betaR) - 0.09) / 0.07, 0, 1)
+    this.slide = slide
+    if (speed > 4 && !frontSat && slide === 0) this.us = clamp(this.us + dErr * dt * 5, -0.12, 0.12)
+    else if (speed <= 4) this.us *= 0.9
+    let delta = Math.atan(L * kCmd) + this.us + 0.6 * dErr
+    // counter-steer on a rear slide (body slip at the rear axle beyond the tyres' working range)
+    if (Math.abs(betaR) > 0.04) delta += (betaR - Math.sign(betaR) * 0.04) * 1.2
+    // a real slide: point the front wheels along the front axle's travel, a little into the corner
+    // (opposite lock that catches it without a slide the other way)
+    if (slide > 0) {
+      const catchDelta = Math.atan2(vl + v.w.y * v.a, vf) + 0.5 * peakF * Math.sign(kCmd)
+      delta = lerp(delta, catchDelta, slide)
     }
     delta = clamp(delta, -v.spec.steerLock, v.spec.steerLock)
     let steer = -delta / v.spec.steerLock
-    steer = lerp(this.steerPrev, steer, clamp(dt * 14, 0, 1))
+    steer = lerp(this.steerPrev, steer, clamp(dt * 30, 0, 1))
     this.steerPrev = steer
 
-    // ---- speed control
-    const pi = tr.idx(this.s + 2 + speed * 0.12)
-    let vt = this.profile[pi]
+    // ---- speed control: follow the profile's acceleration (feed-forward) plus speed feedback,
+    // mapped to pedals through the car's grip/power model; exit traction held just under the
+    // rear tyres' peak combined slip.
+    const sA = this.s + 1 + speed * 0.05
+    const dA = 4 + speed * 0.15
+    const pa = this.profile[tr.idx(sA)]
+    const pb = this.profile[tr.idx(sA + dA)]
+    let vt = pa
     // reduce target if off line (driving on the wrong part of the track)
-    const lineErr = Math.abs(this.d - (tr.racing[tr.idx(this.s)] + this.offset))
+    const lineErr = Math.abs(e)
     vt *= clamp(1 - Math.max(0, lineErr - 2) * 0.03, 0.75, 1)
     // a committed pass: out-brake the car alongside
     if (alongside && this.attack > 0) vt *= 1 + 0.045 * this.attack
@@ -151,22 +223,48 @@ export class AIDriver {
       this.overdriveTime -= dt
       vt *= 1 + this.overdrive
     }
+    // tyres cooked past their window or grip gone (heat, wear): a driver feels it and backs off
+    const w = v.wheels
+    const cp = w[0].model.compound
+    let hot = 0
+    for (let k = 0; k < 4; k++) hot = Math.max(hot, (w[k].tyre.surfTemp - cp.optTemp - cp.tempWindow) / cp.tempWindow)
+    const gf = Math.min(w[0].tyre.gripFactor, w[1].tyre.gripFactor, w[2].tyre.gripFactor, w[3].tyre.gripFactor)
+    this.grip += ((1 - 0.4 * clamp(hot, 0, 1)) * clamp(gf / 0.85, 0.5, 1) - this.grip) * clamp(dt * 2, 0, 1)
+    vt *= Math.sqrt(this.grip)
     vt = Math.min(vt, blockSpeed)
-    const err = vt - speed
+    let aCmd = (pb * pb - pa * pa) / (2 * dA)
+    if (vt < pa) aCmd = Math.min(aCmd, 0)
+    aCmd += 2.5 * (vt - speed)
+    const v2 = speed * speed
+    const fzN = 9.81 + 0.6 * this.clA_m * v2
+    const muB = this.muBrk * Math.max(0.5, 1 - this.loadSens * (fzN / (4 * this.fz0_m) - 1))
+    const drag = 0.6 * this.cdA_m * v2
     let throttle = 0,
       brake = 0
-    if (err > 0) throttle = clamp(0.35 + err * 0.6, 0, 1)
-    else if (err > -1.2) throttle = clamp(0.25 + err * 0.2, 0, 0.3)
-    else brake = clamp(-err * 0.22, 0, 1)
-    // stability: lift when sliding
-    // traction-aware throttle: feed in power only as fast as the rears can take it
-    const rearSlip = Math.max(Math.abs(v.wheels[2].tyre.slipAngle), Math.abs(v.wheels[3].tyre.slipAngle))
-    const peak = v.wheels[2].model.compound.peakSlipAngle
+    if (aCmd >= 0) {
+      const aMax = Math.max(1, this.power_m / Math.max(speed, 5))
+      throttle = clamp((aCmd + drag) / aMax + 0.1, 0, 1)
+    } else {
+      const need = -aCmd - drag
+      if (need > 0) brake = clamp(need / (muB * fzN * 1.05), 0, 1)
+      else throttle = clamp((drag + aCmd) / Math.max(1, this.power_m / Math.max(speed, 5)), 0, 0.4)
+    }
+    // traction: a throttle cap that backs off as the rear's combined slip nears its peak
     const rearComb = Math.max(v.wheels[2].tyre.combinedSlip, v.wheels[3].tyre.combinedSlip)
-    throttle *= clamp(1 - (rearSlip / peak - 0.85) * 1.6, 0.15, 1)
-    throttle *= clamp(1 - (rearComb - 1.0) * 1.5, 0.3, 1)
-    const yawErr = Math.abs(v.w.y) - Math.abs(speed * curvature) * 1.25
-    if (yawErr > 0.08 && speed > 8) throttle *= 0.6
+    if (rearComb > 0.9 && throttle > 0) this.thrCap = Math.max(0.1, this.thrCap - dt * 30 * (rearComb - 0.9))
+    else this.thrCap = Math.min(1, this.thrCap + dt * 1.5)
+    throttle = Math.min(throttle, this.thrCap)
+    // trail braking: release the brake as fast as the rear's combined slip passes its peak
+    // (braking while turning unloads the rear), so the car rotates without stepping out
+    // (not on longitudinal slip alone: under braking ABS holds that at its peak by design)
+    const aRr = Math.max(Math.abs(v.wheels[2].tyre.slipAngle), Math.abs(v.wheels[3].tyre.slipAngle)) / v.wheels[2].model.compound.peakSlipAngle
+    // past its peak while also cornering (slip angle > 60 % of peak), the rear is about to let go
+    const rearOver = aRr > 0.6 ? Math.max(rearComb - 1.3, aRr - 1) : 0
+    if (rearOver > 0 && brake > 0) this.brkCap = Math.max(0, this.brkCap - dt * 20 * rearOver)
+    else this.brkCap = Math.min(1, this.brkCap + dt * 2)
+    brake = Math.min(brake, this.brkCap)
+    // catching a slide: a balancing touch of throttle instead of a coasting (engine-braked) rear
+    if (this.slide > 0 && brake < 0.05) throttle = Math.max(throttle, 0.18 * this.slide)
 
     // ---- stuck / reverse recovery
     if (speed < 1.5) this.stuckTime += dt
@@ -188,8 +286,6 @@ export class AIDriver {
     out.throttle = throttle
     out.brake = brake
     out.handbrake = 0
-    this.trace++
-    void n
   }
 
   /** Teleport back onto the racing line a little behind the current position. */

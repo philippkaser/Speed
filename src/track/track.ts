@@ -673,7 +673,7 @@ export class Track implements Ground {
   /** Quasi steady-state lap speed profile along the racing line. */
   /** loadSens / fz0_m: the tyre's friction loss per unit of load above its nominal load (fz0_m = nominal
    *  wheel load / car mass), so downforce adds grip with the same diminishing return as in the tyre model */
-  computeSpeedProfile(p: { mu: number; clA_m: number; power_m: number; cdA_m: number; brakeMu: number; loadSens?: number; fz0_m?: number }, out?: Float32Array) {
+  computeSpeedProfile(p: { mu: number; clA_m: number; power_m: number; cdA_m: number; brakeMu: number; loadSens?: number; fz0_m?: number; trailExp?: number; rearBrake?: { wr: number; bf: number; hL: number; aeroR: number; mu: number } }, out?: Float32Array) {
     const n = this.n
     const v = out ?? new Float32Array(n)
     const g = 9.81
@@ -714,8 +714,18 @@ export class Track implements Ground {
           b = (j + 1) % n
         const vb = v[b]
         const latG = vb * vb * Math.abs(this.racingCurv[b])
-        const maxA = muAt(p.brakeMu, vb * vb) * (g + rho * p.clA_m * vb * vb)
-        const avail = Math.sqrt(Math.max(0, maxA * maxA - latG * latG)) * 0.9 + rho * p.cdA_m * vb * vb
+        let maxA = muAt(p.brakeMu, vb * vb) * (g + rho * p.clA_m * vb * vb)
+        const rb = p.rearBrake
+        if (rb) {
+          // the brake balance: the deceleration at which the rear axle (unloaded by the braking,
+          // carrying 1 - bias of the brake force) reaches its friction limit
+          const mr = muAt(rb.mu, vb * vb)
+          maxA = Math.min(maxA, (mr * (g * rb.wr + rho * p.clA_m * vb * vb * rb.aeroR)) / (1 - rb.bf + mr * rb.hL))
+        }
+        // braking left over by the cornering: friction ellipse (trailExp 0.5), or less when the rear
+        // axle, unloaded by the braking, limits combined braking and turning (trailExp > 0.5)
+        const f = Math.min(1, latG / maxA)
+        const avail = maxA * Math.pow(1 - f * f, p.trailExp ?? 0.5) * 0.9 + rho * p.cdA_m * vb * vb
         const vn = Math.sqrt(vb * vb + 2 * avail * DS)
         if (vn < v[i]) v[i] = vn
       }

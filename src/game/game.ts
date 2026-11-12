@@ -503,6 +503,7 @@ export class Game {
       if (sh.up) inp.shiftUp = true
       if (sh.down) inp.shiftDown = true
       v.assists = { ...useSettings.getState().assists }
+      v.racingShift = false
       if (DONUT) {
         // test hook (?donut): full throttle at full lock with traction control off -> tyre smoke
         inp.throttle = 1
