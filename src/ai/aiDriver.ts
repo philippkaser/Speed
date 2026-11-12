@@ -146,6 +146,8 @@ export class AIDriver {
       hi = Infinity
     const aB = 0.7 * this.muBrk * (9.81 + 0.6 * this.clA_m * speed * speed)
     let passTarget = false
+    const i00 = tr.idx(this.s)
+    const rejoin = Math.abs(this.d) > tr.hw[i00] - 0.8 && Math.abs(this.d - tr.racing[i00]) > 3
     for (const o of traffic) {
       if (o.id === this.id) continue
       let ds = o.s - this.s
@@ -169,7 +171,9 @@ export class AIDriver {
         }
       }
       // alongside: keep a car's width from it, whoever is ahead
-      if (ds > -5.5 && ds < 5.5 && alat >= 0.9) {
+      // ... and when rejoining (pit exit, grass), any car coming up behind: merge behind it, not into it
+      const soon = rejoin && ds <= -5.5 && ds > -60 && o.speed > speed - 2
+      if (((ds > -5.5 && ds < 5.5) || soon) && alat >= 0.9) {
         if (lat > 0) hi = Math.min(hi, o.d - 2.4)
         else lo = Math.max(lo, o.d + 2.4)
         if (ds > -3 && ds < 4) alongside = true
@@ -276,7 +280,8 @@ export class AIDriver {
     }
     // traction: a throttle cap that backs off as the rear's combined slip nears its peak
     const rearComb = Math.max(v.wheels[2].tyre.combinedSlip, v.wheels[3].tyre.combinedSlip)
-    if (rearComb > 0.9 && throttle > 0) this.thrCap = Math.max(0.1, this.thrCap - dt * 30 * (rearComb - 0.9))
+    // (not in a standing start: there the launch revs and traction control do it, the cap bogged it)
+    if (rearComb > 0.9 && throttle > 0 && speed > 12) this.thrCap = Math.max(0.1, this.thrCap - dt * 30 * (rearComb - 0.9))
     else this.thrCap = Math.min(1, this.thrCap + dt * 1.5)
     throttle = Math.min(throttle, this.thrCap)
     // trail braking: release the brake as fast as the rear's combined slip passes its peak
