@@ -86,7 +86,7 @@ export function raceAudit(laps = 4, opts: { slowPlayer?: boolean; fastLast?: boo
   const sim = game.cars.map((gc) => ids.indexOf(gc.id)) // game car index -> race car index
   let evSeen = 0
   // the fast car's racecraft: time in the tow, attack gates, attacks started / completed / aborted
-  const fs = { tow: 0, follow: 0, gateT: [0, 0, 0, 0, 0, 0, 0], started: 0, done: 0, aborted: 0, abortWhy: [0, 0, 0, 0, 0, 0, 0], outDv: 0, outT: 0, inDv: 0, inT: 0, target: '' }
+  const fs = { tow: 0, follow: 0, gateT: [0, 0, 0, 0, 0, 0, 0], started: 0, done: 0, aborted: 0, abortWhy: [0, 0, 0, 0, 0, 0, 0], outDv: 0, outT: 0, inDv: 0, inT: 0, target: '', laneT: [0, 0, 0, 0, 0], heldT: 0, pitT: 0 }
   const dt = 1 / 60
   const sdiff = (a: number, b: number) => {
     let d = a - b
@@ -132,8 +132,11 @@ export function raceAudit(laps = 4, opts: { slowPlayer?: boolean; fastLast?: boo
       if (a === fast || b === fast) r.fastContacts++
       log(`${fmt(t)}  contact ${rear ? 'nose-to-tail' : 'side'}  ${name(back)} -> ${name(front)}  closing ${(closing * 3.6).toFixed(0)} km/h  lat ${dd.toFixed(1)} m  s ${ea.timing.s.toFixed(0)}  ${[back, front].map((k) => { const ai = cars[k].entry.ai; return ai ? `${name(k)} d ${cars[k].entry.sample.d.toFixed(1)} m${ai.mode} l${ai.lane} w${ai.w.toFixed(2)}${ai.attackId ? ' atk' : ''}` : '' }).join(' | ')}`)
     }
+    if (fast >= 0 && cars[fast].pit) fs.pitT += dt
     if (fast >= 0 && cars[fast].entry.ai && !cars[fast].pit) {
       const ai = cars[fast].entry.ai!
+      if (ai.w > 0.5) fs.laneT[ai.mode] += dt
+      if (ai.held) fs.heldT += dt
       const sp = cars[fast].entry.sim.vehicle.speed
       if (ai.aheadDs < Infinity) {
         fs.follow += dt
@@ -205,6 +208,7 @@ export function raceAudit(laps = 4, opts: { slowPlayer?: boolean; fastLast?: boo
     if (fast >= 0) {
       log(`fast from last: gained ${r.fastGained} places, ${r.fastContacts} contacts`)
       log(`  following ${fs.follow.toFixed(0)} s, within 1 s ${fs.tow.toFixed(0)} s; gate time (n/a, single file, lane taken, plan, held: corner, moving, towing) ${fs.gateT.map((x) => x.toFixed(0)).join('/')} s`)
+      log(`  held by a car ${fs.heldT.toFixed(0)} s; on a lane line by mode (free, alongside, attack, defend, rejoin) ${fs.laneT.map((x) => x.toFixed(0)).join('/')} s; in the pits ${fs.pitT.toFixed(0)} s`)
       log(`  attacks ${fs.started}: done ${fs.done}, aborted ${fs.aborted} (by gate ${fs.abortWhy.join('/')}); straights: pulled out ${(fs.outDv / Math.max(fs.outT, 1e-9) * 3.6).toFixed(1)} km/h faster than the car ahead (${fs.outT.toFixed(0)} s), in its tow ${(fs.inDv / Math.max(fs.inT, 1e-9) * 3.6).toFixed(1)} km/h (${fs.inT.toFixed(0)} s)`)
     }
   }
