@@ -1,7 +1,7 @@
 // Racecraft audit: a headless 12-car team race from a standing start. Prints car-to-car contacts
 // (closing speed, nose-to-tail vs side, who hit whom), off-tracks, spins, stuck cars, overtakes
 // (and how many were clean), side-by-side time, first-corner incidents, finishing spread and lap
-// pace vs skill.   bun scripts/race-audit.ts [laps=4] [--slow-player] [--fast-last] [--quiet]
+// pace vs skill.   bun scripts/race-audit.ts [laps=4] [--seeds=n] [--log] [--slow-player] [--fast-last] [--quiet]
 import { game } from '../src/game/game'
 import { useTeamStore } from '../src/team/teamStore'
 import { SEASON } from '../src/team/data'
@@ -60,9 +60,11 @@ export function raceAudit(laps = 4, opts: { slowPlayer?: boolean; fastLast?: boo
     const shift = Math.round(10 / (L / track.n))
     ai.rebuildProfile = () => {
       rebuild()
-      tmp.set(ai.profile)
-      // 3 % slower in the corners and on the straights, braking 10 m early
-      for (let i = 0; i < track.n; i++) ai.profile[i] = Math.min(tmp[i], tmp[(i + shift) % track.n]) * 0.955
+      // 3 % slower in the corners and on the straights, braking 10 m early (on every line's plan)
+      for (const p of [ai.profile, ai.profL, ai.profR]) {
+        tmp.set(p)
+        for (let i = 0; i < track.n; i++) p[i] = Math.min(tmp[i], tmp[(i + shift) % track.n]) * 0.955
+      }
     }
     ai.rebuildProfile()
     const lineAt = ai.lineAt.bind(ai)
@@ -137,7 +139,7 @@ export function raceAudit(laps = 4, opts: { slowPlayer?: boolean; fastLast?: boo
       // past the kerb (the racing line runs over the flat kerbs)
       const dd = c.entry.sample.d
       const isOff = Math.abs(dd) > track.hw[i] + (dd > 0 ? track.L : track.R).kerb[i] + 0.4
-      if (isOff && !off[k]) { r.offs++; if (lap1(k)) r.firstCorner++; log(`${fmt(t)}  off-track ${name(k)} s ${c.entry.timing.s.toFixed(0)} d ${c.entry.sample.d.toFixed(1)} v ${(v.speed * 3.6).toFixed(0)} since pit ${(t - c.lastPitAt).toFixed(1)}`) }
+      if (isOff && !off[k]) { r.offs++; if (lap1(k)) r.firstCorner++; log(`${fmt(t)}  off-track ${name(k)} s ${c.entry.timing.s.toFixed(0)} d ${c.entry.sample.d.toFixed(1)} v ${(v.speed * 3.6).toFixed(0)} since pit ${(t - c.lastPitAt).toFixed(1)}  ai m${c.entry.ai?.mode} l${c.entry.ai?.lane} w${c.entry.ai?.w.toFixed(2)}`) }
       off[k] = isOff ? 1 : 0
       const vf = v.vel.x * v.fwd.x + v.vel.z * v.fwd.z
       const vl = v.vel.x * v.left.x + v.vel.z * v.left.z
@@ -145,7 +147,7 @@ export function raceAudit(laps = 4, opts: { slowPlayer?: boolean; fastLast?: boo
       if (isSpin && !spun[k] && t - spinAt[k] > 8) {
         spinAt[k] = t
         r.spins++
-        if (lap1(k)) r.firstCorner++; log(`${fmt(t)}  spin ${name(k)} s ${c.entry.timing.s.toFixed(0)} d ${c.entry.sample.d.toFixed(1)} v ${(v.speed * 3.6).toFixed(0)} since pit ${(t - c.lastPitAt).toFixed(1)}`) }
+        if (lap1(k)) r.firstCorner++; log(`${fmt(t)}  spin ${name(k)} s ${c.entry.timing.s.toFixed(0)} d ${c.entry.sample.d.toFixed(1)} v ${(v.speed * 3.6).toFixed(0)} since pit ${(t - c.lastPitAt).toFixed(1)}  ai m${c.entry.ai?.mode} l${c.entry.ai?.lane} w${c.entry.ai?.w.toFixed(2)}`) }
       spun[k] = isSpin ? 1 : 0
       stuckT[k] = v.speed < 2 ? stuckT[k] + dt : 0
       if (stuckT[k] > 3 && !stuckFlag[k]) { stuckFlag[k] = 1; r.stuck++; log(`${fmt(t)}  STUCK ${name(k)} s ${c.entry.timing.s.toFixed(0)}`) }
@@ -184,7 +186,7 @@ if (import.meta.main) {
   const a = process.argv.slice(2)
   const laps = +(a.find((x) => !x.startsWith('--')) ?? 4)
   const seeds = +(a.find((x) => x.startsWith('--seeds='))?.slice(8) ?? 1)
-  const opts = { slowPlayer: a.includes('--slow-player'), fastLast: a.includes('--fast-last'), quiet: a.includes('--quiet') || seeds > 1 }
+  const opts = { slowPlayer: a.includes('--slow-player'), fastLast: a.includes('--fast-last'), quiet: a.includes('--quiet') || (seeds > 1 && !a.includes('--log')) }
   const all: AuditResult[] = []
   for (let k = 0; k < seeds; k++) all.push(raceAudit(laps, { ...opts, seed: seeds > 1 ? 1000 + k : undefined }))
   if (seeds > 1) {

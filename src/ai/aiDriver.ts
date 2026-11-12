@@ -35,7 +35,7 @@ export const POWER_SHARE = 0.79
 export const TRAIL_EXP = 1
 
 /** Quasi-steady-state target speed along the racing line for a given car. */
-export function speedProfileFor(v: Vehicle, track: Track, skill = 1, out?: Float32Array) {
+export function speedProfileFor(v: Vehicle, track: Track, skill = 1, out?: Float32Array, curv?: Float32Array) {
   const sp = v.spec
   const cp = COMPOUNDS[v.setup.compound] ?? COMPOUNDS.RM
   const m = v.totalMass
@@ -60,14 +60,24 @@ export function speedProfileFor(v: Vehicle, track: Track, skill = 1, out?: Float
       },
     },
     out ?? new Float32Array(track.n),
+    curv,
   )
 }
 
 export class AIDriver {
   profile: Float32Array
   sample = makeSample()
-  offset = 0 // lateral offset from racing line for overtakes
-  targetOffset = 0
+  /** speed plans on the left / right lane lines (track.laneL / laneR) */
+  profL: Float32Array
+  profR: Float32Array
+  /** 0..1: blend from the ideal line to the lane line on side `lane` (+1 left, -1 right) */
+  w = 0
+  lane = 0
+  /** what the driver is doing in traffic: 0 free, 1 alongside, 2 attack, 3 defend, 4 rejoin */
+  mode = 0
+  private wTarget = 0
+  private ws = 0
+  private defended = false
   stuckTime = 0
   reverseTime = 0
   s = 0
@@ -82,7 +92,6 @@ export class AIDriver {
   private thrCap = 1
   private brkCap = 1
   private slide = 0
-  private passSide = 0
   private lo = -Infinity
   private hi = Infinity
   private grip = 1
@@ -99,7 +108,10 @@ export class AIDriver {
     public skill = 0.97,
     public aggression = 0.5,
   ) {
+    track.ensureLanes()
     this.profile = new Float32Array(track.n)
+    this.profL = new Float32Array(track.n)
+    this.profR = new Float32Array(track.n)
     this.rebuildProfile()
     vehicle.assists = { abs: true, tc: 2, steering: 0, autoGear: true, stability: false }
     // race cars (sequential box): shift like a racing driver; road cars keep their road schedule
@@ -109,6 +121,8 @@ export class AIDriver {
 
   rebuildProfile() {
     speedProfileFor(this.vehicle, this.track, this.skill, this.profile)
+    speedProfileFor(this.vehicle, this.track, this.skill, this.profL, this.track.laneLCurv)
+    speedProfileFor(this.vehicle, this.track, this.skill, this.profR, this.track.laneRCurv)
     const v = this.vehicle
     const cp = COMPOUNDS[v.setup.compound] ?? COMPOUNDS.RM
     const m = v.totalMass
@@ -120,11 +134,49 @@ export class AIDriver {
     this.fz0_m = cp.nominalLoad / m
   }
 
-  /** Target lateral position at sample i: racing line plus the traffic offset, inside the track. */
+  /** The blended line (ideal line to lane line) at sample i, before the traffic bounds. */
+  nominalAt(i: number) {
+    const tr = this.track
+    const r = tr.racing[i]
+    if (this.ws <= 0) return r
+    return r + this.ws * ((this.lane > 0 ? tr.laneL[i] : tr.laneR[i]) - r)
+  }
+  /** Target lateral position at sample i: the blended line, inside the usable width and the room
+   *  left by a car alongside. */
   lineAt(i: number) {
     const a = Math.max(this.track.lineLo[i], this.lo),
       b = Math.min(this.track.lineHi[i], this.hi)
-    return a <= b ? clamp(this.track.racing[i] + this.offset, a, b) : 0.5 * (a + b)
+    return a <= b ? clamp(this.nominalAt(i), a, b) : 0.5 * (a + b)
+  }
+  /** Curvature of the blended line at sample i. */
+  curvAt(i: number) {
+    const tr = this.track
+    const k = tr.racingCurv[i]
+    if (this.ws <= 0) return k
+    return k + this.ws * ((this.lane > 0 ? tr.laneLCurv[i] : tr.laneRCurv[i]) - k)
+  }
+  /** Speed plan of the line the car is on: the ideal line's, the lane's, the lower of the two while blending. */
+  planAt(i: number) {
+    if (this.ws <= 0) return this.profile[i]
+    const pl = this.lane > 0 ? this.profL[i] : this.profR[i]
+    return this.ws >= 0.999 ? pl : Math.min(pl, this.profile[i])
+  }
+  /** Can the car, at `speed` from sample i0, still meet the plan `prof` over the next 250 m with a margin
+   *  on its braking (the commit / back-out test for a move to a lane)? */
+  canMeet(prof: Float32Array, i0: number, speed: number) {
+    const tr = this.track
+    const n = tr.n,
+      DSm = tr.length / n
+    const v2 = speed * speed
+    if (v2 > prof[i0] * prof[i0] * 1.03) return false
+    const stride = Math.max(1, Math.round(3 / DSm))
+    for (let x = stride * DSm, j = (i0 + stride) % n; x < 250; x += stride * DSm, j = (j + stride) % n) {
+      const vj = prof[j]
+      if (vj * vj >= v2) continue
+      const aCap = 0.75 * this.muBrk * (9.81 + 0.6 * this.clA_m * vj * vj)
+      if (v2 - vj * vj > 2 * aCap * x) return false
+    }
+    return true
   }
 
   /** Compute controls for this frame. */
@@ -144,19 +196,25 @@ export class AIDriver {
       return
     }
 
-    // ---- traffic
-    // following: never closer than the braking distance allows (the car ahead may brake as hard as
-    // we can, or earlier), a short time gap behind it; passing: pull out to the side with room when
-    // faster, the slipstream does the rest; alongside: leave a car's width (bounds on the line)
+    // ---- traffic: lanes. Near another car the driver leaves the ideal line for the lane line on its
+    // side (track.laneL / laneR: >= 2.5 m from the other lane, on the surface, with its own speed plan);
+    // following: never closer than the braking distance allows (the car ahead may brake as hard as we
+    // can), a short time gap behind it.
     let blockSpeed = Infinity
-    let wantOffset = 0
-    let alongside = false
     let lo = -Infinity,
       hi = Infinity
     const aB = 0.7 * this.muBrk * (9.81 + 0.6 * this.clA_m * speed * speed)
-    let passTarget = false
     const i00 = tr.idx(this.s)
     const rejoin = Math.abs(this.d) > tr.hw[i00] - 0.8 && Math.abs(this.d - tr.racing[i00]) > 3
+    const safe = 8 + 0.15 * speed
+    let blockerDs = Infinity,
+      blockerD = 0,
+      alongDs = Infinity,
+      alongSide = 0,
+      holdSide = 0,
+      threat = false,
+      anyBehind = false,
+      wash = 0
     for (const o of traffic) {
       if (o.id === this.id) continue
       let ds = o.s - this.s
@@ -164,6 +222,8 @@ export class AIDriver {
       if (ds > tr.length / 2) ds -= tr.length
       const lat = o.d - this.d
       const alat = Math.abs(lat)
+      // which side of it we are on (ties broken by id, so the two cars agree)
+      const mySide = lat < 0 || (lat === 0 && this.id > o.id) ? 1 : -1
       // a car much slower than us ahead (spun, sideways, crawling back) may lie across the track:
       // treat it as wider than a car on its line
       const pathW = o.speed < speed * 0.6 && speed > 10 ? 3.6 : 2.3
@@ -171,31 +231,99 @@ export class AIDriver {
         const gap = ds - 4.8
         const gapMin = 1.2 + 0.18 * speed
         blockSpeed = Math.min(blockSpeed, Math.sqrt(Math.max(0, o.speed * o.speed + 2 * aB * (gap - gapMin))))
-        // a pass: closing, or held up (within a few car lengths at similar speed)
-        if (ds < 20 + speed * 0.5 && (speed - o.speed > 0.3 || gap < gapMin + 6)) {
-          passTarget = true
-          const i = tr.idx(o.s)
-          const roomLeft = tr.hw[i] - o.d
-          const roomRight = tr.hw[i] + o.d
-          if (this.passSide === 0) this.passSide = roomLeft > roomRight ? 1 : -1
-          const want = o.d + this.passSide * 2.6 - tr.racing[tr.idx(this.s)]
-          if (Math.abs(want) > Math.abs(wantOffset)) wantOffset = want
+        // held up (within a few car lengths at similar speed) or closing: a car to pass
+        if (ds < blockerDs && ds > 6 && ds < 20 + speed * 0.5 && (speed - o.speed > 0.3 || gap < gapMin + 6)) {
+          blockerDs = ds
+          blockerD = o.d
         }
+        // dirty air within ~1.5 car lengths (the physics' wake: front downforce lost, decaying over 10 m)
+        if (gap < 12 && alat < 1.8) wash = Math.max(wash, 0.25 * Math.exp(-Math.max(0, gap) / 10) * Math.min(1, (o.speed * o.speed) / Math.max(1, speed * speed)))
       }
-      // alongside: keep a car's width from it, whoever is ahead
-      // ... and when rejoining (pit exit, grass), any car coming up behind: merge behind it, not into it
+      // alongside (overlapping, within half a car length, or closing to that within ~1 s): each takes
+      // the lane on its own side
+      const closing = clamp(ds > 0 ? speed - o.speed : o.speed - speed, 0, 12)
+      if (Math.abs(ds) < 7 + closing && alat < 6 && Math.abs(ds) < alongDs) {
+        alongDs = Math.abs(ds)
+        alongSide = mySide
+      }
+      // still sharing the road: hold the lane until it is a safe gap ahead or behind
+      if (Math.abs(ds) < safe && alat < 6) holdSide = mySide
+      if (ds < -6 && ds > -30 && alat < 2.5 && o.speed > speed + 0.3) threat = true
+      if (ds < 0 && ds > -40) anyBehind = true
+      // safety: keep a car's width from a car alongside, and when rejoining (pit exit, grass) from
+      // any car coming up behind: merge behind it, not into it
       const soon = rejoin && ds <= -5.5 && ds > -60 && o.speed > speed - 2
       if (((ds > -5.5 && ds < 5.5) || soon) && alat >= 0.9) {
         if (lat > 0) hi = Math.min(hi, o.d - 2.4)
         else lo = Math.max(lo, o.d + 2.4)
-        if (ds > -3 && ds < 4) alongside = true
       }
     }
-    if (!passTarget) this.passSide = 0
+    if (!anyBehind) this.defended = false
+    let want = 0,
+      wantSide = this.lane
+    if (rejoin || (this.mode === 4 && Math.abs(this.d - this.nominalAt(i00)) > 1)) {
+      // rejoin: through the lane on the side the car comes from, at that lane's speed
+      if (this.mode !== 4 || this.lane === 0) {
+        this.lane = this.d > 0 ? 1 : -1
+        this.w = 1
+      }
+      this.mode = 4
+      want = 1
+      wantSide = this.lane
+    } else if (alongSide !== 0) {
+      this.mode = 1
+      want = 1
+      wantSide = alongSide
+    } else if ((this.mode === 1 || this.mode === 2 || this.mode === 4) && holdSide !== 0 && (this.lane === holdSide || this.w < 0.02)) {
+      // the car beside is not yet a safe gap away
+      want = 1
+      wantSide = holdSide
+    } else if (blockerDs < Infinity && tr.laneTwo[tr.idx(this.s + blockerDs)]) {
+      // attack: to the lane away from the car ahead, only if its plan can still be met from here
+      const ib = tr.idx(this.s + blockerDs)
+      const side = tr.laneL[ib] - blockerD > blockerD - tr.laneR[ib] ? 1 : -1
+      if (this.canMeet(side > 0 ? this.profL : this.profR, i00, speed)) {
+        this.mode = 2
+        want = 1
+        wantSide = side
+      } else this.mode = 0
+    } else if (this.mode === 3 && anyBehind) {
+      want = 1
+    } else if (threat && !this.defended && this.w < 0.02) {
+      // defence: one early move to the inside lane of the next corner, then hold
+      let kMax = 0,
+        side = 0
+      for (let x = 20; x < 160; x += 4) {
+        const j = tr.idx(this.s + x)
+        if (Math.abs(tr.racingCurv[j]) > kMax) {
+          kMax = Math.abs(tr.racingCurv[j])
+          side = tr.racing[j] > 0.5 * (tr.lineLo[j] + tr.lineHi[j]) ? 1 : -1
+        }
+      }
+      if (kMax > 1 / 150 && this.canMeet(side > 0 ? this.profL : this.profR, i00, speed)) {
+        this.defended = true
+        this.mode = 3
+        want = 1
+        wantSide = side
+      } else this.mode = 0
+    } else this.mode = 0
+    // a change of side goes through the ideal line
+    if (wantSide !== this.lane && this.w > 0.02) this.wTarget = 0
+    else {
+      this.lane = wantSide
+      this.wTarget = this.lane === 0 ? 0 : want
+    }
+    // blend rate: the lateral move at <= ~2.5 m/s, smoothstepped
+    const dLane = Math.abs((this.lane > 0 ? tr.laneL[i00] : this.lane < 0 ? tr.laneR[i00] : tr.racing[i00]) - tr.racing[i00])
+    const rate = clamp(2.5 / Math.max(1, dLane), 0.35, 2)
+    this.w = clamp(this.w + clamp(this.wTarget - this.w, -rate * dt, rate * dt), 0, 1)
+    if (this.w < 1e-4 && this.wTarget === 0) {
+      this.w = 0
+      if (this.mode === 0) this.lane = 0
+    }
+    this.ws = this.w * this.w * (3 - 2 * this.w)
     this.lo = lo
     this.hi = hi
-    this.targetOffset = wantOffset
-    this.offset = lerp(this.offset, this.targetOffset, clamp(dt * 1.5, 0, 1))
 
     // ---- steering: path-following on the line (curvature feed-forward + lateral/course feedback)
     // and an inner path-curvature loop whose integrator learns the car's understeer at the limit.
@@ -213,7 +341,7 @@ export class AIDriver {
     chi -= Math.round(chi / (2 * Math.PI)) * 2 * Math.PI
     const e = this.d - lineD0
     const Lc = 7 + 0.25 * speed
-    const kFF = tr.racingCurv[tr.idx(this.s + 2 + speed * 0.2)]
+    const kFF = this.curvAt(tr.idx(this.s + 2 + speed * 0.2))
     // far off the line (rejoining from the grass or the pit exit): converge at a bounded angle
     // instead of a full-lock dart across the track
     const eC = clamp(e, -2.5, 2.5)
@@ -252,21 +380,26 @@ export class AIDriver {
     // rear tyres' peak combined slip.
     const sA = this.s + 1 + speed * 0.05
     const dA = 4 + speed * 0.15
-    // the plan is for the racing line: on an offset line (traffic) the corner is tighter on the inside,
-    // R' = R - o, so the grip-limited speed scales by sqrt(1 - k o); the same off the line in a corner
+    // the plan of the line the car is on; pushed off it by a car alongside, the corner is tighter on the
+    // inside, R' = R - o, so the grip-limited speed scales by sqrt(1 - k o)
     const iA = tr.idx(sA),
       iB = tr.idx(sA + dA)
-    const kA = tr.racingCurv[iA],
-      kB = tr.racingCurv[iB]
-    const pa = this.profile[iA] * Math.sqrt(clamp(1 - kA * (this.lineAt(iA) - tr.racing[iA]), 0.5, 1))
-    const pb = this.profile[iB] * Math.sqrt(clamp(1 - kB * (this.lineAt(iB) - tr.racing[iB]), 0.5, 1))
+    const kA = this.curvAt(iA),
+      kB = this.curvAt(iB)
+    let pa = this.planAt(iA) * Math.sqrt(clamp(1 - kA * (this.lineAt(iA) - this.nominalAt(iA)), 0.5, 1))
+    let pb = this.planAt(iB) * Math.sqrt(clamp(1 - kB * (this.lineAt(iB) - this.nominalAt(iB)), 0.5, 1))
+    // dirty air: the front downforce lost (share `wash`) takes the cornering speed from v^2 to
+    // v^2 g / (g + rho clA wash v^2) on a grip-limited (front-limited) corner
+    if (wash > 0.01) {
+      const cl = 0.6 * this.clA_m * LAT_AERO_CAL * wash
+      if (Math.abs(kA) > 1 / 400) pa *= Math.sqrt(9.81 / (9.81 + cl * pa * pa))
+      if (Math.abs(kB) > 1 / 400) pb *= Math.sqrt(9.81 / (9.81 + cl * pb * pb))
+    }
     let vt = pa
     // reduce target if off line (driving on the wrong part of the track): rejoining in a corner is a
     // tighter arc than the line's
     const lineErr = Math.abs(e)
     vt *= clamp(1 - Math.max(0, lineErr - 2) * 0.03 - Math.max(0, lineErr - 0.7) * Math.abs(kA) * 3, 0.75, 1)
-    // a committed pass: out-brake the car alongside
-    if (alongside && this.attack > 0) vt *= 1 + 0.015 * this.attack
     if (this.overdriveTime > 0) {
       this.overdriveTime -= dt
       vt *= 1 + this.overdrive
@@ -342,6 +475,8 @@ export class AIDriver {
     const tr = this.track
     const s = this.s - 10
     const i = tr.idx(s)
+    this.w = this.ws = 0
+    this.lane = this.mode = 0
     const p = tr.pointAt(s, tr.racing[i], { x: 0, y: 0, z: 0 })
     this.vehicle.reset(p.x, p.z, tr.headingAt(s), tr, true)
   }

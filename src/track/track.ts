@@ -1,6 +1,9 @@
 // Track model: spline -> dense centreline samples with per-sample cross-section description.
 // Implements the physics Ground interface (height, normal, surface, track coords, barriers).
-import { expandStations, lineBounds, LINE_STEP, minCurvatureLine } from './racingLine'
+import { expandStations, lineBounds, LINE_STEP, minCurvature, minCurvatureLine } from './racingLine'
+
+/** Centre-to-centre distance of two cars on the left and right lane lines (m) */
+export const LANE_SEP = 2.5
 import { type Ground, type GroundSample, Surface } from '../physics/ground'
 import { clamp, hash2, lerp, smoothstep, valueNoise2 } from '../physics/math'
 import type { TrackDef } from './trackDef'
@@ -626,13 +629,17 @@ export class Track implements Ground {
     this.lineLo = lo
     this.lineHi = hi
     this.racing = expandStations(minCurvatureLine(this, lo, hi), LINE_STEP, n, lo, hi)
-    // racing line curvature
-    this.racingCurv = new Float32Array(n)
+    this.racingCurv = this.lineCurvature(this.racing)
+  }
+
+  /** Curvature (1/m, smoothed) of the line at lateral offsets `off`. */
+  lineCurvature(off: Float32Array, out = new Float32Array(this.n)) {
+    const n = this.n
     const rx = new Float64Array(n),
       rz = new Float64Array(n)
     for (let i = 0; i < n; i++) {
-      rx[i] = this.px[i] + this.lx[i] * this.racing[i]
-      rz[i] = this.pz[i] + this.lz[i] * this.racing[i]
+      rx[i] = this.px[i] + this.lx[i] * off[i]
+      rz[i] = this.pz[i] + this.lz[i] * off[i]
     }
     for (let i = 0; i < n; i++) {
       const a = (i - 6 + n) % n,
@@ -643,15 +650,72 @@ export class Track implements Ground {
       while (d > Math.PI) d -= 2 * Math.PI
       while (d < -Math.PI) d += 2 * Math.PI
       const len = Math.hypot(rx[b] - rx[a], rz[b] - rz[a]) * 0.5
-      this.racingCurv[i] = d / Math.max(len, 1)
+      out[i] = d / Math.max(len, 1)
     }
-    smoothArray(this.racingCurv, 5)
+    smoothArray(out, 5)
+    return out
+  }
+
+  // ----------------------------------------------------------------------------- lanes
+  /** Racing lines for two cars side by side: minimum-curvature lines inside the left / right part of the
+   *  usable width (left lane from the middle + LANE_SEP / 2 to lineHi, right lane from lineLo to the
+   *  middle - LANE_SEP / 2), so a car on each is >= LANE_SEP apart and both are on the surface. Where the
+   *  usable width is too narrow for that, each lane sits at its edge of it and the rule is single file
+   *  (laneTwo = 0). Built on first use (the AI), from the ideal line. */
+  laneL!: Float32Array
+  laneR!: Float32Array
+  laneLCurv!: Float32Array
+  laneRCurv!: Float32Array
+  /** 1 where the two lanes are >= LANE_SEP - 0.1 m apart (two cars fit side by side) */
+  laneTwo!: Uint8Array
+  /** ms the last lane build took */
+  laneBuildMs = 0
+  ensureLanes() {
+    if (this.laneL) return
+    const t0 = performance.now()
+    const n = this.n,
+      lo = this.lineLo,
+      hi = this.lineHi
+    const lLo = new Float32Array(n),
+      lHi = new Float32Array(n),
+      rLo = new Float32Array(n),
+      rHi = new Float32Array(n)
+    for (let i = 0; i < n; i++) {
+      const c = 0.5 * (lo[i] + hi[i])
+      lLo[i] = Math.min(hi[i], c + 0.5 * LANE_SEP)
+      lHi[i] = hi[i]
+      rLo[i] = lo[i]
+      rHi[i] = Math.max(lo[i], c - 0.5 * LANE_SEP)
+    }
+    const lane = (blo: Float32Array, bhi: Float32Array) => {
+      // start from the ideal line pushed into the lane, then relax to the lane's own minimum curvature
+      const m8 = Math.floor(n / 8)
+      const init = new Float64Array(m8)
+      for (let k = 0; k < m8; k++) init[k] = Math.min(bhi[k * 8], Math.max(blo[k * 8], this.racing[k * 8]))
+      const a8 = minCurvature(this, blo, bhi, 8, init, 500)
+      const m4 = Math.floor(n / LINE_STEP)
+      const init4 = new Float64Array(m4)
+      for (let k = 0; k < m4; k++) {
+        const x = (k * m8) / m4,
+          j = Math.floor(x),
+          f = x - j
+        init4[k] = a8[j % m8] * (1 - f) + a8[(j + 1) % m8] * f
+      }
+      return expandStations(minCurvature(this, blo, bhi, LINE_STEP, init4, 250), LINE_STEP, n, blo, bhi)
+    }
+    this.laneL = lane(lLo, lHi)
+    this.laneR = lane(rLo, rHi)
+    this.laneLCurv = this.lineCurvature(this.laneL)
+    this.laneRCurv = this.lineCurvature(this.laneR)
+    this.laneTwo = new Uint8Array(n)
+    for (let i = 0; i < n; i++) this.laneTwo[i] = this.laneL[i] - this.laneR[i] >= LANE_SEP - 0.1 ? 1 : 0
+    this.laneBuildMs = performance.now() - t0
   }
 
   /** Quasi steady-state lap speed profile along the racing line. */
   /** loadSens / fz0_m: the tyre's friction loss per unit of load above its nominal load (fz0_m = nominal
    *  wheel load / car mass), so downforce adds grip with the same diminishing return as in the tyre model */
-  computeSpeedProfile(p: { mu: number; clA_m: number; power_m: number; cdA_m: number; brakeMu: number; loadSens?: number; fz0_m?: number; trailExp?: number; lat?: { mu: number; clA_m: number; jerk?: number }; rearBrake?: { wr: number; bf: number; hL: number; aeroR: number; mu: number } }, out?: Float32Array) {
+  computeSpeedProfile(p: { mu: number; clA_m: number; power_m: number; cdA_m: number; brakeMu: number; loadSens?: number; fz0_m?: number; trailExp?: number; lat?: { mu: number; clA_m: number; jerk?: number }; rearBrake?: { wr: number; bf: number; hL: number; aeroR: number; mu: number } }, out?: Float32Array, curv: Float32Array = this.racingCurv) {
     const n = this.n
     const v = out ?? new Float32Array(n)
     const g = 9.81
@@ -666,10 +730,10 @@ export class Track implements Ground {
     const muLat = (v2: number) => latMu * Math.max(0.5, 1 - ls * ((g + rho * latClA * v2) / (4 * fz0) - 1))
     const jerk = p.lat?.jerk ?? 0
     for (let i = 0; i < n; i++) {
-      const k = Math.abs(this.racingCurv[i])
+      const k = Math.abs(curv[i])
       // how quickly the curvature changes here (1/m^2): in a direction change the car needs time to
       // roll, yaw and move its load across, so lateral grip is derated by the lateral jerk v^3 dk/ds
-      const dk = jerk > 0 ? Math.abs(this.racingCurv[(i + 3) % n] - this.racingCurv[(i - 3 + n) % n]) / (6 * DS) : 0
+      const dk = jerk > 0 ? Math.abs(curv[(i + 3) % n] - curv[(i - 3 + n) % n]) / (6 * DS) : 0
       // k v^2 = mu(v) (g + c v^2): fixed point on v^2 (mu falls slowly with v^2, converges in a few steps)
       let v2 = 95 * 95
       for (let it = 0; it < 10; it++) {
@@ -686,7 +750,7 @@ export class Track implements Ground {
         const i = (j + 1) % n,
           a = j
         const va = v[a]
-        const latG = va * va * Math.abs(this.racingCurv[a])
+        const latG = va * va * Math.abs(curv[a])
         const maxA = muAt(p.mu, va * va) * (g + rho * p.clA_m * va * va)
         // traction left over by the cornering, as a share of the car's lateral capability
         const fl = Math.min(1, latG / (muLat(va * va) * (g + rho * latClA * va * va)))
@@ -702,7 +766,7 @@ export class Track implements Ground {
         const i = j,
           b = (j + 1) % n
         const vb = v[b]
-        const latG = vb * vb * Math.abs(this.racingCurv[b])
+        const latG = vb * vb * Math.abs(curv[b])
         let maxA = muAt(p.brakeMu, vb * vb) * (g + rho * p.clA_m * vb * vb)
         const rb = p.rearBrake
         if (rb) {
