@@ -99,6 +99,9 @@ export class AIDriver {
   attackId = ''
   /** the car alongside this driver has given the corner to (it lifts until that car is clear) */
   yieldId = ''
+  /** s it has been lifting for that car, and s left before it gives a corner away again */
+  private yieldT = 0
+  private yieldBan = 0
   /** diagnostics: the speed target was cut by a car ahead (or one alongside owning a corner) this step */
   held = false
   aheadDs = Infinity
@@ -343,12 +346,14 @@ export class AIDriver {
       // inside changes sides in an S-bend)
       if (ds > -7 && ds < 7 && alat > 1.6 && alat < 9) {
         if (o.id === this.yieldId) {
-          // (not if it has dropped back or is itself slowing: then the corner is ours after all)
-          if (ds > -3.3 && o.speed > speed - 3) {
+          // (only to a car that is getting away: if it has dropped back, or is no faster than us (it is
+          // lifting too: two cars, or a ring of them, each waiting for the next would all stop), the corner
+          // is ours after all)
+          if (ds > -3.3 && o.speed > speed + 0.3 && this.yieldT < 4) {
             yielding = true
             concedeV = Math.min(concedeV, o.speed - 1)
           }
-        } else {
+        } else if (this.yieldBan <= 0 && o.speed > 0.7 * speed) {
           // (the corner looked for from the leading car's position, so the two agree on it)
           if (inside === 2) inside = this.insideSide(Math.max(ds, 0), Math.max(ds, 0) + 40 + 2 * speed)
           const lim = inside === 0 ? 1.5 : mySide === inside ? 3.3 : -3.3
@@ -517,11 +522,19 @@ export class AIDriver {
       cornerSoon = Math.max(Math.abs(tr.racingCurv[j]), Math.abs(this.curvAt(j))) > 1 / 250 || this.planAt(j) < speed - 4
     }
     // (at turn-in: the corner within ~0.6 s)
-    if (yielding) blockSpeed = Math.min(blockSpeed, concedeV)
-    else {
+    // (a lift, never a stop: not below three quarters of the line's own speed here)
+    this.yieldBan = Math.max(0, this.yieldBan - dt)
+    const yieldV = Math.max(concedeV, 0.75 * this.planAt(i00))
+    if (yielding) {
+      blockSpeed = Math.min(blockSpeed, yieldV)
+      this.yieldT += dt
+    } else {
+      // (given up on: no corner given away for a moment, so the pair does not start over)
+      if (this.yieldId !== '') this.yieldBan = 2.5
       this.yieldId = ''
-      if (concedeId !== '' && Math.abs(this.curvAt(tr.idx(this.s + 0.6 * speed))) > 1 / 150) {
-        blockSpeed = Math.min(blockSpeed, concedeV)
+      this.yieldT = 0
+      if (concedeId !== '' && this.yieldBan <= 0 && Math.abs(this.curvAt(tr.idx(this.s + 0.6 * speed))) > 1 / 150) {
+        blockSpeed = Math.min(blockSpeed, yieldV)
         this.yieldId = concedeId
       }
     }
