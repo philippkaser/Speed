@@ -45,7 +45,7 @@ export const STEER_ASSIST = {
    * axle's velocity angle is the limit radius' geometric angle L / R minus the rear slip)
    */
   rangeSlip: 0.95,
-  rangeRear: 0.4,
+  rangeRear: 0.65,
   /** share of the compound's peak mu assumed for the limit radius */
   mu: 0.9,
   /** counter-steer starts when the rear axle slips beyond this share of the rear tyres' peak slip angle */
@@ -60,6 +60,23 @@ export const STEER_ASSIST = {
   rateTau: 0.03,
   /** the front tyres are kept within this share of their peak slip angle */
   frontLimit: 1.15,
+  /** peak slip angle grows with load: peak(Fz) = peak(nominal) x (Fz / nominal)^exp (brush model) */
+  peakLoadExp: 0.19,
+  /** rear-axle margin (rear slip / its peak at load, inside the friction ellipse) where the front's
+   *  allowed slip starts to shrink, where it reaches its minimum, and that minimum share */
+  rearCapFrom: 0.6,
+  rearCapTo: 1.0,
+  rearCapMin: 0.15,
+  /** learning of the rear's share of the limit slip: above this lateral g, with this time constant
+   *  (s), within these bounds; it starts from rangeRear */
+  /** the stick's range never drops below this share of the front peak slip angle */
+  rangeMin: 0.3,
+  rearLead: 0.12,
+  rearRateTau: 0.05,
+  learnG: 0.6,
+  learnTau: 1.5,
+  shareMin: 0.3,
+  shareMax: 1.0,
 }
 
 export function makeInput(): VehicleInput {
@@ -444,7 +461,7 @@ export class Vehicle {
     this.shiftTimer = 0
     this.pendingGear = 1
     this.tcCut = 0
-    this.bodySlip = this.assistBetaRate = this.assistSteer = 0
+    this.bodySlip = this.assistBetaRate = this.assistSteer = this.assistDelta = this.assistRearUse = this.assistRearRate = 0
     this.prevVel.set(0, 0, 0)
     this.updateAxes()
     this.updateWheelWorld()
@@ -652,14 +669,20 @@ export class Vehicle {
     const dfR = q * this.clAR * groundEffect(rhR * 0.85 + rhF * 0.15, ref * 1.05, 0.035) * (1 - 0.7 * rake) * vf2 * yawFactor * rollFactor * (1 - slip * 0.1)
     this.downforce = dfF + dfR
     this.aeroBalance = this.downforce > 1 ? dfF / this.downforce : this.clAF / (this.clAF + this.clAR)
-    // downforce along -up at axle positions
-    this.applyBodyForceAtLocal(0, 0, this.a, -dfF, up)
-    this.applyBodyForceAtLocal(0, 0, -this.b, -dfR, up)
     // drag
     const cd = this.cdA * (1 - slip * 0.38) * (1 + 2.5 * beta * beta)
     const spd = this.speed
-    _f.copy(this.vel).scale(-q * cd * spd)
     this.dragForce = q * cd * spd * spd
+    // The front/rear downforce coefficients are axle loads as a rolling-road balance measures them:
+    // they already contain the pitch moment of the drag about the ground. Drag is applied at its real
+    // line of action (CoG + dragHeight), so that moment is taken back out of the axle split here;
+    // otherwise it would be counted twice and the high-speed balance would drift ~6 % rearwards.
+    // (straight-line drag only: the extra drag of a yawed car is not in the balance's axle loads)
+    const dragShift = (q * this.cdA * (1 - slip * 0.38) * vf * Math.abs(vf) * (sp.cgHeight + ae.dragHeight)) / sp.wheelbase
+    // downforce along -up at axle positions
+    this.applyBodyForceAtLocal(0, 0, this.a, -(dfF + dragShift), up)
+    this.applyBodyForceAtLocal(0, 0, -this.b, -(dfR - dragShift), up)
+    _f.copy(this.vel).scale(-q * cd * spd)
     this.R.apply(0, ae.dragHeight, 0, _r)
     this.F.add(_f)
     this.T.add(_tq.crossVectors(_r, _f))
@@ -752,6 +775,11 @@ export class Vehicle {
 
   /** body slip angle (rad, + = the car moves to the left of where it points), for the steering assist and the keyboard filter */
   bodySlip = 0
+  /** steering the assist last returned (rad) and its learnt rear share of the limit slip */
+  assistDelta = 0
+  assistRearShare = STEER_ASSIST.rangeRear
+  private assistRearUse = 0
+  private assistRearRate = 0
   /** steering assist state: the body slip rate (filtered) */
   private assistBetaRate = 0
   /** counter-steer the steering assist added last step, incl. the front slip limit (rad, + left), for telemetry */
@@ -797,7 +825,10 @@ export class Vehicle {
     // the tightest radius the grip allows at this speed: a = mu (g + downforce / m), R = v^2 / a
     const aMax = this.wheels[0].model.compound.mu * A.mu * (GRAVITY + this.downforce / this.mass)
     const kin = Math.atan((sp.wheelbase * aMax) / (vx * vx))
-    const range = clamp(peakF * A.rangeSlip - peakR * A.rangeRear + kin, peakF * 0.5, sp.steerLock)
+    // feed-forward: the rear axle's share of the slip at the limit is learnt from the car itself
+    // (rear slip / front slip, each against its own peak, while cornering hard), so the stick spans
+    // the same range of the limit for an understeering and a neutral car
+    const range = clamp(peakF * A.rangeSlip - peakR * this.assistRearShare + kin, peakF * A.rangeMin, sp.steerLock)
     const driver = -u * lerp(sp.steerLock, range, limitBlend)
     let delta = driver
     let cs = 0
@@ -811,12 +842,42 @@ export class Vehicle {
       cs = (A.kp * over + A.kd * d) * blend
     }
     delta += cs
-    // keep the front tyres within their useful slip angle
+    // keep the front tyres within their useful slip angle, and within what the rear axle can still
+    // follow: the rear's margin is its slip angle against its own peak at its current load, less what
+    // the friction ellipse already spends on drive / brake force. As the rear nears its limit the
+    // front is allowed less slip (less yaw moment), down to steering along the front axle's velocity
+    // (counter-steer) when the rear is past it. Works for any balance: an understeering car never
+    // gets near the rear limit, a neutral one is held where the rear still grips.
     const betaF = Math.atan2(vbx + r * this.a, vx)
-    const aLim = peakF * A.frontLimit
+    const wl = this.wheels[2],
+      wr = this.wheels[3]
+    const cpR = wl.model.compound
+    const fzR = Math.max(wl.tyre.Fz + wr.tyre.Fz, 1)
+    const peakRLoad = peakR * Math.pow(clamp((0.5 * fzR) / cpR.nominalLoad, 0.3, 3), A.peakLoadExp)
+    const fxUse = Math.abs(wl.tyre.Fx + wr.tyre.Fx) / (cpR.mu * cpR.muLong * fzR)
+    const ellipse = Math.sqrt(Math.max(0.1, 1 - Math.min(0.9, fxUse * fxUse)))
+    const betaRk = Math.atan2(vbx - r * this.b, vx)
+    const rearUse = Math.abs(betaRk) / (peakRLoad * ellipse)
+    // lead: where the rear will be in rearLead seconds at its current rate (filtered), so the front is
+    // wound off before the rear overshoots its peak rather than after
+    const useRate = h > 0 ? (rearUse - this.assistRearUse) / h : 0
+    this.assistRearUse = rearUse
+    this.assistRearRate += (useRate - this.assistRearRate) * clamp(h / A.rearRateTau, 0, 1)
+    const rearPred = rearUse + A.rearLead * Math.max(0, this.assistRearRate)
+    const rearCap = 1 - (1 - A.rearCapMin) * smoothstep(A.rearCapFrom, A.rearCapTo, rearPred)
+    {
+      const frontSlip = Math.abs(this.assistDelta - betaF) / peakF
+      const ay = Math.abs(this.accelLat)
+      if (ay > A.learnG && frontSlip > 0.25 && vf > 10) {
+        const ratio = clamp(Math.abs(betaRk) / peakR / frontSlip, A.shareMin, A.shareMax)
+        this.assistRearShare += (ratio - this.assistRearShare) * clamp(h / A.learnTau, 0, 1)
+      }
+    }
+    const aLim = peakF * Math.pow(clamp((0.5 * Math.max(this.wheels[0].tyre.Fz + this.wheels[1].tyre.Fz, 1)) / this.wheels[0].model.compound.nominalLoad, 0.3, 3), A.peakLoadExp) * A.frontLimit * rearCap
     delta = lerp(delta, clamp(delta, betaF - aLim, betaF + aLim), limitBlend * (vf > 0 ? 1 : 0))
     delta = clamp(delta, -sp.steerLock, sp.steerLock)
     this.assistSteer = delta - driver
+    this.assistDelta = delta
     return delta
   }
 
@@ -1222,8 +1283,11 @@ export class Vehicle {
       // limited slip diff: omega_L - omega_R = 0 within lock torque
       {
         const tin = (jClutch / h) * G
+        // locking torque = the torque DIFFERENCE between the two half shafts (preload + ramp x input
+        // torque, as a diff's breakaway torque and locking % are specified). The impulse below acts
+        // with opposite signs on both wheels, so each side carries half of it.
         const lock = st.diffPreload + (tin >= 0 ? st.diffPower : st.diffCoast) * Math.abs(tin)
-        const cap = lock * h
+        const cap = 0.5 * lock * h
         const vrel = L.omega - Rw.omega
         const K = invIL + invIR
         let lam = vrel / K

@@ -114,7 +114,9 @@ test('record a race, play it back exactly, resume the live session untouched', (
   expect(Math.hypot(a.pos.x - pa[0], a.pos.y - pa[1], a.pos.z - pa[2])).toBeGreaterThan(0.05)
   // spin is a periodic angle (recorded wrapped to +-pi): compare modulo 2 pi
   const dSpin = a.wheels[2].spin - spinA - (a.wheels[2].omega * 0.5) / REPLAY_HZ
-  expect(Math.abs(Math.atan2(Math.sin(dSpin), Math.cos(dSpin)))).toBeLessThan(0.05)
+  // the recording holds the wheel speed at 30 Hz; a driven wheel behind a slipping LSD changes speed
+  // within a sample (tyre load and drive torque fluctuate), so allow 3 % of the angle turned per sample
+  expect(Math.abs(Math.atan2(Math.sin(dSpin), Math.cos(dSpin)))).toBeLessThan(0.05 + (0.03 * Math.abs(a.wheels[2].omega)) / REPLAY_HZ)
   // playback at 4x: the clock runs four times as fast, the blur's wheel speed with it; physics stands still
   pl.seek(t0)
   pl.speed = 4
