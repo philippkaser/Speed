@@ -54,13 +54,13 @@ export const MAX_LEVELS = 10
 /** The lens's point-spread function. */
 export const SCATTER = {
   /** share of all light the lens scatters (taken from the image, spread over the PSF). A modern
-   *  multi-coated broadcast or cinema lens: enough for the sky to glow over a roof line, not the milky
-   *  veil over the whole frame that 12% gave */
-  k: 0.05,
+   *  multi-coated lens: a veiling glare of a few percent. At 5% the shadows of a sunlit scene sat a
+   *  quarter above their own level (a veil over the frame); at 3% the sky still glows over a roof line */
+  k: 0.03,
   /** power-law slope of the PSF's energy density (r^-slope): smaller = a longer veil */
   slope: 2.45,
   /** share of the scattered light in a glow at medium radii (diffusion), and its radius in image heights */
-  glow: 0.45,
+  glow: 0.3,
   glowSigma: 0.015,
   /** finest PSF component, in image heights */
   minSigma: 0.0025,

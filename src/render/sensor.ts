@@ -5,21 +5,25 @@
 //    few percent of the signal in the mid-tones, more in the shadows, nothing in the highlights; at
 //    this level it reads as the fine texture of a real image, not as an overlay.
 //
-//  - The picture (display rendering): a filmic tone curve applied per channel inside an inset gamut
-//    (the approach of Troy Sobotka's AgX, here with our own curve). Per-channel curves alone skew
-//    bright saturated colours towards the secondaries (red -> orange -> yellow, blue -> purple: the
-//    "notorious six") and luminance-based ones turn them pastel abruptly or clip them; in the inset
-//    gamut every channel carries a little of the others, so a bright colour keeps its hue, desaturates
-//    smoothly and only the brightest light reaches white. The outset afterwards (in the encoded
-//    domain, as AgX does) restores the saturation of everything below the highlights.
+//  - The picture (display rendering): what a camera's processing does between the sensor and the file.
+//    A filmic tone curve applied per channel inside an inset gamut (the approach of Troy Sobotka's
+//    AgX, here with our own curve). Per-channel curves alone skew bright saturated colours towards the
+//    secondaries (red -> orange -> yellow, blue -> purple: the "notorious six") and luminance-based
+//    ones turn them pastel abruptly or clip them; in the inset gamut every channel carries a little of
+//    the others, so a bright colour keeps its hue, desaturates smoothly and only the brightest light
+//    reaches white, the way an over-exposed colour does on film or a sensor. The outset afterwards (in
+//    the encoded domain, as AgX does) restores the saturation of everything below the highlights.
 //
-//    A touch of saturation (SATURATION) goes in before, in scene-linear (luminance kept).
+//    Nothing is added on top: no saturation boost, and a contrast inside the range of cameras'
+//    standard renderings. More than that is what makes a rendered frame read as a game: shadows go to
+//    black, sunlit colours run into the gamut's edge and clip to pure primaries.
 //
 //    The curve: y = (1 + (k / x)^(c d))^(-1 / d), a log-logistic sigmoid. c is the contrast of the
 //    shadows and mid-tones (log-log slope), d the sharpness of the shoulder. It is anchored so the
-//    exposed asphalt in the sun (KEY_IN) lands at KEY_OUT of display white: deep blacks, rich
-//    mid-tones, white paint and sunlit clouds bright but with their detail, highlights several stops
-//    up rolling smoothly into white (no kink, no hard clip edge).
+//    exposed asphalt in the sun (KEY_IN) lands at KEY_OUT of display white.
+//
+//    What is still outside the display's gamut after that (the purest colours, a little) is brought in
+//    towards its own grey, hue and luminance kept, instead of clipping each channel separately.
 //
 //  - Encoding: the sRGB curve, then triangular dither of one code value, so gradients (the sky, the
 //    glare's halo) show no 8-bit banding.
@@ -30,16 +34,15 @@ type N = any
 const { Fn, float, hash, max, min, mix, pow, screenCoordinate, step, uint, uniform, vec3 } = tsl as N
 
 /** Tone curve: contrast, shoulder sharpness, and its anchor (exposed value -> display-linear value). */
-// Contrast 1.95: a photographic print's mid-tone gamma. A hard shadow on asphalt (2.5 stops under the
-// sunlit asphalt that anchors the key) lands ~4.4 stops below it on the display, near black, so the
-// sun carries the picture; the anchor itself is unchanged (materials were tuned against it).
-// Shoulder 0.7 (was 1.25): a long, soft roll-off. Sunlit paint (0.8 exposed) lands at 0.68 of display
-// white and a sunlit white panel (1.2) at 0.79 instead of 0.85 and 0.94, so a bright car keeps its
-// colour and its shading and the sky's reflection and the glints in the clear coat have somewhere to
-// go; white is reached only several stops up (4 -> 0.95, 64 -> 0.999).
-export const CURVE = { contrast: 1.95, shoulder: 0.7, keyIn: 0.13, keyOut: 0.11 }
+// Contrast 1.5: between a still camera's standard rendering (~1.3-1.4) and a cinema camera's display
+// LUT or ACES (~1.55). A hard shadow on asphalt (2.5 stops under the sunlit asphalt that anchors the
+// key) lands 3.75 stops below it on the display: deep, with its detail (sRGB ~20-25 of 255 with the
+// lens's flare), where 1.95 put it at black. A grey card lands at half of the sRGB range.
+// Shoulder 1.2: a sunlit white panel (1.2 exposed) at 0.84 of display white (sRGB 235) and sunlit paint
+// (0.8) at 0.71, clouds a little under white with their shading; 4 -> 0.98, white only stops above that.
+export const CURVE = { contrast: 1.5, shoulder: 1.2, keyIn: 0.13, keyOut: 0.11 }
 /** Saturation of the picture (1 = as the inset gamut renders it), applied to the scene-linear colour. */
-export const SATURATION = 1.12
+export const SATURATION = 1
 
 export const sensorU = {
   /** relative noise at the key (shot noise; 0 = none) */
@@ -67,11 +70,11 @@ const mul3 = (m: number[], v: N) => vec3(row(m, 0).dot(v), row(m, 1).dot(v), row
 
 // linear Rec.709 -> Rec.2020 -> AgX inset (one matrix); AgX outset (exact inverse of the inset); Rec.2020 -> Rec.709
 /**
- * How far the inset/outset gamut goes (1 = AgX's full inset). At 0.8 the channels carry a little less
- * of each other: a sunlit red car stays red instead of turning salmon, while very bright reds still
- * go to white through red-pink, not orange (tests/camera.test.ts).
+ * How far the inset/outset gamut goes (1 = AgX's full inset). Less than 1 keeps bright colours purer
+ * and nearer the gamut's edge (0.8: a sunlit red car's red channel sat at the display's limit with the
+ * other two near zero, a flat plastic red).
  */
-const INSET = 0.8
+const INSET = 1
 function towardIdentity(m: number[], t = INSET) {
   return m.map((v, i) => (i % 4 === 0 ? 1 : 0) + (v - (i % 4 === 0 ? 1 : 0)) * t)
 }
@@ -129,7 +132,24 @@ export function pictureRGB(rgb: [number, number, number]): [number, number, numb
     POST,
     e.map((x) => Math.max(0, x) ** 2.2),
   )
-  return out.map((x) => Math.min(1, Math.max(0, x))) as [number, number, number]
+  // into the display's gamut towards the colour's own grey (as fitGamut below)
+  const Lo = Math.min(1, Math.max(0, 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2]))
+  const mn = Math.min(...out),
+    mx = Math.max(...out)
+  const t = Math.min(1, Math.max(0, Math.min(Lo / Math.max(Lo - mn, 1e-6), (1 - Lo) / Math.max(mx - Lo, 1e-6))))
+  return out.map((x) => Math.min(1, Math.max(0, Lo + (x - Lo) * t))) as [number, number, number]
+}
+
+/**
+ * A display-linear colour brought inside [0, 1]: scaled towards its own grey just far enough that no
+ * channel is below 0 or above 1. Hue and luminance stay; a per-channel clip shifts both.
+ */
+const fitGamut = (c: N) => {
+  const L = min(max(c.dot(vec3(0.2126, 0.7152, 0.0722)), float(0)), float(1))
+  const mn = min(min(c.x, c.y), c.z)
+  const mx = max(max(c.x, c.y), c.z)
+  const t = min(L.div(max(L.sub(mn), float(1e-6))), float(1).sub(L).div(max(mx.sub(L), float(1e-6))))
+  return min(max(mix(vec3(L), c, min(max(t, float(0)), float(1))), vec3(0)), vec3(1))
 }
 
 /** Scene-linear exposed Rec.709 -> display-linear Rec.709 in [0, 1]. */
@@ -140,7 +160,7 @@ export const displayTransform = Fn(([rgb]: [N]) => {
   const y = curveNode(inset)
   const e = mul3(OUTSET, pow(y, vec3(1 / 2.2)))
   const lin = pow(max(e, vec3(0)), vec3(2.2))
-  return min(max(mul3(POST, lin), vec3(0)), vec3(1))
+  return fitGamut(mul3(POST, lin))
 })
 
 /**
@@ -156,7 +176,7 @@ export const displayTransformHDR = Fn(([rgb]: [N]) => {
   const y = curveNodeHDR(inset, P).div(P)
   const e = mul3(OUTSET, pow(y, vec3(1 / 2.2)))
   const lin = pow(max(e, vec3(0)), vec3(2.2))
-  return min(max(mul3(POST, lin), vec3(0)), vec3(1)).mul(P)
+  return fitGamut(mul3(POST, lin)).mul(P)
 })
 
 /** Display-linear [0, peak] -> extended sRGB code values (the HDR canvas), with dither. */

@@ -26,15 +26,21 @@ test('tone curve: anchored, monotonic, smooth, deep blacks and a soft shoulder i
   expect(toneCurve(CURVE.keyIn / 16)).toBeLessThan(0.01)
   expect(toneCurve(1.5)).toBeLessThan(0.97)
   expect(toneCurve(64)).toBeGreaterThan(0.998)
-  // headroom: sunlit paint and a sunlit white panel stay well under display white, so a bright car
-  // keeps its colour and shading and the reflections in its clear coat show against it
-  expect(toneCurve(0.8)).toBeLessThan(0.72)
-  expect(toneCurve(1.2)).toBeLessThan(0.82)
+  // a camera's exposure of a sunny scene: sunlit paint and a sunlit white panel are bright but under
+  // display white (sRGB ~220 and ~235), so a white car is white and still has its shading, and the
+  // reflections in the clear coat show against it; four times a white panel is nearly white
+  expect(toneCurve(0.8)).toBeGreaterThan(0.6)
+  expect(toneCurve(0.8)).toBeLessThan(0.76)
+  expect(toneCurve(1.2)).toBeGreaterThan(0.76)
+  expect(toneCurve(1.2)).toBeLessThan(0.88)
   expect(toneCurve(4)).toBeGreaterThan(0.93)
-  // contrast: a hard shadow on asphalt (2.5 stops under sunlit asphalt, the key) is at least 4.4 stops
-  // darker on the display, and a stop above the key still opens up (by at least 1.3 stops)
-  expect(Math.log2(CURVE.keyOut / toneCurve(CURVE.keyIn / 2 ** 2.5))).toBeGreaterThan(4.4)
-  expect(Math.log2(toneCurve(CURVE.keyIn * 2) / CURVE.keyOut)).toBeGreaterThan(1.3)
+  // contrast like a camera's standard rendering, not more: a hard shadow on asphalt (2.5 stops under
+  // sunlit asphalt, the key) is 3.4 to 4.2 stops darker on the display (deep, not black: at 4.4 and
+  // more the shadows under the cars were black holes), and a stop above the key still opens up
+  const shadowStops = Math.log2(CURVE.keyOut / toneCurve(CURVE.keyIn / 2 ** 2.5))
+  expect(shadowStops).toBeGreaterThan(3.4)
+  expect(shadowStops).toBeLessThan(4.2)
+  expect(Math.log2(toneCurve(CURVE.keyIn * 2) / CURVE.keyOut)).toBeGreaterThan(1.2)
 })
 
 test('picture: greys stay neutral, bright colours keep their hue on the way to white', () => {
@@ -57,6 +63,22 @@ test('picture: greys stay neutral, bright colours keep their hue on the way to w
   // far beyond white everything is white
   const w = pictureRGB([500, 20, 5])
   expect(Math.min(...w)).toBeGreaterThan(0.95)
+  // a sunlit saturated red, orange and green (a car, a sponsor board, grass): inside the display's
+  // gamut with room to spare, not a primary pinned at its limit with the other channels at zero
+  for (const c of [
+    [0.7, 0.05, 0.03],
+    [1.0, 0.4, 0.05],
+    [0.1, 0.16, 0.05],
+  ] as [number, number, number][]) {
+    const o = pictureRGB(c)
+    expect(Math.max(...o)).toBeLessThan(0.93)
+    expect(Math.min(...o)).toBeGreaterThan(0.012)
+  }
+  // out of the display's gamut (a pure deep blue): brought in with its hue, never a negative channel
+  const b = pictureRGB([0.0, 0.02, 0.9])
+  expect(Math.min(...b)).toBeGreaterThanOrEqual(0)
+  expect(b[2]).toBeGreaterThan(b[1])
+  expect(b[1]).toBeGreaterThanOrEqual(b[0])
 })
 
 test('lens scatter: energy is SCATTER.k and the PSF is the same at every resolution', () => {
