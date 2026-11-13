@@ -83,7 +83,7 @@ function skidZones(track: Track) {
 }
 
 export function buildRoad(track: Track) {
-  // aTrack = (d, s, racingLineOffset, halfWidth); aTrack2 = (braking zone, traction zone, 0, 0)
+  // aTrack = (d, s, racingLineOffset, halfWidth); aTrack2 = (braking zone, traction zone, left / right kerb + runoff width)
   const g = buildRoadRibbon(track)
   const tr = g.getAttribute('aTrack') as THREE.BufferAttribute
   const zones = skidZones(track)
@@ -92,6 +92,10 @@ export function buildRoad(track: Track) {
     const i = track.idx(tr.getY(v))
     a2[v * 4] = track.brakeZone[i]
     a2[v * 4 + 1] = zones[i]
+    // what adjoins the asphalt on each side (kerb + paved runoff width, 0: the verge itself), for the
+    // soil creeping over the edge (visual only)
+    a2[v * 4 + 2] = track.L.kerb[i] + (track.L.paved[i] >= 0.4 ? track.L.paved[i] : 0)
+    a2[v * 4 + 3] = track.R.kerb[i] + (track.R.paved[i] >= 0.4 ? track.R.paved[i] : 0)
   }
   g.setAttribute('aTrack2', new THREE.BufferAttribute(a2, 4))
   return g
@@ -157,7 +161,7 @@ export function buildRunoff(track: Track) {
           return [side * (e - 0.05), side * (e + p * 0.5), side * (e + p)]
         },
         -0.002,
-        (i, d, _c, u) => [d, u * DS, side, track.hw[i] + S.kerb[i]],
+        (i, d, _c, u) => [d, u * DS, track.hw[i] + S.kerb[i] + S.paved[i], track.hw[i] + S.kerb[i]],
         4,
       ),
     )

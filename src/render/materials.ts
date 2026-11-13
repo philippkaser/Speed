@@ -31,6 +31,7 @@ import {
   smoothstep,
   step,
   texture,
+  uniform,
   uv,
   varying,
   vec2,
@@ -104,7 +105,27 @@ const greenGrass = (c: N) => {
  */
 export function grassGroundColour(xz: N) {
   const t = groundSet('grass').colour
-  return greenGrass(texture(t, xz.div(2.6)).level(float(7)).rgb).mul(lawnTone(xz)).mul(dryTone(xz))
+  const p = swardPatches(xz)
+  return mix(greenGrass(texture(t, xz.div(2.6)).level(float(7)).rgb).mul(lawnTone(xz)).mul(dryTone(xz)).mul(p.tint), SOIL, p.bare.mul(0.6))
+}
+
+/** Sun direction (towards the sun) for the ground's canopy response; set each frame (Vegetation.tsx). */
+export const groundSun = uniform(new THREE.Vector3(0.3, 0.4, 0.2).normalize())
+
+/** Dry topsoil between thin grass: albedo ~0.12, warm brown. */
+const SOIL = vec3(0.135, 0.105, 0.075)
+
+/**
+ * What makes a real verge patchy rather than a carpet, at the scale a camera resolves out to 40 m:
+ * clover and lush spots (darker, bluer green), and thin, worn spots where the soil shows through
+ * (shared with the 3D grass standing there, so blades and ground agree). Never faded by distance.
+ */
+function swardPatches(xz: N) {
+  const zone = mx_noise_float(vec3(xz.x.mul(0.07), 12.1, xz.y.mul(0.07)))
+  const clover = smoothstep(0.18, 0.5, mx_noise_float(vec3(xz.x.mul(0.42), 5.3, xz.y.mul(0.42)))).mul(smoothstep(-0.35, 0.25, zone))
+  const worn = smoothstep(0.42, 0.72, mx_noise_float(vec3(xz.x.mul(0.26), 9.7, xz.y.mul(0.26)))).mul(smoothstep(0.0, 0.4, zone.negate()))
+  const tint = mix(vec3(1), vec3(0.6, 0.78, 0.74), clover)
+  return { tint, bare: worn.mul(0.75) }
 }
 
 /**
@@ -169,13 +190,13 @@ export function rubberTexture(track: Track) {
 
 /**
  * Photo-scanned race asphalt (Poly Haven asphalt_track, 3 m per tile). Weathered race tarmac is dark
- * (albedo ~0.05): the scan is brought up from its fresh near-black, its aggregate contrast kept crisp
+ * (albedo ~0.055 before the dust and rubber below: ~0.06-0.07 off line, ~0.03 on it): the scan is brought up from its fresh near-black, its aggregate contrast kept crisp
  * (stones and binder are what reads as asphalt up close) and only lightly desaturated.
  */
 function trackAsphalt(uvMetres: N) {
   const a = scanned(groundSet('asphalt'), uvMetres.div(3))
   const c = a.col.sub(a.mean).mul(1.6).add(a.mean).max(vec3(0))
-  const col = mix(c, vec3(c.dot(LUM)), 0.3).mul(3.7)
+  const col = mix(c, vec3(c.dot(LUM)), 0.3).mul(4.3)
   return { col, nxy: a.nxy, rough: a.rough }
 }
 
@@ -204,7 +225,7 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
   // macro variation: patches of fresher / older tarmac, breaks visible tiling
   const macro = mx_noise_float(vec3(pw.x.mul(0.018), 0, pw.z.mul(0.018))).mul(0.5).add(0.5)
   const macro2 = mx_noise_float(vec3(pw.x.mul(0.11), 1.7, pw.z.mul(0.11))).mul(0.5).add(0.5)
-  let albedo: N = asphalt.col.mul(mix(float(0.8), float(1.18), macro)).mul(mix(float(0.93), float(1.07), macro2))
+  let albedo: N = asphalt.col.mul(mix(float(0.8), float(1.18), macro)).mul(mix(float(0.88), float(1.12), macro2))
   // race tarmac is a little smoother than the scan's road (0.83): the sun's sheen at grazing angles
   let rough: N = asphalt.rough.mul(mix(float(0.82), float(0.94), macro2))
 
@@ -255,13 +276,21 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
   seal = max(seal, snake.mul(0.7))
 
   // rubbered-in racing line: from the simulation's rubber map (or the static racing line)
+  // (the map's laid-in line peaks near 0.57 over a 0.12 floor: that peak is a fully rubbered line)
   const rl = rubber
-    ? smoothstep(0.14, 0.95, texture(rubber.tex, vec2(d.add(8).div(16), s.div(2).add(0.5).div(rubber.rows))).r)
+    ? smoothstep(0.14, 0.55, texture(rubber.tex, vec2(d.add(8).div(16), s.div(2).add(0.5).div(rubber.rows))).r)
     : exp(d.sub(racing).div(1.25).pow(2).negate())
   const rubberNoise = mx_noise_float(vec3(s.mul(0.08), d.mul(0.6), 3.1)).mul(0.25).add(0.75)
-  albedo = albedo.mul(mix(float(1), float(0.5), rl.mul(rubberNoise)))
-  // rubber polishes the aggregate: the line is the glossiest part of the road (~0.5)
-  rough = mix(rough, rough.mul(0.64), rl)
+  // the rubber is laid by the tyres: two wheel tracks ~1.6 m apart, wandering a little with the line,
+  // blacker than the strip between them
+  const wu = d.sub(racing).add(mx_noise_float(vec3(s.mul(0.02), 8.8, 0)).mul(0.35))
+  const wheels = exp(abs(wu).sub(0.8).div(0.42).pow(2).negate())
+  const rubberAmt = rl.mul(rubberNoise).mul(mix(float(0.7), float(1.1), wheels)).clamp(0, 1)
+  // fresh rubber (albedo ~0.03) over grey, dusty aggregate (~0.08): the line reads as a dark band
+  albedo = albedo.mul(mix(float(1.15), float(0.38), rubberAmt))
+  // rubber polishes the aggregate: the line is the glossiest part of the road (~0.45), the dusty
+  // tarmac off it the most matte
+  rough = mix(rough.mul(1.08).min(0.95), rough.mul(0.58), rubberAmt)
 
   // skid marks: pairs of tyre tracks either side of the racing line, wandering, in fragments, where
   // the cars brake hard and spin their wheels out of slow corners
@@ -280,9 +309,18 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
 
   // dusty, marbled areas off line near the edges
   const edge = clamp(abs(d).div(hw), 0, 1)
-  const dust = smoothstep(0.7, 1.0, edge).mul(float(1).sub(rl))
-  albedo = mix(albedo, albedo.mul(1.35).add(vec3(0.012, 0.011, 0.009)), dust.mul(0.6))
-  rough = mix(rough, float(0.95), dust.mul(0.5))
+  const dust = smoothstep(0.62, 1.0, edge).mul(float(1).sub(rl))
+  albedo = mix(albedo, albedo.mul(1.35).add(vec3(0.016, 0.014, 0.011)), dust.mul(0.75))
+  rough = mix(rough, float(0.95), dust.mul(0.6))
+  // marbles: pellets of rubber thrown off line, thickest in the corners and braking zones; resolved
+  // as dots up close, an even darkening where a pixel covers many
+  const pwm = pw.xz.mul(7)
+  const dots = smoothstep(0.78, 0.9, mx_cell_noise_float(vec3(floor(pwm.x), floor(pwm.y), 4.2)))
+  const dotFade = smoothstep(0.08, 0.3, fwidth(pwm.x).add(fwidth(pwm.y)).mul(0.14))
+  const marbleZone = smoothstep(0.55, 0.85, edge).mul(float(1).sub(smoothstep(0.97, 1, edge))).mul(float(1).sub(rl)).mul(clamp(brake.add(traction).mul(1.5).add(0.25), 0, 1))
+  const marbles = mix(dots, float(0.18), dotFade).mul(marbleZone)
+  albedo = mix(albedo, vec3(0.022, 0.021, 0.021), marbles.mul(0.85))
+  rough = mix(rough, float(0.62), marbles.mul(0.6))
 
   // sealant: black, smooth bitumen
   albedo = mix(albedo, vec3(0.011, 0.011, 0.012), seal.mul(0.92))
@@ -302,8 +340,42 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
   const paint = paintLine.mul(float(1).sub(wear)).mul(float(1).sub(scuff))
   const grain = clamp(asphalt.col.dot(LUM).div(0.05), 0.6, 1.4)
   const grime = mx_noise_float(vec3(s.mul(0.05), 7.7, 0)).mul(0.5).add(0.5)
-  albedo = mix(albedo, vec3(0.64, 0.64, 0.62).mul(mix(float(0.88), float(1.06), grain)).mul(mix(float(0.86), float(1), grime)), paint)
+  const blotch = mx_noise_float(vec3(s.mul(0.35), d.mul(0.2), 5.5)).mul(0.5).add(0.5)
+  albedo = mix(albedo, vec3(0.6, 0.6, 0.58).mul(mix(float(0.86), float(1.06), grain)).mul(mix(float(0.76), float(1), grime)).mul(mix(float(0.82), float(1.04), blotch)).mul(mix(float(1), float(0.55), rl)), paint)
   rough = mix(rough, float(0.6), paint)
+
+  // the start grid: each slot's tarmac stained by oil and coolant drips under the car (darker, glossy
+  // blotches) and the launches' rubber, two black wheelspin streaks from the rear wheels forwards
+  if (track) {
+    const L = track.length
+    const sg = s.sub(step(L / 2, s).mul(L))
+    const left = step(0, d)
+    const base = mix(float(-27.5), float(-14), left)
+    const ls = fract(sg.sub(base).div(18).add(0.5)).sub(0.5).mul(18)
+    const slot = sg.sub(base).sub(ls).div(-18)
+    const onGrid = step(-0.5, slot).mul(step(slot, 9.5))
+    const ld2 = d.sub(mix(float(-2.6), float(2.6), left))
+    const sn = mx_noise_float(vec3(ls.mul(1.3), ld2.mul(1.3), slot.mul(3.1)))
+    const oil = smoothstep(0.75, 0.25, vec2(ls.add(0.6).div(1.5), ld2.div(0.75)).length().add(sn.mul(0.35))).mul(onGrid)
+    const launch = exp(abs(ld2).sub(0.8).div(0.13).pow(2).negate()).mul(smoothstep(-2.4, -1.6, ls)).mul(smoothstep(7, 0, ls)).mul(onGrid)
+    const launchK = launch.mul(smoothstep(-0.2, 0.4, mx_noise_float(vec3(ls.mul(0.5), slot.mul(1.7), 6.3)))).mul(0.85)
+    const stain = clamp(oil.mul(0.75).add(launchK), 0, 1)
+    albedo = albedo.mul(float(1).sub(stain.mul(0.55)))
+    rough = mix(rough, rough.mul(0.62), stain)
+  }
+
+  // the verge's soil, dust and grass creeping over the asphalt's last decimetres: no ruler-straight
+  // edge (the 3D grass leans over it; this is what lies on the tarmac)
+  const rag2 = mx_noise_float(vec3(s.mul(1.1), d.mul(0.5), 7.3)).mul(0.14).add(mx_noise_float(vec3(s.mul(4.3), d.mul(2), 1.4)).mul(0.06)).add(0.09)
+  // (only where the verge itself adjoins the asphalt: no kerb or paved runoff on this side)
+  const adj = mix(tr2.w, tr2.z, step(0, d))
+  const creep = float(1).sub(smoothstep(float(0), rag2.max(0.005), fromEdge)).mul(step(0.5, edge)).mul(float(1).sub(step(0.05, adj)))
+  const tuft = smoothstep(0.15, 0.45, mx_noise_float(vec3(s.mul(2.2), d.mul(2.2), 3.9)))
+  const verge = mix(vec3(0.12, 0.098, 0.074), vec3(0.055, 0.075, 0.03), tuft.mul(creep))
+  albedo = mix(albedo, verge, creep.mul(0.85))
+  // and a haze of that soil a little further in
+  albedo = mix(albedo, vec3(0.11, 0.095, 0.075), float(1).sub(smoothstep(0, 0.7, fromEdge)).mul(0.3).mul(step(0.5, edge)))
+  rough = mix(rough, float(0.97), creep)
   // specular anti-aliasing: where a pixel covers many stones, the normal detail it averages away
   // becomes roughness (no sparkle in the distance, a broad sheen instead)
   const uvm = uv().mul(4)
@@ -333,8 +405,16 @@ export function runoffMaterial() {
   const s = tr.y
   const off = abs(tr.x).sub(tr.w)
   const marks = smoothstep(0.1, 0.5, mx_noise_float(vec3(s.mul(0.05), off.mul(0.7), 7.7))).mul(float(1).sub(smoothstep(0.5, 3.5, off)))
-  m.colorNode = a.col.mul(mix(float(0.86), float(1.1), macro)).mul(float(1).sub(marks.mul(0.4)))
-  m.roughnessNode = clamp(a.rough.add(0.04), 0, 1)
+  // the verge's soil and grass creeping over the outer edge (aTrack.z: that edge's distance), and its
+  // dust a little further in: no ruler-straight line where the grass begins
+  const fromOuter = tr.z.sub(abs(tr.x))
+  const rag = mx_noise_float(vec3(s.mul(1.1), tr.x.mul(0.5), 7.3)).mul(0.16).add(mx_noise_float(vec3(s.mul(4.3), tr.x.mul(2), 1.4)).mul(0.07)).add(0.12)
+  const creep = float(1).sub(smoothstep(float(0), rag.max(0.005), fromOuter))
+  const tuft = smoothstep(0.1, 0.4, mx_noise_float(vec3(s.mul(2.2), tr.x.mul(2.2), 3.9)))
+  let col: N = a.col.mul(mix(float(0.86), float(1.1), macro)).mul(float(1).sub(marks.mul(0.4)))
+  col = mix(col, vec3(0.11, 0.095, 0.075), float(1).sub(smoothstep(0, 0.9, fromOuter)).mul(0.35))
+  m.colorNode = mix(col, mix(vec3(0.12, 0.098, 0.074), vec3(0.055, 0.075, 0.03), tuft), creep.mul(0.9))
+  m.roughnessNode = mix(clamp(a.rough.add(0.04), 0, 1), float(0.97), creep)
   m.normalNode = normalMap(normalFromXY(a.nxy), vec2(0.9))
   return m
 }
@@ -408,14 +488,22 @@ export function vergeMaterial() {
   const rag = mx_noise_float(vec3(pw.x.mul(1.1), 8.1, pw.z.mul(1.1)))
     .mul(0.3)
     .add(mx_noise_float(vec3(pw.x.mul(4.7), 2.2, pw.z.mul(4.7))).mul(0.08))
-  const e = fromIn.add(rag)
+  // the worn margin's width wanders from nothing to ~0.7 m (where the cars run wide most)
+  const wide = smoothstep(-0.1, 0.6, mx_noise_float(vec3(pw.x.mul(0.06), 3.7, pw.z.mul(0.06)))).mul(0.45)
+  const e = fromIn.add(rag).sub(wide)
   const bare = float(1).sub(smoothstep(0.02, 0.22, e)).mul(float(1).sub(w))
-  const thin = float(1).sub(smoothstep(0.1, 1.0, e)).mul(float(1).sub(w))
+  const thin = float(1).sub(smoothstep(0.1, 1.3, e)).mul(float(1).sub(w))
+  // tyre ruts where cars dropped two wheels off: parallel to the edge, fragments a few tens of metres
+  // long, the grass flattened and worn to soil in the wheel tracks
+  const rutZone = smoothstep(0.35, 0.6, mx_noise_float(vec3(pw.x.mul(0.035), 14.2, pw.z.mul(0.035))))
+  const rutD = fromIn.sub(0.55).sub(mx_noise_float(vec3(pw.x.mul(0.08), 1.9, pw.z.mul(0.08))).mul(0.5))
+  const rut = smoothstep(0.2, 0.06, abs(rutD)).mul(rutZone).mul(float(1).sub(w))
   const soil = mix(gtex.rgb.mul(0.55), vec3(0.085, 0.068, 0.05), 0.6).mul(mix(float(0.85), float(1.1), rag.mul(3).add(0.5).clamp(0, 1)))
   col = mix(col, mix(col.mul(vec3(1.1, 0.98, 0.72)), soil, 0.25), thin.mul(0.8))
   col = mix(col, soil, bare)
+  col = mix(col, mix(col.mul(vec3(1.05, 0.95, 0.7)), soil, 0.55), rut.mul(0.85))
   m.colorNode = mix(col, gtex.rgb, w)
-  const wn = max(w, bare.mul(0.7))
+  const wn = max(w, max(bare, rut.mul(0.6)).mul(0.7))
   m.roughnessNode = mix(grass.rough, float(0.95), wn)
   const n = normalMap(mix(normalFromXY(grass.nxy), texture(tex.gravel.normal, uv().mul(8 / 3)).rgb, wn), vec2(0.8))
   // the sward's clumps in the lighting too (a centimetre or two of relief), fading with the footprint
@@ -425,8 +513,11 @@ export function vergeMaterial() {
 
 /** Drier, straw-coloured patches a couple of metres across (shared with the 3D grass standing there). */
 function dryTone(xz: N): N {
-  const dry = smoothstep(0.15, 0.6, mx_noise_float(vec3(xz.x.mul(0.45), 6.2, xz.y.mul(0.45))))
-  return mix(vec3(1), vec3(1.14, 1.04, 0.7), dry.mul(0.75))
+  // straw-coloured patches (dry grass is paler and yellower: albedo ~0.15-0.2), more of them in the
+  // drier zones of the field
+  const zone = smoothstep(-0.3, 0.35, mx_noise_float(vec3(xz.x.mul(0.05), 2.4, xz.y.mul(0.05))))
+  const dry = smoothstep(0.12, 0.55, mx_noise_float(vec3(xz.x.mul(0.45), 6.2, xz.y.mul(0.45)))).mul(mix(float(0.45), float(1), zone))
+  return mix(vec3(1), vec3(1.42, 1.2, 0.62), dry.mul(0.85))
 }
 
 /**
@@ -440,8 +531,12 @@ function turfDetail(xz: N) {
   const c2 = mx_noise_float(vec3(xz.x.mul(6.5), 2.9, xz.y.mul(6.5)))
   const a1 = float(1).sub(smoothstep(0.3, 1.2, fw))
   const a2 = float(1).sub(smoothstep(0.08, 0.35, fw))
-  const k = float(1).add(c1.mul(0.3).mul(a1)).add(c2.mul(0.22).mul(a2))
-  return { tone: dryTone(xz).mul(k), relief: c1.mul(0.02).mul(a1).add(c2.mul(0.006).mul(a2)) }
+  // tussocks a metre or two across, which a camera still resolves at 40 m (the finer octaves have
+  // averaged away there): faded only where a pixel covers them
+  const c0 = mx_noise_float(vec3(xz.x.mul(0.75), 4.1, xz.y.mul(0.75)))
+  const a0 = float(1).sub(smoothstep(1.2, 4.5, fw))
+  const k = float(1).add(c0.mul(0.32).mul(a0)).add(c1.mul(0.3).mul(a1)).add(c2.mul(0.22).mul(a2))
+  return { tone: dryTone(xz).mul(k), relief: c0.mul(0.04).mul(a0).add(c1.mul(0.02).mul(a1)).add(c2.mul(0.006).mul(a2)) }
 }
 
 /**
@@ -452,13 +547,26 @@ function grassColor(leafy: N = float(0)) {
   const g = scannedGrass(positionWorld.xz, leafy)
   const n = mx_noise_float(vec3(positionWorld.x.mul(0.006), 0.5, positionWorld.z.mul(0.006))).mul(0.5).add(0.5)
   const t = turfDetail(positionWorld.xz)
-  let col: N = g.col.mul(lawnTone(positionWorld.xz)).mul(t.tone)
+  const pt = swardPatches(positionWorld.xz)
+  let col: N = mix(g.col.mul(lawnTone(positionWorld.xz)).mul(t.tone).mul(pt.tint), SOIL.mul(t.tone.dot(LUM)), pt.bare.mul(0.6))
+  // a sward is a canopy, not a painted plane: at a grazing view the camera looks between the blades
+  // into their shadows when it faces the sun (darker, the blades' translucent edges glowing
+  // yellow-green), and at sunlit blade tops with the sun behind it (the hot spot, lighter)
+  const V = normalize(cameraPosition.sub(positionWorld))
+  const graze = float(1).sub(V.y.clamp(0, 1)).pow(2)
+  const phase = dot(V, groundSun)
+  const intoShade = smoothstep(0.1, -0.85, phase).mul(graze)
+  col = col.mul(mix(float(1), float(0.62), intoShade)).add(col.mul(vec3(0.28, 0.34, 0.06)).mul(intoShade))
+  col = col.mul(float(1).add(smoothstep(0.4, 1, phase).mul(graze).mul(0.18)))
   const dist = length(positionWorld.sub(cameraPosition))
   const far = smoothstep(120, 900, dist)
   col = mix(col, col.mul(0.25).add(vec3(0.05, 0.065, 0.026).mul(mix(float(0.85), float(1.15), n))), far.mul(0.6))
   // living blades are waxy: a lawn seen towards the sun is clearly lighter, a silvery sheen at grazing
   // angles (the scan's roughness is the dry, matte photographed ground's)
-  return { color: col, rough: g.rough.mul(0.68).max(0.42), nxy: mix(g.nxy, vec2(0.5, 0.5), far), relief: t.relief }
+  // (but a canopy is no flat mirror: at grazing angles into the sun the blades shadow and hide
+  // each other's highlights, so the plane's Fresnel sheen must not read as frost)
+  const rough = mix(g.rough.mul(0.68).max(0.5), float(0.85), intoShade.mul(0.8))
+  return { color: col, rough, nxy: mix(g.nxy, vec2(0.5, 0.5), far), relief: t.relief }
 }
 
 export function terrainMaterial() {

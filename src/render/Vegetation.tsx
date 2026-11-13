@@ -64,7 +64,7 @@ import { pitLane } from '../track/pitlane'
 import { debugFlag } from '../util/debug'
 import type { TerrainHeight } from './trackGeometry'
 import { loadVegetation, vegState, type VegMesh } from './worldAssets'
-import { grassGroundColour } from './materials'
+import { grassGroundColour, groundSun } from './materials'
 import { forestNoise, treeChance } from './scenery/forest'
 
 type N = any
@@ -1182,6 +1182,7 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
     vegCam.value.setFromMatrixPosition(camera.matrixWorld)
     vegLens.value = lensOf(camera)
     vegSunDir.value.copy(sunState.dir)
+    groundSun.value.copy(sunState.dir)
     vegSunCol.value.copy(sunState.color).multiplyScalar(sunState.intensity)
     for (const l of built.layers) l.update(camera)
     ;(window as unknown as { __veg?: object }).__veg = Object.fromEntries(built.layers.map((l) => [l.o.name, { instances: l.total, triangles: l.triangles }]))
