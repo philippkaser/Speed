@@ -1109,7 +1109,8 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
         tintB: new THREE.Color(0.98, 1.0, 0.94),
         groundColour: grassGroundColour,
         roughTrunk: 0.85,
-        roughLeaf: 0.62,
+        // (blades seen into the sun at a grazing angle: a frosty sheen at 0.62)
+        roughLeaf: 0.76,
         crown: 0,
         canopy: { root: 0.78, selfShadow: 0.75 },
         upNormal: 0.75,

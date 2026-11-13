@@ -79,6 +79,14 @@ function normalFromXY(nxy: N) {
 }
 
 /**
+ * A sward's effective normal at a grazing view: the camera sees the blades side-on, not a level
+ * plane, so the shading normal leans towards the viewer (no flat-plane Fresnel mirror of the sky).
+ */
+function swardNormal(n: N, graze: N) {
+  return normalize(mix(n, normalize(positionView.negate()), graze.mul(0.5)))
+}
+
+/**
  * View-space normal bumped by a procedural height (Mikkelsen's surface gradient, from the screen
  * derivatives of the height and the position): for detail that has no texture of its own.
  */
@@ -507,7 +515,7 @@ export function vergeMaterial() {
   m.roughnessNode = mix(grass.rough, float(0.95), wn)
   const n = normalMap(mix(normalFromXY(grass.nxy), texture(tex.gravel.normal, uv().mul(8 / 3)).rgb, wn), vec2(0.8))
   // the sward's clumps in the lighting too (a centimetre or two of relief), fading with the footprint
-  m.normalNode = bumpView(grass.relief.mul(float(1).sub(wn)), n)
+  m.normalNode = swardNormal(bumpView(grass.relief.mul(float(1).sub(wn)), n), grass.graze.mul(float(1).sub(wn)))
   return m
 }
 
@@ -566,7 +574,7 @@ function grassColor(leafy: N = float(0)) {
   // (but a canopy is no flat mirror: at grazing angles into the sun the blades shadow and hide
   // each other's highlights, so the plane's Fresnel sheen must not read as frost)
   const rough = mix(g.rough.mul(0.68).max(0.5), float(0.85), intoShade.mul(0.8))
-  return { color: col, rough, nxy: mix(g.nxy, vec2(0.5, 0.5), far), relief: t.relief }
+  return { color: col, rough, nxy: mix(g.nxy, vec2(0.5, 0.5), far), relief: t.relief, graze }
 }
 
 export function terrainMaterial() {
@@ -591,7 +599,7 @@ export function terrainMaterial() {
   const lawn = mix(float(1), mix(float(0.86), float(1.1), stripe), mown)
   m.colorNode = mix(g.color.mul(lawn), vec3(0.16, 0.15, 0.13).mul(rock.add(0.5)), rockMask).mul(mix(float(1), float(0.7), cover))
   m.roughnessNode = max(g.rough, 0.85)
-  m.normalNode = normalMap(normalFromXY(g.nxy), vec2(0.7))
+  m.normalNode = swardNormal(normalMap(normalFromXY(g.nxy), vec2(0.7)), g.graze.mul(float(1).sub(rockMask)))
   return m
 }
 
