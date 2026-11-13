@@ -35,6 +35,10 @@ export interface Assists {
   stability: boolean
 }
 
+/** ABS at the rear wheels: slip target as a share of the tyre's peak slip ratio (front: 1.08), and the
+ *  valve's gains (change of brake pressure per second per unit of slip error over the peak slip). */
+const ABS_REAR = { target: 0.75, release: 200, apply: 30 }
+
 export const DEFAULT_ASSISTS: Assists = { abs: true, tc: 2, steering: 0.7, autoGear: false, stability: false }
 
 /** Tuning of the steering assist (Vehicle.assistedSteer), measured with scripts/feel-probe.ts. */
@@ -508,14 +512,19 @@ export class Vehicle {
     return this.spec.gears.length
   }
 
+  /** Speed of the driven wheels as the road will turn them (rad/s): a locked or slipping rear axle
+   *  reads slow, and a gear chosen from it over-revs the engine when the tyres grip again. */
+  private roadOmega() {
+    return Math.max(Math.abs(this.wheels[2].omega + this.wheels[3].omega) * 0.5, this.speed / this.wheels[2].radius)
+  }
+
   requestShift(dir: number) {
     if (this.shiftTimer > 0) return
     const next = clamp(this.gear + dir, -1, this.spec.gears.length)
     if (next === this.gear) return
     // protect from over-rev on downshift
     if (dir < 0 && next > 0) {
-      const wheelOmega = (this.wheels[2].omega + this.wheels[3].omega) * 0.5
-      const rpmAfter = Math.abs(wheelOmega * this.ratioFor(next)) * RADS_TO_RPM
+      const rpmAfter = this.roadOmega() * Math.abs(this.ratioFor(next)) * RADS_TO_RPM
       if (rpmAfter > this.spec.engine.maxRpm - 150) return
     }
     if (next === -1 && this.speed > 3) return
@@ -945,8 +954,7 @@ export class Vehicle {
     if (this.racingShift) {
       // racing driver's shifting (AI): up at the limiter only, down on the brakes or a lift as soon
       // as the lower gear fits, on the throttle when below the power band. Never up on the brakes
-      // or a lift (the road box below upshifts at 3900 rpm with the pedals off, so braking
-      // downshifts were followed by upshifts and the gear hunted 6-5-6-5 into the corners)
+      // or a lift (the next braking downshift undoes it, and the gear hunts 6-5-6-5 into the corner)
       // up when the next gear puts at least as much torque on the wheels (full-throttle curve), or
       // at the limiter: a fixed limiter-150 point was never reached where the limiter cut or the
       // torque curve held the revs just below it, and the car sat in 1st near 7,200 rpm
@@ -961,21 +969,28 @@ export class Vehicle {
       }
       return
     }
-    const wheelOmega = (this.wheels[2].omega + this.wheels[3].omega) * 0.5
+    // the driver's automatic (the player's car, and the AI in road cars): it shifts as a quick driver
+    // would with the paddles. Up under power only: the old schedule also upshifted off the pedals
+    // (at 3900 rpm), above the revs its own braking and coasting downshifts produced, so the gear
+    // hunted 6-5-6-5 every 0.06 s through a braking zone (45 shifts from 250 km/h to rest) and a road
+    // car coasting in top never settled. Every up point now lies above every down point: part
+    // throttle shifts up from 0.82 of the limiter (a braking downshift leaves at most 0.78), so the
+    // gear taken on the brakes is held through the corner.
     const slipping = Math.max(this.wheels[2].tyre.slipRatio, this.wheels[3].tyre.slipRatio) > 0.25
-    // early upshifts when cruising, at the limiter when pushing
-    const upRpm = lerp(eng.idleRpm + 2800, eng.limiterRpm - 180, smoothstep(0.3, 0.85, throttle))
-    if (rpm > upRpm && this.gear < sp.gears.length && !slipping && this.clutchEngage > 0.9) {
+    const upRpm = lerp(eng.limiterRpm * 0.82, eng.limiterRpm - 180, smoothstep(0.3, 0.85, throttle))
+    if (throttle > 0.05 && brake < 0.05 && rpm > upRpm && this.gear < sp.gears.length && !slipping && this.clutchEngage > 0.9) {
       this.requestShift(1)
       return
     }
     if (this.gear > 1) {
-      const rpmDown = Math.abs(wheelOmega * this.ratioFor(this.gear - 1)) * RADS_TO_RPM
+      const rpmDown = this.roadOmega() * Math.abs(this.ratioFor(this.gear - 1)) * RADS_TO_RPM
       // kickdown on throttle only while the engine is below its power band: dropping to the lowest
       // gear that still fits under the limiter put first gear in at 70 km/h mid-corner, and the
       // rear went straight past its grip
       const kick = throttle > 0.6 && rpm < this.powerBandRpm()
-      const threshold = kick ? eng.limiterRpm - 700 : eng.limiterRpm * (brake > 0.2 ? 0.78 : 0.55)
+      // on the brakes: as soon as the lower gear fits (first is a launch gear: only when the car is
+      // slow enough to need it); coasting: late, the car is not being slowed for a corner
+      const threshold = kick ? Math.min(eng.limiterRpm - 700, upRpm - 300) : eng.limiterRpm * (brake > 0.2 ? (this.gear === 2 ? 0.6 : 0.78) : 0.55)
       if (rpmDown < threshold) this.requestShift(-1)
     }
   }
@@ -1204,9 +1219,19 @@ export class Vehicle {
     // ------------------------------------------------------------ brakes
     let bt = brake * wh.brakeMax + handbrake
     if (this.assists.abs && brake > 0.05 && Fz > 0) {
-      const lim = -wh.model.compound.peakSlipRatio * 1.08
-      if (tyre.slipRatio < lim) wh.absFactor = Math.max(0.15, wh.absFactor - h * 28)
-      else wh.absFactor = Math.min(1, wh.absFactor + h * 9)
+      const peak = wh.model.compound.peakSlipRatio
+      if (wh.front) {
+        if (tyre.slipRatio < -peak * 1.08) wh.absFactor = Math.max(0.15, wh.absFactor - h * 28)
+        else wh.absFactor = Math.min(1, wh.absFactor + h * 9)
+      } else {
+        // the rear axle is held short of its peak (electronic brake-force distribution): a tyre at
+        // its longitudinal peak has no side force left, and a rear axle without side force lets
+        // the car turn under braking (1.7 degrees from 250 to 60 km/h once the gearbox really took
+        // the lower gears and their engine braking). Proportional about the target: an on/off
+        // valve cycles the wheel far below it
+        const e = tyre.slipRatio / peak + ABS_REAR.target
+        wh.absFactor = clamp(wh.absFactor + h * (e < 0 ? Math.max(-28, e * ABS_REAR.release) : Math.min(9, e * ABS_REAR.apply)), 0.15, 1)
+      }
       if (wh.absFactor < 0.97) this.absActive = true
       bt = brake * wh.brakeMax * wh.absFactor + handbrake
     } else wh.absFactor = 1

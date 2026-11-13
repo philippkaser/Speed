@@ -85,7 +85,7 @@ A rigid-body simulation at a fixed **600 Hz**, independent of the frame rate, wi
 - **Aero map**: front and rear downforce with ground effect (rising towards the ground, stalling when too low). Rake moves the centre of pressure, yaw and roll spoil the underbody, there's induced and yaw drag, and dirty air robs the front more than the rear. Wing levels are adjustable.
 - **Dynamic track**: every tyre lays rubber on a 2 m × 1 m grip map that darkens the road as a session goes on. There's green track off-line, marbles near the edges, and track temperature that follows the sun.
 - **Steering and force feedback**: the rack torque is the sum of the front tyres' self-aligning moments and mechanical trail, plus road texture. It drives force feedback for Logitech G29/G923 (PlayStation version)/G27/G25/DFGT wheels over WebHID (experimental) and gamepad rumble.
-- **Assists**: ABS (per-wheel slip control), traction control (5 levels), a steering assist for keyboard and pad (slip-angle targeted, with auto counter-steer), and an automatic gearbox. All of these can be switched off.
+- **Assists**: ABS (per-wheel slip control; the rear wheels are held at 0.75 of the tyre's peak slip so the rear axle keeps its side force under braking), traction control (5 levels), a steering assist for keyboard and pad (slip-angle targeted, with auto counter-steer), and an automatic gearbox that shifts like a driver with paddles (up under power only, each gear once through a braking zone, the gear taken on the brakes held through the corner). All of these can be switched off.
 - **Collisions**: hull probes against barriers and the ground (sparks when bottoming), and car-to-car SAT boxes with impulses.
 
 Measured in `bun test` (flat ground, warm tyres):

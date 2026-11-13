@@ -209,3 +209,63 @@ test('locking the brakes grinds a flat spot that makes the tyre load oscillate',
   expect(flat).toBeGreaterThan(0.00005)
   expect(hi - lo).toBeGreaterThan(150)
 })
+
+describe('automatic gearbox (the player\'s car)', () => {
+  // pedals over time -> the gears taken (the wheels and engine start at road speed in the given gear)
+  function drive(ci: number, kmh: number, gear: number, segs: { t: number; throttle: number; brake: number }[]) {
+    const { world, v, car } = makeWorld(ci, { tc: 2 })
+    for (const w of v.wheels) {
+      w.tyre.surfTemp = w.tyre.coreTemp = w.model.compound.optTemp
+      w.tyre.updatePressure()
+    }
+    v.racingShift = false
+    v.gear = gear
+    v.setVelocityForward(kmh / 3.6)
+    let ups = 0,
+      downs = 0,
+      last = gear,
+      maxRpm = 0
+    for (const s of segs) {
+      car.input.throttle = s.throttle
+      car.input.brake = s.brake
+      run(world, s.t, () => {
+        if (v.gear !== last && v.gear > 0) {
+          if (v.gear > last) ups++
+          else downs++
+          last = v.gear
+        }
+        maxRpm = Math.max(maxRpm, v.rpm)
+      })
+    }
+    return { ups, downs, gear: v.gear, kmh: v.speed * 3.6, maxRpm }
+  }
+
+  for (const [ci, spec] of CARS.entries()) {
+    const top = spec.gears.length
+    test(`${spec.name}: takes each gear once through a braking zone, never one up`, () => {
+      // (the old schedule upshifted off the pedals at 3900 rpm: 20 upshifts and 25 downshifts here)
+      const r = drive(ci, 240, top, [{ t: 3.2, throttle: 0, brake: 1 }])
+      console.log(`[${spec.name}] braking 240 km/h in ${top}th: ${r.downs} down, ${r.ups} up, in gear ${r.gear} at ${r.kmh.toFixed(0)} km/h, max ${r.maxRpm.toFixed(0)} rpm`)
+      expect(r.ups).toBe(0)
+      expect(r.downs).toBeGreaterThanOrEqual(2)
+      expect(r.downs).toBeLessThanOrEqual(top - 1)
+      expect(r.maxRpm).toBeLessThan(spec.engine.limiterRpm + 100)
+    })
+
+    test(`${spec.name}: holds the gear on a lift, and the gear taken on the brakes through the corner`, () => {
+      const coast = drive(ci, 200, top - 1, [{ t: 6, throttle: 0, brake: 0 }])
+      expect(coast.ups + coast.downs).toBe(0)
+      // feathering the throttle on and off must not move the gear back and forth
+      const feather = drive(ci, 170, top - 2, Array.from({ length: 8 }, (_, i) => ({ t: 1, throttle: i % 2 ? 0.15 : 0, brake: 0 })))
+      expect(feather.ups + feather.downs).toBeLessThanOrEqual(1)
+      // brake for a corner, then balance the car on part throttle: no upshift mid-corner
+      const corner = drive(ci, 230, top, [
+        { t: 2.6, throttle: 0, brake: 0.7 },
+        { t: 2, throttle: 0.35, brake: 0 },
+      ])
+      console.log(`[${spec.name}] coast ${coast.ups + coast.downs} shifts, feathering ${feather.ups + feather.downs}, corner ${corner.downs} down ${corner.ups} up`)
+      expect(corner.ups).toBe(0)
+      expect(corner.downs).toBeGreaterThanOrEqual(2)
+    })
+  }
+})
