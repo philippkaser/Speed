@@ -35,9 +35,12 @@ export interface Assists {
   stability: boolean
 }
 
-/** ABS at the rear wheels: slip target as a share of the tyre's peak slip ratio (front: 1.08), and the
- *  valve's gains (change of brake pressure per second per unit of slip error over the peak slip). */
-const ABS_REAR = { target: 0.75, release: 200, apply: 30 }
+/** ABS at the rear wheels: slip target as a share of the tyre's peak slip ratio (front: 1.08), the
+ *  combined slip (braking and cornering together, 1 = the friction circle's peak) it allows, and the
+ *  valve's gains (change of brake pressure per second per unit of overuse). */
+const ABS_REAR = { target: 0.75, combined: 1, release: 150, apply: 22 }
+/** The automatic takes no lower gear while a rear tyre's combined slip is above this. */
+const REAR_BUSY = 0.85
 
 export const DEFAULT_ASSISTS: Assists = { abs: true, tc: 2, steering: 0.7, autoGear: false, stability: false }
 
@@ -991,7 +994,11 @@ export class Vehicle {
       // on the brakes: as soon as the lower gear fits (first is a launch gear: only when the car is
       // slow enough to need it); coasting: late, the car is not being slowed for a corner
       const threshold = kick ? Math.min(eng.limiterRpm - 700, upRpm - 300) : eng.limiterRpm * (brake > 0.2 ? (this.gear === 2 ? 0.6 : 0.78) : 0.55)
-      if (rpmDown < threshold) this.requestShift(-1)
+      // a lower gear puts more engine torque (braking or drive) on the rear axle: not while its tyres
+      // are already near their limit. A corner taken on the brakes at 85 % of the grip turned into a
+      // 27 degree slide when the box took two gears in it
+      const rearBusy = Math.max(this.wheels[2].tyre.combinedSlip, this.wheels[3].tyre.combinedSlip) > REAR_BUSY
+      if (rpmDown < threshold && !rearBusy) this.requestShift(-1)
     }
   }
 
@@ -1229,7 +1236,10 @@ export class Vehicle {
         // the car turn under braking (1.7 degrees from 250 to 60 km/h once the gearbox really took
         // the lower gears and their engine braking). Proportional about the target: an on/off
         // valve cycles the wheel far below it
-        const e = tyre.slipRatio / peak + ABS_REAR.target
+        // and it counts the cornering the tyre is doing (its combined slip, 1 = the friction
+        // circle's peak): braking into a corner, the rear brakes give way before the axle does
+        const use = Math.max(-tyre.slipRatio / (peak * ABS_REAR.target), tyre.slipRatio < 0 ? tyre.combinedSlip / ABS_REAR.combined : 0)
+        const e = 1 - use
         wh.absFactor = clamp(wh.absFactor + h * (e < 0 ? Math.max(-28, e * ABS_REAR.release) : Math.min(9, e * ABS_REAR.apply)), 0.15, 1)
       }
       if (wh.absFactor < 0.97) this.absActive = true
