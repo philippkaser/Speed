@@ -77,3 +77,70 @@ The production server gzips code and models once (cached), revalidates unhashed 
 - **Weather and time of day:** the photographic sky fixes mid-afternoon; the dynamic sky has no volumetric clouds and no rain.
 - **Audio:** synthesised engines, behind recorded samples.
 - **Verification:** everything here was rendered with SwiftShader (software WebGPU) at 960x540; nothing was measured on a real GPU, and HDR output could not be checked on an HDR display. The WebGL2 fallback was rendered once (by the performance pass), not after the world-art pass.
+
+## Second pass (10-13 November, branch `claude/game-graphics-physics-aaa-t13drr`)
+
+The owner's verdict on the build above: graphics still not photo-real, car reflections not clear, car
+shadows stutter, the AI cars do not drive a real racing line, and the picture does not look as if a
+camera took it (tone mapping, colours, bloom, the way colours clip). This pass went after the causes.
+Everything was again rendered with SwiftShader (software WebGPU) at 960x540; nothing here has run on
+a real GPU or been seen on a calibrated display.
+
+### What was found and changed
+
+| Complaint | Cause found | Change |
+|---|---|---|
+| Car shadows stutter | The farthest cascade was not rendered every frame, so car shadows beyond 130 m updated late; the cascade bias was 0.6-2.4 m, so low casters and distant cars cast nothing; only the car in focus had a shadow map locked to it. | The far cascade renders every frame; bias in metres per cascade; every car has its own sun shadow map, locked to the car, in one atlas (`carShadowAtlas.ts`, `?noatlas` for the old path). The cascades keep the static world. |
+| Car reflections not clear | A base-coat specular lobe under the clear coat blurred the mirror; the paint's albedo was brighter than any pigment, so the red channel clipped flat. | The clear coat mirrors the probe cube itself, with the sun's own glint; livery texture scaled to pigment albedo; window glass as a dielectric pane. |
+| Not a camera's picture | Contrast 1.95 (cameras render at ~1.3-1.55): a hard shadow in the sun landed 4.9 stops under the sunlit ground, and 2-9% of a frame had a channel at zero. A 12% saturation boost and a weakened inset on top: a sunlit red at sRGB 246/19/13, a primary pinned at the gamut's limit. Out-of-gamut colours clipped per channel. 5% lens scatter veiled the shadows by a quarter of their own level. | Contrast 1.5, shoulder 1.2 (a grey card at half of sRGB, a sunlit white panel at ~235), no saturation boost, AgX's full inset (the same red: 234/54/44), out-of-gamut colours brought in towards their own grey, 3% scatter. In-engine: pixels with a channel at zero 2.3 -> 0.9% (chase view), 8.9 -> 4.6% (side), 6.4 -> 3.2% (front three-quarter). |
+| Soft picture | The TAA kernel (UE4's `exp(-2.29 d^2)`) converged to a soft image at native resolution; textures were sampled without a LOD bias for the internal scale. | Kernel `exp(-5 d^2)`, current-frame weight 7%, texture LOD bias `log2(renderScale) - 0.5`, anisotropy 16. |
+| Cardboard backdrop | Needle peaks in one layer, thin haze. | Two eroded ranges with accordant summits, aerial perspective for ~30 km visibility, weathered buildings. |
+| Trees are green blobs | Crowns had no self-shadowing: leaf normals are bent into a sphere at build time and the shadow maps are far too coarse, so front, back, inside and underside were lit alike; the impostors baked the same. | Each crown is a leaf volume: the sun reaching a leaf is cut by the crown between it and the sun, per pixel, in meshes and impostors alike; wider per-tree colour range; shrubs along the forest edges; a ragged grass fringe at the asphalt edge. |
+| AI has no real racing line | `computeRacingLine` relaxed towards the midpoint of its neighbours: the shortest path, 1.35 m off the edges, not the fastest. The speed plan ignored what the car can actually do. | A minimum-curvature line over the usable width including the flat kerbs (`src/track/racingLine.ts`), a speed plan calibrated to the car's measured skidpad g(v) with a lateral-jerk limit, path-following steering with curvature feed-forward. Solo AI lap in the GT3: 95.5 s -> 88.6 s, 0.2-0.7 m off the line, largest slide 3.4 degrees. |
+| Racing in traffic | Off the ideal line a car had no valid line or speed. The slipstream did nothing for AI cars: on a straight their speed plan (what a car reaches alone) was treated as a cap. Followers were held ~17 m back at speed. | Left and right lane lines with their own speed plans; alongside, attack, one-move defence, rejoin and three-wide rules on lanes; on straights a car runs to its limit, tucks in to a car's length in a tow and pulls out with the run; the corner goes to the inside car with its nose past the other's rear axle at turn-in (a bounded lift for the other, never a stop). |
+| Physics (audited with `scripts/physics-audit.ts`) | The suspension carried the sprung mass only (11% too much grip); the limited-slip differential locked twice its setting; rolling resistance was not Coulomb; car-to-car contacts acted off-centre. | Whole-car mass, Coulomb rolling resistance, centred contact with friction, the differential fixed and the GT3 re-balanced, a clutch that launches at the launch revs, slipstream and dirty air from a wake model, a steering assist that works from the tyres' state. |
+
+### Measured
+
+Eight seeded 12-car races of 4 laps (`scripts/race-audit.ts`, seeds 1000-1007):
+
+| | Old line | New line, before lanes | Now |
+|---|---|---|---|
+| Contacts | 38 | 41 | 3 |
+| Spins | 18 | 103 | 2 |
+| Off-tracks | 27 | 194 | 2 |
+| Stuck cars | 2 | 9 | 0 |
+| Hardest nose-to-tail closing speed | 33 km/h | 54 km/h | 0 km/h |
+| Overtakes (clean) | | | 107 (107) |
+
+Two cars alone (`tests/lanes.test.ts`): a car about 1 s a lap faster closes in the slipstream, takes the
+inside of the first braking zone of the second lap and is through at 110 s, without contact.
+
+Rendering cost, practice chase view, High, 960x540 (`scripts/shot.cjs --info`): 216-235 draw calls and
+3.5-4.25M triangles depending on what stands in view. The vegetation change added one draw call and up
+to 0.9M triangles (shrubs, the grass fringe, more impostors); the shrubs also go into the shadow passes.
+
+Tests: 90 (`bun test`), among them the physics balance ladder, seeded race cleanliness, lane geometry,
+the passing scenario, the camera's steadiness and the picture's targets.
+
+### Still behind GT7 after this pass (honest list)
+
+- **The picture** now has a camera's tonal and colour rendering, but the frames are still recognisably
+  rendered: what gives them away is in the scene (below), not in the display transform. The sun's
+  glare, ghosts and the lamps' glow were not re-judged against camera footage.
+- **Trees:** broadleaf crowns are still one saturated green: no light glowing through leaves, no sky
+  through gaps; shrubs are scaled-down trees; conifers too dark with orange trunks; trees stand as evenly
+  as an orchard.
+- **Verge:** still largely one green with stripes and a mostly straight edge; the fringe exists only
+  within ~12 m of the camera.
+- **Cars:** wheels, tyres and rims are plain; no contact darkening in the wheel arches; no damage, dirt
+  or rain.
+- **Effects:** tyre smoke, dust and skid marks were not revisited.
+- **AI:** closely matched cars almost never pass each other: with the fastest driver (+0.006 skill,
+  ~0.15 s a lap) starting last, it gained 1, 1, 0 and 0 places in four 5-lap races. Side-by-side racing
+  is conservative (a lane costs ~4% of pace), there is no late-apex refinement of the line, the
+  standing start is cautious, and pit-exit merging was not re-checked after the rejoin rule changed.
+- **Player's car:** the automatic gearbox hunts 6-5-6-5 under braking; the Aurel 660 GT oversteers at
+  speed and overheats its rear tyres; tyres run 137-152 degrees C in long corners.
+- **Verification:** SwiftShader only. No frame time on a real GPU, no check of the WebGL2 fallback after
+  the vegetation and shadow-atlas changes, no HDR display.

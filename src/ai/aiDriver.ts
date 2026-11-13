@@ -1,5 +1,5 @@
-// AI driver: follows the optimised racing line with pure-pursuit steering, slip-angle aware
-// counter-steer, a car-specific speed profile and simple traffic awareness (overtaking offsets).
+// AI driver: follows the minimum-curvature racing line (path-following steering), slip-angle aware
+// counter-steer, a car-specific speed plan and traffic on left / right lane lines (slipstream, out-braking).
 import { makeSample } from '../physics/ground'
 import { clamp, lerp } from '../physics/math'
 import { COMPOUNDS } from '../physics/spec'
