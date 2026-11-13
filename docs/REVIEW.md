@@ -111,11 +111,11 @@ Eight seeded 12-car races of 4 laps (`scripts/race-audit.ts`, seeds 1000-1007):
 | Off-tracks | 27 | 194 | 3 |
 | Stuck cars | 2 | 9 | 0 |
 | Hardest nose-to-tail closing speed | 33 km/h | 54 km/h | 0 km/h |
-| Overtakes (clean) | | | 108 (108) |
+| Overtakes (clean) | | | 114 (114) |
 
 Two cars alone (`tests/lanes.test.ts`): a car about 1 s a lap faster closes in the slipstream and
 out-brakes the slower one on the inside, without contact, but when is decided by centimetres. Started
-18, 25 and 40 m apart it is through after 138, 291 and 319 s (laps 2 to 4). An earlier version of this
+18, 25 and 40 m apart it is through after 138, 228 and 110 s (laps 2 and 3). An earlier version of this
 paragraph said "through at 110 s": that was one starting gap; over five gaps that build got by in two
 within 400 s, the current one in four.
 
@@ -123,7 +123,7 @@ Rendering cost, practice chase view, High, 960x540 (`scripts/shot.cjs --info`): 
 3.5-4.25M triangles depending on what stands in view. The vegetation change added one draw call and up
 to 0.9M triangles (shrubs, the grass fringe, more impostors); the shrubs also go into the shadow passes.
 
-Tests: 94 (`bun test`), among them the physics balance ladder, seeded race cleanliness, lane geometry,
+Tests: 95 (`bun test`), among them the physics balance ladder, seeded race cleanliness, lane geometry,
 the passing scenario, the camera's steadiness and the picture's targets.
 
 ### Still behind GT7 after this pass (honest list)
@@ -145,12 +145,13 @@ the passing scenario, the camera's steadiness and the picture's targets.
   ~0.15 s a lap) starting last, it gained 1, 1, 0 and 0 places in four 5-lap races. Side-by-side racing
   is conservative (a lane costs ~4% of pace), there is no late-apex refinement of the line, the
   standing start is cautious, and pit-exit merging was not re-checked after the rejoin rule changed.
-- **Player's car:** the Aurel 660 GT oversteers at speed and overheats its rear tyres (its AI lap still
-  has 14 s off the track); tyres run 137-152 degrees C in long corners. (The automatic gearbox's
+- **Player's car:** the Aurel 660 GT oversteers at speed and overheats its rear tyres (its AI laps
+  still have 14-27 s off the track and it spins on a lift at 200 km/h in a 250 m corner); tyres run 137-152 degrees C in long corners. (The automatic gearbox's
   hunting is fixed: it made 45 shifts in one braking zone from 250 km/h; it now takes each gear once,
   shifts up under power only and holds the gear through the corner. With the lower gears really held,
-  engine braking kept the rear tyres at their peak and the car turned 1.7 degrees under straight
-  braking, so the rear ABS now holds 0.75 of the peak slip: 0.11 degrees, 250-60 km/h in 112.6 m,
-  was 116.5 m.)
+  engine braking kept the rear tyres at their peak: the car turned 1.7 degrees under straight braking
+  and slid 27 degrees when braked into a corner. The rear ABS now holds 0.75 of the peak slip and
+  counts the cornering load: 0.09 degrees, 4.9 degrees of rotation, 250-60 km/h in 112.6 m, was
+  116.5 m.)
 - **Verification:** SwiftShader only. No frame time on a real GPU, no check of the WebGL2 fallback after
   the vegetation and shadow-atlas changes, no HDR display.
