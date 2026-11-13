@@ -20,6 +20,7 @@ import { HERO_LAYER } from '../render/sunShadow'
 import type { CarSpec } from '../physics/spec'
 import type { Vehicle } from '../physics/vehicle'
 import type { CarModel } from './carModel'
+import { discMaterial, fixBakedWheel, hubMaterial, rimMaterial, tyreMaterial, wheelGeometry, wheelOcclusion } from './wheelMaterials'
 
 export const GLTF_CARS = [
   { id: 'ferrari-296-gt3', name: 'Ferrari 296 GT3' },
@@ -166,6 +167,18 @@ function loadModel(id: GltfCarId): Promise<void> {
       })
       const box = new THREE.Box3().setFromObject(car.getObjectByName('body_lod0') ?? car)
       splitLights(car, box)
+      // the simplified levels' wheels: the same material corrections as the full model's (wheelMaterials.ts)
+      for (const k of ['FL', 'FR', 'RL', 'RR'] as const) {
+        car.getObjectByName(`wheel_${k}`)?.traverse((o) => {
+          const g = (o as THREE.Mesh).isMesh && /_lod[12]/.test(o.name + (o.parent?.name ?? '')) ? (o as THREE.Mesh).geometry : null
+          if (g) fixBakedWheel(g, () => true)
+        })
+      }
+      const ws = Object.values(meta.wheels)
+      car.getObjectByName('body_lod2')?.traverse((o) => {
+        if (!(o as THREE.Mesh).isMesh) return
+        fixBakedWheel((o as THREE.Mesh).geometry, (x, y, z) => ws.some((w) => Math.abs(x - w.centre[0]) < 0.2 && Math.hypot(y - w.centre[1], z - w.centre[2]) < w.radius + 0.01))
+      })
       templates.set(id, { meta, car, zFront: box.max.z, zRear: box.min.z })
       console.info(`[car] ${meta.name} model loaded in ${(performance.now() - t0).toFixed(0)} ms`)
     })
@@ -613,6 +626,39 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
     own.set(mat, out)
     return out
   }
+  // the wheels' own materials (wheelMaterials.ts): physical rubber, paint and iron, and the light lost
+  // in the arch and the rim's barrel; the simplified levels' wheels take the same occlusion
+  const bakedWheel = bakedMaterial(false, bakedU)
+  bakedWheel.aoNode = wheelOcclusion
+  disposables.push(bakedWheel)
+  const wheelOwn = new Map<THREE.Material, THREE.Material>()
+  const wheelSwap = (mat: THREE.Material): THREE.Material => {
+    const hit = wheelOwn.get(mat)
+    if (hit) return hit
+    const name = mat.name ?? ''
+    const s = mat as THREE.MeshStandardMaterial
+    let out: THREE.Material
+    if (name === 'lod:opaque') out = bakedWheel
+    else if (!s.isMeshStandardMaterial || s.transparent) out = swap(mat)
+    else {
+      if (/tyre|tire/i.test(name)) out = tyreMaterial(s)
+      else if (/disc/i.test(name)) discs.push((out = discMaterial(s)) as unknown as THREE.MeshStandardMaterial)
+      else if (/(^|_)rim/i.test(name)) out = rimMaterial(s)
+      else out = hubMaterial(s)
+      disposables.push(out)
+    }
+    wheelOwn.set(mat, out)
+    return out
+  }
+  const adoptWheel = (o: THREE.Object3D, geo: THREE.Vector4) => {
+    o.traverse((x) => {
+      const m = x as THREE.Mesh
+      if (!m.isMesh) return
+      m.material = Array.isArray(m.material) ? m.material.map(wheelSwap) : wheelSwap(m.material)
+      m.userData.wheelGeo = geo
+    })
+    return o
+  }
   const adopt = (o: THREE.Object3D) => {
     o.traverse((x) => {
       const m = x as THREE.Mesh
@@ -643,18 +689,23 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
     const pivot = new THREE.Group()
     const spin = new THREE.Group()
     pivot.add(spin)
+    // the wheel's frame for its occlusion: outward along x, the tyre's radius, the rim face's offset
+    const side = Math.sign(meta.wheels[k].centre[0]) || 1
+    const full = node.getObjectByName(`wheel_${k}_spin_lod0`)
+    const bb = full ? new THREE.Box3().setFromObject(full.clone(true)) : null
+    const geo = wheelGeometry(side, meta.wheels[k].radius, bb ? (side > 0 ? bb.max.x : -bb.min.x) : 0.15)
     // (the far level has the wheels merged into the body)
     LOD_DISTANCES.forEach((_, i) => {
       const o = node.getObjectByName(`wheel_${k}_spin_lod${i}`)
       if (!o) return
-      const c = adopt(o.clone(true))
+      const c = adoptWheel(o.clone(true), geo)
       spin.add(c)
       levels[i].push(c)
     })
     // calipers: steer, do not spin; full model only
     const fixed = node.getObjectByName(`wheel_${k}_fixed`)
     if (fixed) {
-      const f = adopt(fixed.clone(true))
+      const f = adoptWheel(fixed.clone(true), geo)
       pivot.add(f)
       levels[0].push(f)
     }
@@ -712,6 +763,8 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
   const carLod = new CarLOD(levels)
   // the per-car shadow map draws the same levels (carShadowAtlas.ts)
   root.userData.shadowCasters = { levels, lod: carLod }
+  // the tyres' crease on the road (carGrounding.ts)
+  root.userData.tyres = { halfTrack: Math.abs(meta.wheels.FL.centre[0]), zFront: meta.wheels.FL.centre[2], zRear: meta.wheels.RL.centre[2] }
   root.add(carLod)
   root.children.unshift(root.children.pop()!)
 
