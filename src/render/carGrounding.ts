@@ -24,7 +24,7 @@ import * as tsl from 'three/tsl'
 
 type N = any
 
-const { Fn, If, Loop, abs, acos, clamp, cross, dot, float, int, length, max, mix, normalWorldGeometry, positionView, positionWorld, smoothstep, step, uniform, uniformArray, vec3, vec4 } = tsl as N
+const { Fn, If, Loop, abs, acos, clamp, cross, dot, float, int, length, max, min, mix, normalWorldGeometry, positionView, positionWorld, smoothstep, step, uniform, uniformArray, vec3, vec4 } = tsl as N
 
 export const MAX_GROUNDED_CARS = 24
 /** Height of the body's floor above the lowest point of the car (the tyres' contact), m. */
@@ -36,6 +36,12 @@ const REACH = 2.5
 
 const boxes: N = uniformArray(Array.from({ length: MAX_GROUNDED_CARS }, () => new THREE.Matrix4()), 'mat4')
 const halves: N = uniformArray(Array.from({ length: MAX_GROUNDED_CARS }, () => new THREE.Vector4(1, 1, 1, 0)), 'vec4')
+/** the tyres in the box's frame: x half the track, y the front axle's z, z the rear axle's z, w the road's y (1e5: none) */
+const tyres: N = uniformArray(Array.from({ length: MAX_GROUNDED_CARS }, () => new THREE.Vector4(0, 0, 0, 1e5)), 'vec4')
+/** a tyre's footprint on the road: half its width, half its length (the contact patch and the wedge's start), m */
+const TYRE_HALF = [0.15, 0.1]
+/** effective height of the tyre's wall over the wedge beside its contact (m): sets how tight the crease is */
+const TYRE_WALL = 0.1
 /** xyz: the box's centre in the world, w: the squared radius within which it occludes anything */
 const spheres: N = uniformArray(Array.from({ length: MAX_GROUNDED_CARS }, () => new THREE.Vector4(0, -1e5, 0, 0)), 'vec4')
 const count: N = uniform(0, 'int')
@@ -89,6 +95,15 @@ export const carGroundAO: N = Fn(() => {
           const facing = smoothstep(0, 0.2, dot(n, unit(top.sub(p))))
           const fade = float(1).sub(smoothstep(REACH * 0.5, REACH, length(max(q, 0))))
           ao.mulAssign(float(1).sub(clamp(boxOcclusion(p, n, rad).mul(facing).mul(fade), 0, 0.97)))
+          // the crease where a tyre meets the road: a wall of height TYRE_WALL at distance d covers
+          // (1 - d / sqrt(d^2 + h^2)) / 2 of an upward-facing point's cosine-weighted sky
+          const t = tyres.element(i)
+          const ex = max(abs(abs(p.x).sub(t.x)).sub(TYRE_HALF[0]), 0)
+          const ez = max(min(abs(p.z.sub(t.y)), abs(p.z.sub(t.z))).sub(TYRE_HALF[1]), 0)
+          const dd = length(vec4(ex, ez, 0, 0).xy)
+          const onRoad = step(0.5, n.y).mul(float(1).sub(smoothstep(0.02, 0.1, p.y.sub(t.w))))
+          const crease = float(0.5).sub(dd.mul(0.5).div(dd.mul(dd).add(TYRE_WALL * TYRE_WALL).sqrt()))
+          ao.mulAssign(float(1).sub(crease.mul(onRoad).mul(0.9)))
         }).Else(() => {
           // inside the box: the car's own surfaces. Facing down they look at the ground under the car
           // (the road itself, where a compressed suspension brings it inside the box, is as dark as
@@ -157,6 +172,10 @@ export function updateCarGrounding(roots: Iterable<THREE.Object3D | undefined>) 
     // world -> the box's frame (the root is rigid: a rotation and a translation)
     ;(boxes.array[n] as THREE.Matrix4).copy(root.matrixWorld).invert().premultiply(_t.makeTranslation(-g.centre.x, -g.centre.y, -g.centre.z))
     ;(halves.array[n] as THREE.Vector4).set(g.half.x, g.half.y, g.half.z, 0)
+    // (gltfCars sets userData.tyres: half the track, the axles' z, in the root's frame)
+    const ty = root.userData.tyres as { halfTrack: number; zFront: number; zRear: number } | undefined
+    const ground = (root.userData.groundY as number | undefined) ?? g.centre.y - g.half.y - CLEARANCE
+    ;(tyres.array[n] as THREE.Vector4).set(ty?.halfTrack ?? 0, (ty?.zFront ?? 0) - g.centre.z, (ty?.zRear ?? 0) - g.centre.z, ty ? ground - g.centre.y : 1e5)
     _c.copy(g.centre).applyMatrix4(root.matrixWorld)
     const r = g.half.length() + REACH
     ;(spheres.array[n] as THREE.Vector4).set(_c.x, _c.y, _c.z, r * r)

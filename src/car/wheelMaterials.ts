@@ -5,7 +5,7 @@
 // near-black texture, 0.5-2% albedo), i.e. a dark, rough mirror with no diffuse light at all; the
 // rims are metals (or half metals) of 0.3-8% albedo, i.e. black paint taken for metal; two of the
 // three discs are mirrors (roughness 0-0.09). The result was one flat dark disc. Here:
-//  - tyre: a dielectric (F0 4%), the sidewall's rubber 3.2% albedo at roughness 0.62 (a faint, broad
+//  - tyre: a dielectric whose porous surface shadows half its reflection (F0 2%), the sidewall's rubber 3.2% albedo at roughness 0.62 (a faint, broad
 //    sheen), the shoulder a little lighter with track dust, the tread band 5% at 0.78 (scrubbed and
 //    dusty), the printed lettering 80% of its paint (dulled, never pure white);
 //  - rim: painted (dielectric, at least 4.5% albedo (satin black), roughness 0.2-0.45, a clear coat where the source
@@ -100,7 +100,7 @@ function nodeCopy<T extends THREE.Material>(src: THREE.MeshStandardMaterial, m: 
 
 /** rubber: sidewall, shoulder, tread band, printed lettering (see the header) */
 export function tyreMaterial(src: THREE.MeshStandardMaterial) {
-  const m = new THREE.MeshStandardNodeMaterial()
+  const m = new THREE.MeshPhysicalNodeMaterial()
   m.name = src.name + ':rubber'
   m.normalMap = src.normalMap
   if (src.normalScale) m.normalScale.copy(src.normalScale)
@@ -115,6 +115,9 @@ export function tyreMaterial(src: THREE.MeshStandardMaterial) {
   const rubber = mix(float(0.032).add(shoulder.mul(0.01)), float(0.05), tread)
   m.colorNode = mix(vec3(rubber), c.mul(0.8), letter)
   m.roughnessNode = mix(mix(float(0.62), float(0.78), tread), float(0.5), letter)
+  // rubber's porous surface shadows and masks its own microfacets: about half of a smooth
+  // dielectric's reflection (F0 and F90) is left; the printed lettering is a smooth paint film
+  m.specularIntensityNode = mix(float(0.5), float(1), letter)
   m.aoNode = wheelOcclusion
   return m
 }
