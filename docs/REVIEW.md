@@ -123,7 +123,7 @@ Rendering cost, practice chase view, High, 960x540 (`scripts/shot.cjs --info`): 
 3.5-4.25M triangles depending on what stands in view. The vegetation change added one draw call and up
 to 0.9M triangles (shrubs, the grass fringe, more impostors); the shrubs also go into the shadow passes.
 
-Tests: 95 (`bun test`), among them the physics balance ladder, seeded race cleanliness, lane geometry,
+Tests: 96 (`bun test`), among them the physics balance ladder, seeded race cleanliness, lane geometry,
 the passing scenario, the camera's steadiness and the picture's targets.
 
 ### Still behind GT7 after this pass (honest list)
@@ -145,13 +145,23 @@ the passing scenario, the camera's steadiness and the picture's targets.
   ~0.15 s a lap) starting last, it gained 1, 1, 0 and 0 places in four 5-lap races. Side-by-side racing
   is conservative (a lane costs ~4% of pace), there is no late-apex refinement of the line, the
   standing start is cautious, and pit-exit merging was not re-checked after the rejoin rule changed.
-- **Player's car:** the Aurel 660 GT oversteers at speed and overheats its rear tyres (its AI laps
-  still have 14-27 s off the track and it spins on a lift at 200 km/h in a 250 m corner); tyres run 137-152 degrees C in long corners. (The automatic gearbox's
-  hunting is fixed: it made 45 shifts in one braking zone from 250 km/h; it now takes each gear once,
-  shifts up under power only and holds the gear through the corner. With the lower gears really held,
-  engine braking kept the rear tyres at their peak: the car turned 1.7 degrees under straight braking
-  and slid 27 degrees when braked into a corner. The rear ABS now holds 0.75 of the peak slip and
-  counts the cornering load: 0.09 degrees, 4.9 degrees of rotation, 250-60 km/h in 112.6 m, was
-  116.5 m.)
+- **Player's cars:** tyres run 137-152 degrees C in long corners. With the steering assist off, both
+  cars spin when braked at 35 % in a fast corner with the steering held (86 degrees for the GT3 at
+  170 km/h on a 250 m radius; with the default assist 4 degrees): in the tyre model the cornering
+  stiffness grows in proportion to the load, so the load the brakes move forward shifts the balance
+  more than on a real car, and there is no steering compliance to take lock off. (The automatic
+  gearbox's hunting is fixed: 45 shifts in one braking zone from 250 km/h, now each gear once, up
+  under power only, the gear held through the corner. With the lower gears really held, the rear ABS
+  had to hold the rear tyres short of their peak and count the cornering load: straight braking
+  drifts 0.09 degrees, 250-60 km/h in 112.6 m, was 116.5 m.)
+- **Aurel 660 GT:** its first setup was neutral to oversteering: a lift at 170 km/h in a 250 m corner
+  slid the car 21 degrees, and with 60 % of the braking at the front it swapped ends braking from
+  270 km/h. Brakes 70 % front, the roll stiffness forward, more rear downforce and a differential that
+  locks on the overrun: 2 degrees on the same lift; the AI's two test laps went from 22 s off the track
+  and 9 wall hits to 0.2 s and none. Not solved: over five laps and across driver skills the AI still
+  loses the car about once in two or three laps (fast changes of direction under power or brake, at
+  200 km/h and more). Planning it with less grip, cooler tyres, earlier or later opposite lock, other
+  steering gains and a traction limit ahead of the slip each moved the slides elsewhere without
+  removing them. A race in this car is single-class, so eleven AI drivers have this problem.
 - **Verification:** SwiftShader only. No frame time on a real GPU, no check of the WebGL2 fallback after
   the vegetation and shadow-atlas changes, no HDR display.

@@ -240,44 +240,58 @@ describe('automatic gearbox (the player\'s car)', () => {
     return { ups, downs, gear: v.gear, kmh: v.speed * 3.6, maxRpm }
   }
 
-  test('braking into a corner in the gear the automatic holds turns the car in, without a slide', () => {
-    // 57 m radius at ~85 % of the grip, held for 6 s (the automatic settles in 2nd), then 35 % brake
-    // with the steering held. With the rear brakes working to the tyre's longitudinal peak whatever
-    // the cornering load, the rear axle let go: 27 degrees of body slip
-    const { world, v, car } = makeWorld(0, { tc: 2 })
+  // a circle of radius R held for 6 s at a speed (path-following steering, as scripts/physics-audit.ts),
+  // then the steering held and the pedals set: the largest change of body slip in the 2 s after
+  function corner(ci: number, R: number, kmh: number, pedals: { throttle: number; brake: number }) {
+    const { world, v, car } = makeWorld(ci, { tc: 2 })
     for (const w of v.wheels) {
       w.tyre.surfTemp = w.tyre.coreTemp = w.model.compound.optTemp
       w.tyre.updatePressure()
     }
     v.racingShift = false
-    const V = 93 / 3.6,
-      R = 57
+    const V = kmh / 3.6
     v.reset(-R, 0, 0, ground)
     v.setVelocityForward(V)
     const beta = () => Math.atan2(v.vel.x * v.left.x + v.vel.z * v.left.z, Math.max(1, v.vel.x * v.fwd.x + v.vel.z * v.fwd.z))
-    // path-following steering on the circle about the origin (as scripts/physics-audit.ts)
     let ceInt = 0
     run(world, 6, () => {
       const r = Math.hypot(v.pos.x, v.pos.z)
       const want = Math.atan2(v.pos.z / r, -v.pos.x / r)
       const he = Math.atan2(Math.sin(want - Math.atan2(v.fwd.x, v.fwd.z)), Math.cos(want - Math.atan2(v.fwd.x, v.fwd.z)))
       ceInt = Math.max(-20, Math.min(20, ceInt + (r - R) * PHYSICS_DT))
-      car.input.steer = -(Math.atan(CARS[0].wheelbase / R) + he * 1.5 + (r - R) * 0.12 + ceInt * 0.04) / CARS[0].steerLock
+      car.input.steer = -(Math.atan(CARS[ci].wheelbase / R) + he * 1.5 + (r - R) * 0.12 + ceInt * 0.04) / CARS[ci].steerLock
       car.input.throttle = Math.max(0, Math.min(1, 0.3 + (V - v.speed) * 0.8))
     })
     const b0 = beta(),
       g0 = Math.abs(v.accelLat),
       gear0 = v.gear
-    car.input.throttle = 0
-    car.input.brake = 0.35
+    Object.assign(car.input, pedals)
     let slip = 0
     run(world, 2, () => {
       if (v.speed > 8) slip = Math.max(slip, Math.abs(beta() - b0))
     })
-    console.log(`trail braking: ${g0.toFixed(2)} g in gear ${gear0}, body slip +${((slip * 180) / Math.PI).toFixed(1)} deg`)
-    expect(g0).toBeGreaterThan(1.1)
-    expect(gear0).toBeLessThanOrEqual(3)
-    expect((slip * 180) / Math.PI).toBeLessThan(10)
+    return { g0, gear0, slip: (slip * 180) / Math.PI }
+  }
+
+  test('braking into a corner in the gear the automatic holds turns the car in, without a slide', () => {
+    // 57 m radius at ~85 % of the grip (the automatic settles in 2nd), then 35 % brake with the
+    // steering held. With the rear brakes working to the tyre's longitudinal peak whatever the
+    // cornering load, the rear axle let go: 27 degrees of body slip
+    const r = corner(0, 57, 93, { throttle: 0, brake: 0.35 })
+    console.log(`trail braking: ${r.g0.toFixed(2)} g in gear ${r.gear0}, body slip +${r.slip.toFixed(1)} deg`)
+    expect(r.g0).toBeGreaterThan(1.1)
+    expect(r.gear0).toBeLessThanOrEqual(3)
+    expect(r.slip).toBeLessThan(10)
+  })
+
+  test('the road car does not swing its tail on a lift in a fast corner', () => {
+    // Aurel 660 GT, 250 m radius at 170 km/h (0.9 g, three quarters of its grip), throttle closed with
+    // the steering held: 21 degrees of slide within 3 s with its first setup (neutral roll balance,
+    // little rear downforce, an open differential on the overrun)
+    const r = corner(1, 250, 170, { throttle: 0, brake: 0 })
+    console.log(`${CARS[1].name} lift at 170 km/h: ${r.g0.toFixed(2)} g, body slip +${r.slip.toFixed(1)} deg`)
+    expect(r.g0).toBeGreaterThan(0.8)
+    expect(r.slip).toBeLessThan(5)
   })
 
   for (const [ci, spec] of CARS.entries()) {
