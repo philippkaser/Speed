@@ -16,6 +16,7 @@ import { game } from '../game/game'
 import { Surface } from '../physics/ground'
 import { clamp } from '../physics/math'
 import { sunState } from './Environment'
+import { debugFlag } from '../util/debug'
 import { particleScene, particleU, smokeMaterial, sparkMaterial } from './particles'
 
 const MAX_SMOKE = 1600
@@ -264,7 +265,14 @@ export function Effects() {
             const hw = w.model.spec.width * 0.5
             sys.lastContact.set(key, { x: cp.x, y: cp.y, z: cp.z, lx: v.left.x * hw, lz: v.left.z * hw, on: true })
           }
-        } else if (prev) prev.on = false
+        } else if (prev && prev.on) {
+          // a slide that flickers on and off (a wheel at the edge of its grip, wheelspin on the
+          // limiter) is one mark: the trail breaks only once the wheel has rolled a metre without
+          // sliding (it broke on every flicker, and a slow slide never laid a segment)
+          const dx = cp.x - prev.x,
+            dz = cp.z - prev.z
+          if (dx * dx + dz * dz > 1) prev.on = false
+        }
       }
       // sparks from scraping
       if (near && v.scrape > 0.05) {
@@ -418,8 +426,12 @@ export function Effects() {
       sys.skids.visible = true
       sys.skids.geometry.setDrawRange(0, sys.skidCount * 6)
     }
-  }, 0)
+    // (after the cameras, including the debug overrides at 0.1: the sprites face the camera that
+    // renders them; facing the one before an override they were thin slivers seen edge-on)
+  }, 0.2)
 
+  // ?fxdebug: the effects' state on window.__fx (captures read it)
+  if (debugFlag('fxdebug')) (window as unknown as { __fx?: object }).__fx = sys
   return <primitive object={sys.skids} />
 }
 
