@@ -5,8 +5,8 @@
 // near-black texture, 0.5-2% albedo), i.e. a dark, rough mirror with no diffuse light at all; the
 // rims are metals (or half metals) of 0.3-8% albedo, i.e. black paint taken for metal; two of the
 // three discs are mirrors (roughness 0-0.09). The result was one flat dark disc. Here:
-//  - tyre: a dielectric whose porous surface shadows half its reflection (F0 2%), the sidewall's rubber 3.2% albedo at roughness 0.62 (a faint, broad
-//    sheen), the shoulder a little lighter with track dust, the tread band 5% at 0.78 (scrubbed and
+//  - tyre: a dielectric whose porous surface shadows half its reflection (F0 2%), the sidewall's rubber 2.1% albedo at roughness 0.62 (a faint, broad
+//    sheen), the shoulder a little lighter with track dust, the tread band 3.3% at 0.78 (scrubbed and
 //    dusty), the printed lettering 80% of its paint (dulled, never pure white);
 //  - rim: painted (dielectric, at least 4.5% albedo (satin black), roughness 0.2-0.45, a clear coat where the source
 //    has one), brake dust in the barrel;
