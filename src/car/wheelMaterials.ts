@@ -112,7 +112,7 @@ export function tyreMaterial(src: THREE.MeshStandardMaterial) {
   const letter = smoothstep(0.06, 0.2, lum(c))
   const tread = smoothstep(0.45, 0.8, float(1).sub(abs(dot(normalWorldGeometry, A))))
   const shoulder = smoothstep(R.mul(0.8), R.mul(0.97), r)
-  const rubber = mix(float(0.032).add(shoulder.mul(0.01)), float(0.05), tread)
+  const rubber = mix(float(0.021).add(shoulder.mul(0.007)), float(0.033), tread)
   m.colorNode = mix(vec3(rubber), c.mul(0.8), letter)
   m.roughnessNode = mix(mix(float(0.62), float(0.78), tread), float(0.5), letter)
   // rubber's porous surface shadows and masks its own microfacets: about half of a smooth
@@ -187,7 +187,7 @@ export function fixBakedWheel(g: THREE.BufferGeometry, inWheel: (x: number, y: n
       col.setXYZ(i, Math.min(0.6, r * k), Math.min(0.6, gg * k), Math.min(0.6, b * k))
     } else if (metal > 0.9 && rough > 0.5) {
       // rubber (lettering is too fine for the vertices: the sidewall's and the tread's mean)
-      const v = y > 0.15 ? 0.8 : 0.04
+      const v = y > 0.15 ? 0.8 : 0.026
       if (y > 0.15) col.setXYZ(i, r * v, gg * v, b * v)
       else col.setXYZ(i, v, v, v)
       pbr.setXY(i, 0.68, 0)
