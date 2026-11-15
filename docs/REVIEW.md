@@ -138,8 +138,16 @@ the passing scenario, the camera's steadiness and the picture's targets.
   sun's direction and has a ragged soil edge; the asphalt has a rubbered line of two wheel tracks,
   marbles and grid stains. Beyond ~12 m the verge is still a flat textured plane without blade relief;
   the rubber is a smooth band without streaks; paint is too clean where it meets the asphalt.
-- **Cars:** wheels, tyres and rims are plain; no contact darkening in the wheel arches; no damage, dirt
-  or rain.
+- **Cars:** the models stored nearly every material as metal: tyres, rims, black plastic, carbon,
+  rubber seals (tyres at 0.5-2 % "metal" reflectance, a dark mirror with no diffuse light), and painted
+  their blacks at 0.2-0.5 % albedo, darker than anything real; a diffuser in the shade came out at
+  sRGB 1. Now: tyres are rubber (2.1 % albedo, half a dielectric's reflection for the porous surface),
+  rims paint, discs iron; the arch and the rim's barrel occlude their light at every level of detail;
+  any "metal" darker than a real metal is the dielectric it is (per texel: the textures are atlases
+  where chrome and black plastic share one); no surface darker than 2.5 % (black paint, carbon). The
+  splitters, canards and diffuser strakes now have form in the light. Still missing: carbon weave
+  that reads at a distance (it is in the AMG's textures only), damage, dirt and rain; the AMG's wing
+  underside and tail-light housings have texture artefacts from the source model.
 - **Effects:** tyre smoke, dust and skid marks were not revisited.
 - **AI:** closely matched cars almost never pass each other: with the fastest driver (+0.006 skill,
   ~0.15 s a lap) starting last, it gained 1, 1, 0 and 0 places in four 5-lap races. Side-by-side racing

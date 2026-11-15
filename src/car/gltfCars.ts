@@ -14,7 +14,7 @@ import * as THREE from 'three/webgpu'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { abs, attribute, BRDF_GGX, clearcoatNormalView, float, Fn, min, mix, normalView, output, positionViewDirection, pow, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
+import { abs, attribute, BRDF_GGX, clearcoatNormalView, diffuseColor, dot, float, Fn, materialColor, materialMetalness, max, min, mix, normalView, output, positionViewDirection, pow, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
 import { makeMirrorEnv, mirrorRadiance, type MirrorEnv, type MirrorMaterial } from '../render/mirrorEnv'
 import { HERO_LAYER } from '../render/sunShadow'
 import type { CarSpec } from '../physics/spec'
@@ -443,7 +443,8 @@ function liveryMaterial(src: THREE.MeshPhysicalMaterial, paint: Meta['paint'], p
       col = mix(col, mix(teamA as any, vec3(1), 0.32).mul(shadeH), hiW)
     }
     col = mix(col, (teamB as any).mul(shadeB), accW)
-    m.colorNode = col
+    // (black: see DARKEST)
+    m.colorNode = max(col, vec3(DARKEST))
   } else m.color.copy(src.color)
   return { material: m, teamA, teamB }
 }
@@ -512,7 +513,38 @@ function normaliseMaterial(mat: THREE.Material, mirror?: MirrorEnv) {
     m.clearcoat = 1
     m.clearcoatRoughness = Math.min(m.clearcoatRoughness, 0.06)
   }
+  if (m.metalness > 0 && !m.transparent && !/mirror/i.test(name)) return realMetals(m)
   return mat
+}
+
+/**
+ * A bare metal reflects at least about half the light head-on (iron 0.53, chrome 0.55, titanium 0.54,
+ * aluminium 0.91): its base colour is that reflectance. The source models mark nearly every material
+ * as metal: black plastic, carbon fibre, rubber seals and painted parts alike, with base colours of
+ * 1-10 %. Rendered as metals they were dark tinted mirrors with no diffuse light at all, so a splitter,
+ * a sill or a diffuser had no shading in the sun and read as flat black plastic whatever it was. Per
+ * texel (the textures are atlases: chrome and black plastic share one): a "metal" darker than any
+ * real metal is the dielectric it really is (paint, plastic, resin), with its colour as albedo; bright
+ * texels stay metal. The simplified levels apply the same rule per vertex (bakedMaterial).
+ */
+export const METAL_MIN: [number, number] = [0.08, 0.2]
+/**
+ * The darkest albedo a car's surface has: black paint, carbon fibre under its resin, black plastic
+ * and rubber reflect 2.5-5 % diffusely. The sources paint their blacks at 0.2-0.5 % (the Ferrari's
+ * livery, which covers its diffuser, splitter and wing: sRGB 1 on the diffuser in the shade, darker
+ * than anything lit by a sky), and at 1-2 % on the AMG's carbon; with nothing to shade, such a part is a
+ * black cut-out without form. (The tyres keep their own value, 2.1 %: wheelMaterials.ts.)
+ */
+export const DARKEST = 0.025
+const realMetalness = (base: any) => smoothstep(METAL_MIN[0], METAL_MIN[1], dot(base, vec3(0.2126, 0.7152, 0.0722)))
+function realMetals(m: THREE.MeshStandardMaterial) {
+  // the conversion the renderer itself does for a plain material (NodeLibrary.fromMaterial), so that a
+  // metalness node can be added
+  const nm = (m as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial ? new THREE.MeshPhysicalNodeMaterial() : new THREE.MeshStandardNodeMaterial()
+  for (const key in m) (nm as unknown as Record<string, unknown>)[key] = (m as unknown as Record<string, unknown>)[key]
+  nm.colorNode = vec4(max(materialColor.rgb, vec3(DARKEST)), 1)
+  nm.metalnessNode = materialMetalness.mul(realMetalness(diffuseColor.rgb))
+  return nm
 }
 
 /** Emission in the baked levels is stored over this scale (scripts/build-car-models.ts EMIT_SCALE). */
@@ -529,9 +561,10 @@ function bakedMaterial(glass: boolean, u: { brake: any; heat: any }) {
   m.name = glass ? 'lod:glass:car' : 'lod:opaque:car'
   const col = attribute('color', 'vec4')
   const pbr = attribute('_pbr', 'vec4')
-  m.colorNode = col.rgb
+  m.colorNode = glass ? col.rgb : max(col.rgb, vec3(DARKEST))
   m.roughnessNode = pbr.x
-  m.metalnessNode = pbr.y
+  // (realMetals: a "metal" darker than any metal is a dielectric; the brake discs keep theirs)
+  m.metalnessNode = glass ? pbr.y : pbr.y.mul(max(realMetalness(col.rgb), step(0.5, pbr.w)))
   const emit = attribute('_emit', 'vec3').mul(EMIT_SCALE)
   if (glass) {
     m.emissiveNode = emit
