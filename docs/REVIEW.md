@@ -148,7 +148,14 @@ the passing scenario, the camera's steadiness and the picture's targets.
   splitters, canards and diffuser strakes now have form in the light. Still missing: carbon weave
   that reads at a distance (it is in the AMG's textures only), damage, dirt and rain; the AMG's wing
   underside and tail-light housings have texture artefacts from the source model.
-- **Effects:** tyre smoke, dust and skid marks were not revisited.
+- **Effects:** tyre smoke is shaded as a scattering medium and reads as billowing smoke from the chase
+  camera, the side and above (in captures from placed cameras the puffs used to face the chase camera
+  and showed as slivers: fixed). It is still too uniformly white, without darker undersides. Skid
+  marks: the trail broke on every frame a slide flickered off, so slow or intermittent slides laid
+  none (a 6-second donut: 0 segments); now it breaks after a metre without sliding (the same donut:
+  52). Whether the marks read well on the asphalt was not seen: in the donut they lie under the car
+  and the smoke, and a lock-up run to the first braking zone was too slow to render here. Dust and
+  sparks were not looked at.
 - **AI:** closely matched cars almost never pass each other: with the fastest driver (+0.006 skill,
   ~0.15 s a lap) starting last, it gained 1, 1, 0 and 0 places in four 5-lap races. Side-by-side racing
   is conservative (a lane costs ~4% of pace), there is no late-apex refinement of the line, the
