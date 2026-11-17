@@ -148,6 +148,16 @@ the passing scenario, the camera's steadiness and the picture's targets.
   splitters, canards and diffuser strakes now have form in the light. Still missing: carbon weave
   that reads at a distance (it is in the AMG's textures only), damage, dirt and rain; the AMG's wing
   underside and tail-light housings have texture artefacts from the source model.
+- **Track evolution:** the rubbered line used to be one even band around the whole lap (a fixed
+  Gaussian about the racing line), and what the cars laid during a race was too little to see
+  (+0.02 after 120 car-laps). Now a session starts from rubber laid in proportion to the friction work
+  along the line (braking zones 0.77, straights 0.22), and every tyre adds rubber with its slip energy
+  and sheds marbles to the outside of the corner, which other tyres sweep off the line. After a
+  20-lap, 12-car race (headless) the braking zones went from 0.77 to 0.90 and the lines the field
+  drove darken visibly in the overhead captures. Grip follows (rubber up to +3 %, marbles up to
+  -11 %); 8 seeded races: no contacts, spins or off-tracks, 99 clean overtakes. The marbles are
+  simulated and change the grip, but at a distance they only darken the outside of a corner by about
+  10 %: their look still needs work.
 - **Effects:** tyre smoke is shaded as a scattering medium and reads as billowing smoke from the chase
   camera, the side and above (in captures from placed cameras the puffs used to face the chase camera
   and showed as slivers: fixed). It is still too uniformly white, without darker undersides. Skid

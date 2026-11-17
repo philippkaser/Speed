@@ -8,6 +8,24 @@ import { type Ground, type GroundSample, Surface } from '../physics/ground'
 import { clamp, hash2, lerp, smoothstep, valueNoise2 } from '../physics/math'
 import type { TrackDef } from './trackDef'
 
+/** Dynamic track cells: RUBBER_ROW m along the lap, RUBBER_CELL m across, RUBBER_COLS of them over
+ *  -RUBBER_HALF..RUBBER_HALF m (the widest asphalt is 7.5 m either side). */
+export const RUBBER_ROW = 2
+export const RUBBER_CELL = 0.25
+export const RUBBER_COLS = 64
+export const RUBBER_HALF = 8
+/** weights of the four cells across a tyre's track, given its position within the second (0..1):
+ *  a tent 0.5 m either side, normalised */
+const TENT = [(t: number) => (0.5 - 0.5 * t) / 2, (t: number) => (1 - 0.5 * t) / 2, (t: number) => (0.5 + 0.5 * t) / 2, (t: number) => (0.5 * t) / 2]
+/** a wheel track's offset from the car's centre line (half a GT3's track width) */
+const WHEEL_TRACK = 0.82
+/** rubber laid per joule of friction work in a contact patch (into its 2 m x 0.25 m cells) */
+const LAY = 2e-5
+/** marbles shed per joule of cornering work */
+const MARBLE = 3e-5
+/** share of a cell's marbles a tyre sweeps away per second of contact */
+const SWEEP = 20
+
 export const DS = 1 // metres between centreline samples
 
 export interface SideInfo {
@@ -40,9 +58,11 @@ export class Track implements Ground {
   sectors: number[] = []
   /** braking-zone weight per sample (0..1): ripples ("braking bumps") worn into the surface */
   brakeZone!: Float32Array
-  /** dynamic track: rubber on a 2 m x 1 m grid (16 lateral cells covering -8..8 m) */
+  /** dynamic track, on cells RUBBER_ROW m along the lap x RUBBER_CELL m across (RUBBER_COLS cells over
+   *  -8..8 m): the rubber the tyres lay (0..1) and the marbles, loose pellets of worn rubber (0..1) */
   rubber!: Float32Array
-  rubberCols = 16
+  marbles!: Float32Array
+  rubberCols = RUBBER_COLS
   rubberVersion = 0
   gridCell = 25
   grid = new Map<number, number[]>()
@@ -165,7 +185,8 @@ export class Track implements Ground {
       this.brakeZone[i] = clamp(-dv / 1.2, 0, 1)
     }
     smoothArray(this.brakeZone, 10)
-    this.rubber = new Float32Array(Math.ceil(n / 2) * this.rubberCols)
+    this.rubber = new Float32Array(Math.ceil((n * DS) / RUBBER_ROW) * RUBBER_COLS)
+    this.marbles = new Float32Array(this.rubber.length)
     this.resetRubber(0.45)
   }
 
@@ -479,41 +500,119 @@ export class Track implements Ground {
   }
 
   // ---------------------------------------------------------------------- dynamic track
+  /**
+   * The track as a session starts: the rubber earlier sessions left. Rubber comes off the tyres in
+   * proportion to the friction work done in their contact patches (force x sliding speed; the sliding
+   * grows with the force, so the work per metre with the square of the acceleration the tyres pass
+   * on): heaviest where the cars brake (all four tyres at their peak, on the same line every lap) and
+   * where they put the power down out of slow corners, then through the corners, and barely on the
+   * straights, where every car takes a slightly different line. It lies in two wheel tracks either
+   * side of the racing line, narrow where every car brakes in the same place, wider through the
+   * corners. Marbles that earlier sessions left lie off the line on the outside of the corners, near
+   * the edges. `level` scales the rubber.
+   */
   resetRubber(level: number) {
-    const cols = this.rubberCols
-    for (let k = 0; k < this.rubber.length / cols; k++) {
-      const i = Math.min(this.n - 1, k * 2)
+    const n = this.n,
+      cols = RUBBER_COLS
+    const work = new Float32Array(n)
+    for (let i = 0; i < n; i++) {
+      const v = this.speed[i]
+      const ax = (v * (this.speed[(i + 1) % n] - this.speed[(i - 1 + n) % n])) / (2 * DS)
+      const ay = v * v * Math.abs(this.racingCurv[i])
+      // braking: four tyres at their peak; traction: two driven tyres spinning up out of slow corners
+      const lon = ax < 0 ? 1.25 * ax * ax : 1.8 * ax * ax * (1 - smoothstep(30, 55, v))
+      work[i] = (lon + ay * ay) / (14 * 14)
+    }
+    smoothArray(work, 6)
+    const corner = new Float32Array(n)
+    for (let i = 0; i < n; i++) corner[i] = clamp((this.speed[i] * this.speed[i] * Math.abs(this.racingCurv[i])) / 12, 0, 1)
+    smoothArray(corner, 6)
+    const rows = this.rubber.length / cols
+    for (let k = 0; k < rows; k++) {
+      const i = Math.min(n - 1, Math.round((k * RUBBER_ROW) / DS))
+      const W = clamp(work[i], 0, 1)
+      // how far apart the cars' lines are: narrow in the braking zones, wider through the corners,
+      // everywhere on the straights
+      const sigma = 0.45 + 0.4 * corner[i] + 0.8 * (1 - W)
+      const A = level * (0.25 + 1.25 * W)
       for (let c = 0; c < cols; c++) {
-        const d = c - cols / 2 + 0.5
-        const dl = d - this.racing[i]
-        this.rubber[k * cols + c] = 0.12 + level * Math.exp(-(dl * dl) / (1.7 * 1.7))
+        const d = (c + 0.5) * RUBBER_CELL - RUBBER_HALF
+        const u = Math.abs(d - this.racing[i])
+        const tr = Math.max(Math.exp(-(((u - WHEEL_TRACK) / sigma) ** 2)), 0.55 * Math.exp(-((u / 1.3) ** 2)))
+        const onRoad = Math.abs(d) < this.hw[i]
+        this.rubber[k * cols + c] = onRoad ? clamp(0.1 + A * tr, 0, 1) : 0
+        this.marbles[k * cols + c] = onRoad ? 0.55 * smoothstep(3.0, 4.6, u) * smoothstep(this.hw[i] - 2.2, this.hw[i] - 0.4, Math.abs(d)) * clamp(0.3 + corner[i], 0, 1) : 0
       }
     }
+    this.rubberDirty = true
     this.rubberVersion++
   }
 
   private rubberIndex(s: number, d: number) {
-    const k = Math.floor((((s % this.length) + this.length) % this.length) / 2)
-    const c = Math.floor(d + this.rubberCols / 2)
-    if (c < 0 || c >= this.rubberCols) return -1
-    return k * this.rubberCols + c
+    const k = Math.floor((((s % this.length) + this.length) % this.length) / RUBBER_ROW)
+    const c = Math.floor((d + RUBBER_HALF) / RUBBER_CELL)
+    if (c < 0 || c >= RUBBER_COLS || k * RUBBER_COLS >= this.rubber.length) return -1
+    return k * RUBBER_COLS + c
   }
 
-  /** grip multiplier: green track 0.96, rubbered line up to 1.03, marbles near the edges off-line */
-  gripAt(i: number, s: number, d: number) {
+  /** grip multiplier: a green track 0.958, a fully rubbered line 1.033; marbles roll under the tyres
+   *  like ball bearings (-11 % on a full layer) */
+  gripAt(_i: number, s: number, d: number) {
     const ri = this.rubberIndex(s, d)
-    const r = ri >= 0 ? this.rubber[ri] : 0
-    const offLine = smoothstep(3.0, 4.6, Math.abs(d - this.racing[i]))
-    const nearEdge = smoothstep(this.hw[i] - 2.2, this.hw[i] - 0.4, Math.abs(d))
-    return 0.958 + 0.075 * r - 0.065 * offLine * nearEdge
+    if (ri < 0) return 0.958
+    return 0.958 + 0.075 * this.rubber[ri] - 0.11 * this.marbles[ri]
   }
 
-  layRubber(ref: GroundSample, amount: number) {
-    const ri = this.rubberIndex(ref.s, ref.d)
-    if (ri < 0) return
-    const v = this.rubber[ri]
-    this.rubber[ri] = Math.min(1, v + amount * (1 - v))
-    if (amount > 0) this.rubberDirty = true
+  /**
+   * A tyre on the asphalt for one physics step: `energy` (J) is the friction work in its contact
+   * patch, `outward` the side (+1 left, -1 right, in the track's d) its contact patch slides to,
+   * opposite to its cornering force. A share of the worn rubber sticks where the tyre is (the line
+   * darkens and polishes); the rest leaves the tyre as pellets, flung to the outside of the corner
+   * (1-3 m: off the line), and a tyre rolling over marbles sweeps them on (the line stays clean, the
+   * marbles collect where no one drives).
+   */
+  layRubber(ref: GroundSample, energy: number, outward: number, lateral: number, dt: number) {
+    const cols = RUBBER_COLS
+    const rows = this.rubber.length / cols
+    const L = this.length
+    const fr = (((ref.s % L) + L) % L) / RUBBER_ROW - 0.5
+    const fc = (ref.d + RUBBER_HALF) / RUBBER_CELL - 0.5
+    const r0 = Math.floor(fr),
+      c0 = Math.floor(fc)
+    const tr = fr - r0,
+      tc = fc - c0
+    if (c0 < 1 || c0 + 2 >= cols) return
+    const lay = LAY * energy
+    const sweep = Math.min(1, SWEEP * dt)
+    for (let a = 0; a < 2; a++) {
+      const k = (((r0 + a) % rows) + rows) % rows
+      const wr = a ? tr : 1 - tr
+      // across: the tread (0.3 m) and how far the lines of a field of drivers scatter about a car's
+      // line (+-0.35 m): a tent over four cells
+      for (let b = -1; b <= 2; b++) {
+        const i = k * cols + c0 + b
+        const w = wr * TENT[b + 1](tc)
+        const v = this.rubber[i]
+        this.rubber[i] = v + lay * w * (1 - v)
+        this.marbles[i] *= 1 - sweep * w
+      }
+    }
+    // pellets, from the scrub of cornering: spread evenly over 1-3 m outside the tyre (every cell
+    // of it), short of the edge, where they pile up
+    const pellets = MARBLE * energy * lateral
+    if (pellets > 0) {
+      const k = ((Math.round(fr) % rows) + rows) % rows
+      const i0 = Math.min(this.n - 1, Math.round((k * RUBBER_ROW) / DS))
+      const edge = this.hw[i0] - 0.15
+      const steps = Math.round(2 / RUBBER_CELL)
+      for (let j = 0; j <= steps; j++) {
+        const d = clamp(ref.d + outward * (1 + j * RUBBER_CELL), -edge, edge)
+        const i = k * cols + Math.floor((d + RUBBER_HALF) / RUBBER_CELL)
+        const m = this.marbles[i]
+        this.marbles[i] = m + (pellets / (steps + 1)) * (1 - m)
+      }
+    }
+    this.rubberDirty = true
   }
   rubberDirty = false
 

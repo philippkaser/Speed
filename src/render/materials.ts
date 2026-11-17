@@ -41,7 +41,7 @@ import { getTextures } from './textures'
 import { groundSet, type GroundSet } from './worldAssets'
 import { farTreeShadow, setSunShadowTerm } from './sunShadow'
 import { photoSkyHorizon } from './photoSky'
-import type { Track } from '../track/track'
+import { RUBBER_HALF, RUBBER_ROW, type Track } from '../track/track'
 
 type N = any
 
@@ -175,7 +175,8 @@ function line(x: N, halfWidth: number | N) {
   return float(1).sub(smoothstep(float(halfWidth), float(halfWidth).add(w), abs(x))).mul(cover)
 }
 
-/** Track rubber map (2 m x 1 m cells) as a texture, refreshed while cars lay rubber. */
+/** The dynamic track (track.ts: rubber in red, marbles in green, cells RUBBER_ROW m x RUBBER_CELL m)
+ *  as a texture, refreshed while the cars lay rubber. */
 export function rubberTexture(track: Track) {
   const cols = track.rubberCols
   const rows = track.rubber.length / cols
@@ -186,7 +187,10 @@ export function rubberTexture(track: Track) {
   tex.wrapS = THREE.ClampToEdgeWrapping
   tex.wrapT = THREE.RepeatWrapping
   const refresh = () => {
-    for (let k = 0; k < track.rubber.length; k++) data[k * 4] = Math.round(track.rubber[k] * 255)
+    for (let k = 0; k < track.rubber.length; k++) {
+      data[k * 4] = Math.round(track.rubber[k] * 255)
+      data[k * 4 + 1] = Math.round(track.marbles[k] * 255)
+    }
     tex.needsUpdate = true
     track.rubberDirty = false
   }
@@ -283,17 +287,15 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
   const snake = float(1).sub(smoothstep(0.004, fwidth(cn).mul(1.2).add(0.007), abs(cn))).mul(snakeZone)
   seal = max(seal, snake.mul(0.7))
 
-  // rubbered-in racing line: from the simulation's rubber map (or the static racing line)
-  // (the map's laid-in line peaks near 0.57 over a 0.12 floor: that peak is a fully rubbered line)
-  const rl = rubber
-    ? smoothstep(0.14, 0.55, texture(rubber.tex, vec2(d.add(8).div(16), s.div(2).add(0.5).div(rubber.rows))).r)
-    : exp(d.sub(racing).div(1.25).pow(2).negate())
-  const rubberNoise = mx_noise_float(vec3(s.mul(0.08), d.mul(0.6), 3.1)).mul(0.25).add(0.75)
-  // the rubber is laid by the tyres: two wheel tracks ~1.6 m apart, wandering a little with the line,
-  // blacker than the strip between them
-  const wu = d.sub(racing).add(mx_noise_float(vec3(s.mul(0.02), 8.8, 0)).mul(0.35))
-  const wheels = exp(abs(wu).sub(0.8).div(0.42).pow(2).negate())
-  const rubberAmt = rl.mul(rubberNoise).mul(mix(float(0.7), float(1.1), wheels)).clamp(0, 1)
+  // the dynamic track (track.ts): the rubber the tyres have laid, in two wheel tracks either side of
+  // the lines the cars drive, heaviest where they brake and put the power down out of slow corners,
+  // building up through a race; and the marbles they shed, off the line on the outside of the corners
+  const dyn = rubber ? texture(rubber.tex, vec2(d.add(RUBBER_HALF).div(2 * RUBBER_HALF), s.div(RUBBER_ROW).div(rubber.rows))) : null
+  // (0.1: a green track; ~0.25 a straight; ~0.6 through a corner; 0.8 and more in a braking zone)
+  const rl = dyn ? smoothstep(0.12, 0.88, dyn.r) : exp(d.sub(racing).div(1.25).pow(2).negate())
+  // laid in the direction of travel: streaky along the lap, patchy across it
+  const rubberNoise = mx_noise_float(vec3(s.mul(0.045), d.mul(2.2), 3.1)).mul(0.3).add(0.75)
+  const rubberAmt = rl.mul(rubberNoise).clamp(0, 1)
   // fresh rubber (albedo ~0.03) over grey, dusty aggregate (~0.08): the line reads as a dark band
   albedo = albedo.mul(mix(float(1.15), float(0.38), rubberAmt))
   // rubber polishes the aggregate: the line is the glossiest part of the road (~0.45), the dusty
@@ -315,19 +317,27 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
   albedo = albedo.mul(float(1).sub(skid.mul(0.6)))
   rough = mix(rough, rough.mul(0.82), skid)
 
-  // dusty, marbled areas off line near the edges
+  // marbles: pellets of rubber thrown off line, thickest on the outside of the corners (the dynamic
+  // track's map; without it, near the edges in the braking and traction zones)
   const edge = clamp(abs(d).div(hw), 0, 1)
-  const dust = smoothstep(0.62, 1.0, edge).mul(float(1).sub(rl))
+  const marbleZone = dyn
+    ? smoothstep(0.03, 0.6, dyn.g)
+    : smoothstep(0.55, 0.85, edge).mul(float(1).sub(smoothstep(0.97, 1, edge))).mul(float(1).sub(rl)).mul(clamp(brake.add(traction).mul(1.5).add(0.25), 0, 1))
+  // dusty areas off line near the edges (where marbles lie, their black rubber dust instead)
+  const dust = smoothstep(0.62, 1.0, edge).mul(float(1).sub(rl)).mul(float(1).sub(marbleZone.mul(0.85)))
   albedo = mix(albedo, albedo.mul(1.35).add(vec3(0.016, 0.014, 0.011)), dust.mul(0.75))
   rough = mix(rough, float(0.95), dust.mul(0.6))
-  // marbles: pellets of rubber thrown off line, thickest in the corners and braking zones; resolved
-  // as dots up close, an even darkening where a pixel covers many
-  const pwm = pw.xz.mul(7)
-  const dots = smoothstep(0.78, 0.9, mx_cell_noise_float(vec3(floor(pwm.x), floor(pwm.y), 4.2)))
-  const dotFade = smoothstep(0.08, 0.3, fwidth(pwm.x).add(fwidth(pwm.y)).mul(0.14))
-  const marbleZone = smoothstep(0.55, 0.85, edge).mul(float(1).sub(smoothstep(0.97, 1, edge))).mul(float(1).sub(rl)).mul(clamp(brake.add(traction).mul(1.5).add(0.25), 0, 1))
-  const marbles = mix(dots, float(0.18), dotFade).mul(marbleZone)
-  albedo = mix(albedo, vec3(0.022, 0.021, 0.021), marbles.mul(0.85))
+  albedo = albedo.mul(float(1).sub(marbleZone.mul(0.35)))
+  // the pellets: 1-2 cm, one at a random place in some 5 cm cells, a sparse scatter where a few lie and
+  // a carpet where they have piled up; averaged once a pixel is wider than a pellet
+  const pwm = pw.xz.mul(20)
+  const cellM = vec3(floor(pwm.x), floor(pwm.y), 4.2)
+  const present = smoothstep(mix(float(0.92), float(0.3), marbleZone), mix(float(0.98), float(0.45), marbleZone), mx_cell_noise_float(cellM))
+  const pellet = vec2(mx_cell_noise_float(cellM.add(vec3(0, 0, 7.7))), mx_cell_noise_float(cellM.add(vec3(0, 0, 13.1)))).mul(0.4).add(0.3)
+  const dots = present.mul(float(1).sub(smoothstep(0.2, 0.3, length(fract(pwm).sub(pellet)))))
+  const dotFade = smoothstep(0.3, 0.9, fwidth(pwm.x).add(fwidth(pwm.y)))
+  const marbles = mix(dots, marbleZone.mul(0.3), dotFade).mul(smoothstep(0, 0.15, marbleZone))
+  albedo = mix(albedo, vec3(0.018, 0.017, 0.017), marbles.mul(0.9))
   rough = mix(rough, float(0.62), marbles.mul(0.6))
 
   // sealant: black, smooth bitumen

@@ -67,8 +67,9 @@ export interface Ground {
   sample(x: number, z: number, out: GroundSample): void
   /** fast surface height near a previous sample (used for multi-point tyre contact) */
   heightNear?(ref: GroundSample, x: number, z: number): number
-  /** tyres lay rubber / pick up marbles (dynamic track) */
-  layRubber?(ref: GroundSample, amount: number): void
+  /** a tyre's step on the surface (dynamic track): friction work in its contact patch (J), the side
+   *  (+1 / -1 in the track's d) its patch slides to, the cornering share of the work, the step (s) */
+  layRubber?(ref: GroundSample, energy: number, outward: number, lateral: number, dt: number): void
 }
 
 /** Infinite flat asphalt plane, used for tests and the garage. */
