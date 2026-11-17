@@ -20,6 +20,7 @@ import {
   mix,
   mod,
   mx_cell_noise_float,
+  mx_fractal_noise_float,
   mx_noise_float,
   normalize,
   normalMap,
@@ -221,6 +222,20 @@ function trackAsphalt(uvMetres: N) {
  *
  * aTrack: d (lateral, + left), s, racing line offset, half width; aTrack2: braking zone, traction zone.
  */
+/**
+ * Rubber as the tyres lay it, brush strokes along the lap (s, d in metres; 0..~1.3, mean ~0.85): long
+ * strokes a tread wide and tens of metres long, of every weight (each car, each lap, presses a little
+ * differently), fine striations from the tread's grooves, and pulses where the pressure changed;
+ * more contrast where the cars brake (lock-ups, the ABS's pulses).
+ */
+function tyreStrokes(s: N, d: N, brake: N, fine = 0.28) {
+  const strokes = mx_fractal_noise_float(vec3(s.mul(0.022), d.mul(3.3), 7.3), 3, 2.1, 0.55).mul(0.5).add(0.5)
+  const grooves = mx_noise_float(vec3(s.mul(0.16), d.mul(13), 2.9)).mul(0.5).add(0.5)
+  const pulses = mx_noise_float(vec3(s.mul(0.09), d.mul(0.7), 4.4)).mul(0.5).add(0.5)
+  const contrast = mix(float(1), float(1.6), clamp(brake, 0, 1))
+  return clamp(strokes.sub(0.5).mul(contrast.mul(1.9)).add(0.62 + 0.28 - fine).add(grooves.mul(fine)).add(pulses.mul(0.18)), 0, 1.3)
+}
+
 export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, track?: { length: number }) {
   const m = new THREE.MeshStandardNodeMaterial()
   const tr = aTrack()
@@ -293,9 +308,9 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
   const dyn = rubber ? texture(rubber.tex, vec2(d.add(RUBBER_HALF).div(2 * RUBBER_HALF), s.div(RUBBER_ROW).div(rubber.rows))) : null
   // (0.1: a green track; ~0.25 a straight; ~0.6 through a corner; 0.8 and more in a braking zone)
   const rl = dyn ? smoothstep(0.12, 0.88, dyn.r) : exp(d.sub(racing).div(1.25).pow(2).negate())
-  // laid in the direction of travel: streaky along the lap, patchy across it
-  const rubberNoise = mx_noise_float(vec3(s.mul(0.045), d.mul(2.2), 3.1)).mul(0.3).add(0.75)
-  const rubberAmt = rl.mul(rubberNoise).clamp(0, 1)
+  // the tyres are brushes: each pass paints a stroke along the direction of travel, heavier where it
+  // presses harder (braking, the corners); a field of cars leaves overlapping strokes of every weight
+  const rubberAmt = rl.mul(tyreStrokes(s, d, brake)).clamp(0, 1)
   // fresh rubber (albedo ~0.03) over grey, dusty aggregate (~0.08): the line reads as a dark band
   albedo = albedo.mul(mix(float(1.15), float(0.38), rubberAmt))
   // rubber polishes the aggregate: the line is the glossiest part of the road (~0.45), the dusty
@@ -442,11 +457,13 @@ export function runoffMaterial() {
  * profile in the shading, the paint chipped at the edges of the blocks, black rubber where the cars
  * ride over the inner half, grass and dirt thrown onto the outer edge.
  */
-export function kerbMaterial() {
+export function kerbMaterial(rubber?: { tex: THREE.Texture; rows: number }) {
   const m = new THREE.MeshStandardNodeMaterial()
   const tr = aTrack()
   const u = tr.x,
     s = tr.y
+  // the kerb's lateral position on the track (z: side x half width, w: the kerb's width)
+  const dk = tr.z.sign().mul(tr.z.abs().add(u.mul(tr.w)))
   const stripe = mod(floor(s.div(1.5)), 2)
   const block = floor(s.div(1.5))
   const fade = mx_cell_noise_float(vec3(block, 1.3, tr.z))
@@ -459,9 +476,13 @@ export function kerbMaterial() {
   const chipN = mx_noise_float(vec3(s.mul(3.1), u.mul(6.0), 2.7)).mul(0.5).add(0.5)
   const chip = smoothstep(0.74, 0.8, chipN.add(float(0.2).sub(endDist).max(0)).add(abs(u.sub(0.5)).mul(0.12)))
   col = mix(col, vec3(0.24, 0.235, 0.22), chip)
-  // tyre rubber on the inner half, dirt and grass on the outer edge
+  // tyre rubber where the cars ride the kerb (the dynamic track's map: the apexes and exits the field
+  // uses, more as a race goes on), brushed on in strokes; some old grime on the inner edge regardless
   const n = mx_noise_float(vec3(s.mul(0.5), u.mul(3), 0)).mul(0.5).add(0.5)
-  const rub = smoothstep(0.7, 0.0, u).mul(n).mul(0.75)
+  const laid = rubber
+    ? smoothstep(0.1, 0.6, texture(rubber.tex, vec2(dk.add(RUBBER_HALF).div(2 * RUBBER_HALF), s.div(RUBBER_ROW).div(rubber.rows))).r).mul(tyreStrokes(s, dk, float(0), 0.04))
+    : float(0)
+  const rub = max(smoothstep(0.45, 0.0, u).mul(n).mul(0.3), laid.mul(0.9)).clamp(0, 0.92)
   col = mix(col, vec3(0.03, 0.03, 0.032), rub)
   const dirt = smoothstep(0.75, 1.0, u).mul(mx_noise_float(vec3(s.mul(1.3), 5.1, 0)).mul(0.5).add(0.5))
   col = mix(col, vec3(0.07, 0.06, 0.035), dirt.mul(0.6))

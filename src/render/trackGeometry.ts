@@ -138,7 +138,8 @@ export function buildKerbs(track: Track) {
           return c
         },
         0.002,
-        (i, d, _c, u) => [(Math.abs(d) - track.hw[i]) / Math.max(S.kerb[i], 0.01), u * DS, side, S.kerb[i]],
+        // (z: the side times the half width, so the kerb shader can find its place on the track)
+        (i, d, _c, u) => [(Math.abs(d) - track.hw[i]) / Math.max(S.kerb[i], 0.01), u * DS, side * track.hw[i], S.kerb[i]],
         4,
       ),
     )

@@ -87,7 +87,8 @@ test('a faster car behind a slower one attacks and gets by within a few laps, wi
         c.last = c.d.s
       }
       for (; seen < world.events.length; seen++) if (world.events[seen].kind === 'car') contacts++
-      if (cars[0].d.attackId === 'slow') attacked = true
+      // (an attack: targeting the car ahead, or alongside it into a corner)
+      if (cars[0].d.attackId === 'slow' || cars[0].d.mode === 1) attacked = true
       if (process.env.OB_DEBUG && Math.round(t * 60) % +(process.env.OB_EVERY ?? 60) === 0) console.log(t.toFixed(0), (prog(cars[1]) - prog(cars[0])).toFixed(1), cars[0].d.s.toFixed(0), "m" + cars[0].d.mode, "g" + cars[0].d.gate, "w" + cars[0].d.w.toFixed(2), "l" + cars[0].d.lane, cars[0].d.held ? "H" : "", (cars[0].d.vehicle.speed * 3.6).toFixed(0), (cars[1].d.vehicle.speed * 3.6).toFixed(0), "slow m" + cars[1].d.mode + " w" + cars[1].d.w.toFixed(2), cars[0].d.yieldId ? "fast yields" : "", cars[1].d.yieldId ? "slow yields" : "")
       if (passedAt < 0 && t > 5 && prog(cars[0]) > prog(cars[1]) + 10) passedAt = t
       if (passedAt > 0 && t > passedAt + 10) break

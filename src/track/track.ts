@@ -9,14 +9,17 @@ import { clamp, hash2, lerp, smoothstep, valueNoise2 } from '../physics/math'
 import type { TrackDef } from './trackDef'
 
 /** Dynamic track cells: RUBBER_ROW m along the lap, RUBBER_CELL m across, RUBBER_COLS of them over
- *  -RUBBER_HALF..RUBBER_HALF m (the widest asphalt is 7.5 m either side). */
+ *  -RUBBER_HALF..RUBBER_HALF m (the widest asphalt is 7.5 m either side, the kerbs reach ~9 m). */
 export const RUBBER_ROW = 2
-export const RUBBER_CELL = 0.25
+export const RUBBER_CELL = 0.3125
 export const RUBBER_COLS = 64
-export const RUBBER_HALF = 8
+export const RUBBER_HALF = 10
 /** weights of the four cells across a tyre's track, given its position within the second (0..1):
  *  a tent 0.5 m either side, normalised */
 const TENT = [(t: number) => (0.5 - 0.5 * t) / 2, (t: number) => (1 - 0.5 * t) / 2, (t: number) => (0.5 + 0.5 * t) / 2, (t: number) => (0.5 * t) / 2]
+/** the rubber a session starts with (resetRubber's level): a track that has seen practice and
+ *  qualifying, with room to rubber in further during the race */
+export const RUBBER_START = 0.32
 /** a wheel track's offset from the car's centre line (half a GT3's track width) */
 const WHEEL_TRACK = 0.82
 /** rubber laid per joule of friction work in a contact patch (into its 2 m x 0.25 m cells) */
@@ -187,7 +190,7 @@ export class Track implements Ground {
     smoothArray(this.brakeZone, 10)
     this.rubber = new Float32Array(Math.ceil((n * DS) / RUBBER_ROW) * RUBBER_COLS)
     this.marbles = new Float32Array(this.rubber.length)
-    this.resetRubber(0.45)
+    this.resetRubber(RUBBER_START)
   }
 
   /** Kerbs depend only on the centreline curvature; built before the racing line, which runs over them. */
@@ -528,20 +531,54 @@ export class Track implements Ground {
     for (let i = 0; i < n; i++) corner[i] = clamp((this.speed[i] * this.speed[i] * Math.abs(this.racingCurv[i])) / 12, 0, 1)
     smoothArray(corner, 6)
     const rows = this.rubber.length / cols
+    // a field of drivers, each on a line of their own: the racing line shifted by a smooth wander
+    // along the lap (a few hundred metres per swing, so a corner keeps its shape), wider through the
+    // corners and on the straights than in the braking zones, where everyone brakes in the same place;
+    // a few much further off it (passes, defending). Each lays its wheel tracks; summed, the
+    // rubber is a broad, uneven band with streaks in it, not two lines.
+    const DRIVERS = 40
+    const wander = (dr: number, s: number) => {
+      const h1 = hash2(dr, 1.7),
+        h2 = hash2(dr, 5.3),
+        h3 = hash2(dr, 9.1)
+      return (
+        0.6 * Math.sin((s / (240 + 160 * h1)) * 2 * Math.PI + h2 * 6.28) +
+        0.4 * Math.sin((s / (110 + 70 * h2)) * 2 * Math.PI + h3 * 6.28) +
+        0.5 * (h3 - 0.5)
+      )
+    }
     for (let k = 0; k < rows; k++) {
       const i = Math.min(n - 1, Math.round((k * RUBBER_ROW) / DS))
       const W = clamp(work[i], 0, 1)
-      // how far apart the cars' lines are: narrow in the braking zones, wider through the corners,
-      // everywhere on the straights
-      const sigma = 0.45 + 0.4 * corner[i] + 0.8 * (1 - W)
+      const s = k * RUBBER_ROW
+      const spread = 0.3 + 0.45 * corner[i] + 0.9 * (1 - W)
       const A = level * (0.25 + 1.25 * W)
+      const kerbL = this.hw[i] + this.L.kerb[i],
+        kerbR = -this.hw[i] - this.R.kerb[i]
+      const row = k * cols
+      for (let c = 0; c < cols; c++) this.rubber[row + c] = 0
+      for (let dr = 0; dr < DRIVERS; dr++) {
+        // two in eight far off the line (passing, defending, a mistake): twice the wander
+        const far = dr % 8 === 3 || dr % 8 === 6 ? 2.4 : 1
+        const line = clamp(this.racing[i] + far * spread * wander(dr, s), kerbR + 0.6, kerbL - 0.6)
+        for (const side of [-1, 1]) {
+          const dw = line + side * WHEEL_TRACK
+          const c0 = Math.floor((dw + RUBBER_HALF) / RUBBER_CELL)
+          // (a tyre's track smeared by its own weaving within the lap: 0.4 m)
+          for (let c = Math.max(0, c0 - 3); c <= Math.min(cols - 1, c0 + 3); c++) {
+            const d = (c + 0.5) * RUBBER_CELL - RUBBER_HALF
+            this.rubber[row + c] += Math.exp(-(((d - dw) / 0.4) ** 2)) / (DRIVERS * 0.75)
+          }
+        }
+      }
       for (let c = 0; c < cols; c++) {
         const d = (c + 0.5) * RUBBER_CELL - RUBBER_HALF
         const u = Math.abs(d - this.racing[i])
-        const tr = Math.max(Math.exp(-(((u - WHEEL_TRACK) / sigma) ** 2)), 0.55 * Math.exp(-((u / 1.3) ** 2)))
+        // on the asphalt and on the kerbs (the cars ride them)
+        const on = d < kerbL && d > kerbR
         const onRoad = Math.abs(d) < this.hw[i]
-        this.rubber[k * cols + c] = onRoad ? clamp(0.1 + A * tr, 0, 1) : 0
-        this.marbles[k * cols + c] = onRoad ? 0.55 * smoothstep(3.0, 4.6, u) * smoothstep(this.hw[i] - 2.2, this.hw[i] - 0.4, Math.abs(d)) * clamp(0.3 + corner[i], 0, 1) : 0
+        this.rubber[row + c] = on ? clamp(0.1 + A * (1 - Math.exp(-2.2 * this.rubber[row + c])) * 1.25, 0, 1) : 0
+        this.marbles[row + c] = onRoad ? 0.55 * smoothstep(3.0, 4.6, u) * smoothstep(this.hw[i] - 2.2, this.hw[i] - 0.4, Math.abs(d)) * clamp(0.3 + corner[i], 0, 1) : 0
       }
     }
     this.rubberDirty = true
@@ -555,12 +592,12 @@ export class Track implements Ground {
     return k * RUBBER_COLS + c
   }
 
-  /** grip multiplier: a green track 0.958, a fully rubbered line 1.033; marbles roll under the tyres
-   *  like ball bearings (-11 % on a full layer) */
+  /** grip multiplier: a green track 0.975, the line as a session starts ~1.0, a fully rubbered line
+   *  1.035; marbles roll under the tyres like ball bearings (-11 % on a full layer) */
   gripAt(_i: number, s: number, d: number) {
     const ri = this.rubberIndex(s, d)
-    if (ri < 0) return 0.958
-    return 0.958 + 0.075 * this.rubber[ri] - 0.11 * this.marbles[ri]
+    if (ri < 0) return 0.975
+    return 0.975 + 0.06 * this.rubber[ri] - 0.11 * this.marbles[ri]
   }
 
   /**

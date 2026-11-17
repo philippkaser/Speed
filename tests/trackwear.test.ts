@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { makeSample } from '../src/physics/ground'
-import { RUBBER_CELL, RUBBER_COLS, RUBBER_HALF, RUBBER_ROW, Track } from '../src/track/track'
+import { RUBBER_CELL, RUBBER_COLS, RUBBER_HALF, RUBBER_ROW, RUBBER_START, Track } from '../src/track/track'
 import { TRACKS } from '../src/track/trackDef'
 
 const track = new Track(TRACKS[0])
@@ -13,7 +13,7 @@ const onLine = (i: number) => {
 }
 
 test('a session starts with the rubber where the tyres work: braking zones and corners, not the straights', () => {
-  track.resetRubber(0.45)
+  track.resetRubber(RUBBER_START)
   const brake: number[] = [],
     straight: number[] = []
   for (let i = 0; i < track.n; i += 2) {
@@ -28,7 +28,7 @@ test('a session starts with the rubber where the tyres work: braking zones and c
 })
 
 test('tyres lay rubber where they slide, shed marbles to the outside of the corner and sweep them off the line', () => {
-  track.resetRubber(0.45)
+  track.resetRubber(RUBBER_START)
   const s = 2001,
     d = 0.3
   const ref = makeSample()
@@ -60,5 +60,5 @@ test('tyres lay rubber where they slide, shed marbles to the outside of the corn
   expect(track.marbles[outside]).toBeLessThan(before * 0.75)
   for (let k = 0; k < 7; k++) pass()
   expect(track.marbles[outside]).toBeLessThan(before * 0.1)
-  track.resetRubber(0.45)
+  track.resetRubber(RUBBER_START)
 })

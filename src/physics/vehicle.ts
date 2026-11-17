@@ -1282,7 +1282,7 @@ export class Vehicle {
       wh.rollTorque = (wh.model.compound.rollingRes + surf.rolling) * Fz * Re
       wh.driveTorque = -tyre.Fx * Re
       // the rubber that leaves the tyre stays on the track
-      if (s.surface === Surface.Asphalt && ground.layRubber) {
+      if ((s.surface === Surface.Asphalt || s.surface === Surface.Kerb) && ground.layRubber) {
         // the tyre's cornering force along the track's left (the patch slides the other way)
         const fy = tyre.Fy * (_tl.x * s.lx + _tl.z * s.lz)
         const fAll = Math.hypot(tyre.Fx, tyre.Fy) + 1

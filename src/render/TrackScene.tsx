@@ -48,7 +48,7 @@ export function TrackScene({ track }: { track: Track }) {
     const rubber = rubberTexture(track)
     g.userData.rubber = rubber
     g.add(mesh(buildRoad(track), roadMaterial(rubber, track), { name: 'road' }))
-    g.add(mesh(buildKerbs(track), kerbMaterial(), { name: 'kerbs' }))
+    g.add(mesh(buildKerbs(track), kerbMaterial(rubber), { name: 'kerbs' }))
     g.add(mesh(buildRunoff(track), runoffMaterial(), { name: 'runoff' }))
     g.add(mesh(buildVerge(track), vergeMaterial(), { name: 'verge' }))
     const markings = mesh(buildMarkings(track, 20), markingMaterial(), { name: 'markings' })

@@ -141,7 +141,7 @@ export function Effects() {
       sparkP: [] as Spark[],
       // fractional emission carried between frames, per wheel
       acc: new Map<string, number>(),
-      lastContact: new Map<string, { x: number; y: number; z: number; lx: number; lz: number; on: boolean }>(),
+      lastContact: new Map<string, { x: number; y: number; z: number; lx: number; lz: number; on: boolean; fresh: boolean }>(),
     }
   }, [])
 
@@ -248,8 +248,20 @@ export function Effects() {
             if (d2 > 0.16) {
               const len = Math.sqrt(d2)
               const hw = w.model.spec.width * 0.5
-              const lx = (-dz / len) * hw,
+              let lx = (-dz / len) * hw,
                 lz = (dx / len) * hw
+              // the mark's edges keep their sides: a segment whose across-vector flipped (the wheel
+              // moving the other way, or the first segment against the car's left) was drawn as a
+              // twisted quad, a bow tie of two black triangles
+              if (lx * prev.lx + lz * prev.lz < 0) {
+                lx = -lx
+                lz = -lz
+              }
+              // the first segment of a trail is square to its own direction at both ends
+              if (prev.fresh) {
+                prev.lx = lx
+                prev.lz = lz
+              }
               const i = sys.skidHead
               const b = i * 12
               const lift = 0.012
@@ -259,11 +271,11 @@ export function Effects() {
               sys.skidHead = (i + 1) % MAX_SKID
               sys.skidCount = Math.min(MAX_SKID, sys.skidCount + 1)
               skidDirty = true
-              sys.lastContact.set(key, { x: cp.x, y: cp.y, z: cp.z, lx, lz, on: true })
+              sys.lastContact.set(key, { x: cp.x, y: cp.y, z: cp.z, lx, lz, on: true, fresh: false })
             }
           } else {
             const hw = w.model.spec.width * 0.5
-            sys.lastContact.set(key, { x: cp.x, y: cp.y, z: cp.z, lx: v.left.x * hw, lz: v.left.z * hw, on: true })
+            sys.lastContact.set(key, { x: cp.x, y: cp.y, z: cp.z, lx: v.left.x * hw, lz: v.left.z * hw, on: true, fresh: true })
           }
         } else if (prev && prev.on) {
           // a slide that flickers on and off (a wheel at the edge of its grip, wheelspin on the

@@ -1,7 +1,7 @@
 // AI driver: follows the minimum-curvature racing line (path-following steering), slip-angle aware
 // counter-steer, a car-specific speed plan and traffic on left / right lane lines (slipstream, out-braking).
 import { makeSample } from '../physics/ground'
-import { clamp, lerp } from '../physics/math'
+import { clamp, hash2, lerp, smoothstep } from '../physics/math'
 import { COMPOUNDS } from '../physics/spec'
 import type { Vehicle, VehicleInput } from '../physics/vehicle'
 import type { Track } from '../track/track'
@@ -166,9 +166,30 @@ export class AIDriver {
   /** The blended line (ideal line to lane line) at sample i, before the traffic bounds. */
   nominalAt(i: number) {
     const tr = this.track
-    const r = tr.racing[i]
+    const r = tr.racing[i] + this.wander(i)
     if (this.ws <= 0) return r
     return r + this.ws * ((this.lane > 0 ? tr.laneL[i] : tr.laneR[i]) - r)
+  }
+  /** This driver's own line: no two drivers take a corner on exactly the same line. A lateral shift
+   *  of the racing line that wanders slowly along the lap (swings of 250-450 m, so a corner keeps its
+   *  shape and its speed), 0.08-0.2 m either way, its own for each driver. (0.15-0.4 m cost the GT3
+   *  0.7 s a lap alone and put the marginal Aurel into the walls.) */
+  private wanderAmp = -1
+  private wanderPh = [0, 0, 0, 0]
+  wander(i: number) {
+    if (this.wanderAmp < 0) {
+      let h = 2166136261
+      for (const ch of this.id) h = Math.imul(h ^ ch.charCodeAt(0), 16777619)
+      const r = (k: number) => hash2(h >>> 0, k)
+      this.wanderAmp = 0.08 + 0.12 * r(1)
+      this.wanderPh = [250 + 200 * r(2), r(3) * 6.283, 120 + 80 * r(4), r(5) * 6.283]
+    }
+    const tr = this.track,
+      s = i * (tr.length / tr.n),
+      p = this.wanderPh
+    // where the line uses the whole width (an apex or an exit on the kerb) everyone is on it
+    const room = Math.min(tr.racing[i] - tr.lineLo[i], tr.lineHi[i] - tr.racing[i])
+    return smoothstep(0.3, 1.5, room) * this.wanderAmp * (0.7 * Math.sin((s / p[0]) * 6.283 + p[1]) + 0.3 * Math.sin((s / p[2]) * 6.283 + p[3]))
   }
   /** Target lateral position at sample i: the blended line, inside the usable width and the room
    *  left by a car alongside. */
@@ -623,8 +644,12 @@ export class AIDriver {
       iB = tr.idx(sA + dA)
     const kA = this.curvAt(iA),
       kB = this.curvAt(iB)
-    let pa = this.planAt(iA) * Math.sqrt(clamp(1 - kA * (this.lineAt(iA) - this.nominalAt(iA)), 0.5, 1))
-    let pb = this.planAt(iB) * Math.sqrt(clamp(1 - kB * (this.lineAt(iB) - this.nominalAt(iB)), 0.5, 1))
+    // the surface under the line ahead, as a driver reads it: marbles, or green track off the rubber
+    // (the plan is for the line as a session starts, grip ~1.0; a better rubbered line is not exploited)
+    const surfA = Math.sqrt(clamp(tr.gripAt(iA, sA, this.lineAt(iA)), 0.85, 1)),
+      surfB = Math.sqrt(clamp(tr.gripAt(iB, sA + dA, this.lineAt(iB)), 0.85, 1))
+    let pa = this.planAt(iA) * surfA * Math.sqrt(clamp(1 - kA * (this.lineAt(iA) - this.nominalAt(iA)), 0.5, 1))
+    let pb = this.planAt(iB) * surfB * Math.sqrt(clamp(1 - kB * (this.lineAt(iB) - this.nominalAt(iB)), 0.5, 1))
     // on a straight the plan is the speed the car reaches alone, not a limit: with a tow it runs on at full
     // throttle and brakes where its own braking curve says
     if (Math.abs(kA) < 1 / 500 && Math.abs(kB) < 1 / 500) {

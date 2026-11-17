@@ -12,7 +12,7 @@ import { type KinematicBody, PhysicsWorld, SimCar } from '../physics/world'
 import { net } from '../net/client'
 import type { RoomInfo } from '../net/protocol'
 import { useSettings } from '../state/settings'
-import { Track } from '../track/track'
+import { RUBBER_START, Track } from '../track/track'
 import { getTrackDef } from '../track/trackDef'
 import type { GltfCarId } from '../car/gltfCars'
 import { ReplayPlayer, ReplayRecorder } from './replay'
@@ -182,7 +182,7 @@ export class Game {
     this.track = this.getTrack(cfg.trackId)
     // the track object is cached: each session starts from the same rubber (the last race's
     // rubber made the same seed race differently in one process)
-    this.track.resetRubber(0.45)
+    this.track.resetRubber(RUBBER_START)
     this.world = new PhysicsWorld(this.track)
     this.cars = []
     this.player = null
@@ -285,7 +285,7 @@ export class Game {
     this.track = this.getTrack(trackId)
     // the track object is cached: each session starts from the same rubber (the last race's
     // rubber made the same seed race differently in one process)
-    this.track.resetRubber(0.45)
+    this.track.resetRubber(RUBBER_START)
     this.world = new PhysicsWorld(this.track)
     this.cars = []
     this.player = null
@@ -350,7 +350,7 @@ export class Game {
     this.track = this.getTrack(room.trackId)
     // the track object is cached: each session starts from the same rubber (the last race's
     // rubber made the same seed race differently in one process)
-    this.track.resetRubber(0.45)
+    this.track.resetRubber(RUBBER_START)
     this.world = new PhysicsWorld(this.track)
     this.cars = []
     this.player = null
