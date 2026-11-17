@@ -14,7 +14,7 @@ import * as THREE from 'three/webgpu'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { abs, attribute, BRDF_GGX, clearcoatNormalView, diffuseColor, dot, float, Fn, materialColor, materialMetalness, max, min, mix, normalView, output, positionViewDirection, pow, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
+import { abs, attribute, BRDF_GGX, clearcoatNormalView, diffuseColor, dot, float, Fn, interleavedGradientNoise, materialColor, materialMetalness, max, min, mix, normalView, output, positionViewDirection, pow, screenCoordinate, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
 import { makeMirrorEnv, mirrorRadiance, type MirrorEnv, type MirrorMaterial } from '../render/mirrorEnv'
 import { HERO_LAYER } from '../render/sunShadow'
 import type { CarSpec } from '../physics/spec'
@@ -58,10 +58,50 @@ export const gltfState = { ready: false, failed: '' }
 /**
  * Level-of-detail switch distances (m) for a 50 degree field of view. The TV cameras use very long
  * lenses, so the distance is scaled by the lens: a car 150 m away through a 5 degree lens is as big
- * on screen as one 15 m away through a normal one.
+ * on screen as one 15 m away through a normal one. The far level (simplified sloppily to two draws)
+ * is darker than the others, its black parts merged over the livery: on screen only where a car is
+ * ~50 px long at 1080p (it came in at 80 m, ~140 px, and popped); the simplified level (~100k
+ * triangles, 10 draws) carries the cars out to there.
  */
-const LOD_DISTANCES = [0, 24, 80]
+const LOD_DISTANCES = [0, 30, 220]
 const REF_TAN = Math.tan((50 * Math.PI) / 360)
+
+/**
+ * Level changes cross-fade instead of popping: for FADE_MS both levels draw, each where the screen's
+ * dither (interleaved gradient noise, shifted every frame) falls inside its window, the incoming
+ * level's window growing from nothing to everything and the outgoing one's shrinking in step, so every
+ * pixel shows exactly one of them; the temporal AA blends the dither into a smooth fade. Windows are
+ * per mesh (userData.lodWin, set by CarLOD for the camera that picks the levels); every other camera
+ * (shadow maps, reflection probes) draws its single level whole.
+ */
+const FADE_MS = 300
+const FULL = new THREE.Vector2(0, 2)
+const lodWindow = uniform(new THREE.Vector2(0, 2)).onObjectUpdate((frame: { object: THREE.Object3D | null; camera: THREE.Camera | null }) => {
+  const w = frame.object?.userData.lodWin as THREE.Vector2 | undefined
+  const cam = frame.camera as THREE.PerspectiveCamera | null
+  return w && w.isVector2 && cam && cam.isPerspectiveCamera && !cam.userData.probe ? w : FULL
+})
+const _shift = new THREE.Vector2()
+const lodShift = uniform(new THREE.Vector2()).onFrameUpdate((frame: { frameId: number }) => _shift.set((frame.frameId * 5.588238) % 64, (frame.frameId * 3.183099) % 64))
+const lodDither = interleavedGradientNoise(screenCoordinate.xy.add(lodShift))
+const lodMask = lodDither.greaterThanEqual(lodWindow.x).and(lodDither.lessThan(lodWindow.y))
+
+/** The node material the renderer would make of a plain one (NodeLibrary.fromMaterial), so that it can
+ *  take nodes (the cross-fade's mask, realMetals' metalness). */
+function toNodeMaterial(m: THREE.Material): THREE.Material {
+  if ((m as unknown as { isNodeMaterial?: boolean }).isNodeMaterial) return m
+  const s = m as THREE.MeshPhysicalMaterial
+  const nm = s.isMeshPhysicalMaterial ? new THREE.MeshPhysicalNodeMaterial() : s.isMeshStandardMaterial ? new THREE.MeshStandardNodeMaterial() : (m as THREE.MeshBasicMaterial).isMeshBasicMaterial ? new THREE.MeshBasicNodeMaterial() : null
+  if (!nm) return m
+  for (const key in m) (nm as unknown as Record<string, unknown>)[key] = (m as unknown as Record<string, unknown>)[key]
+  return nm
+}
+/** A car material that can take part in a level cross-fade (in place where it already is a node material). */
+function fadeable(m: THREE.Material) {
+  const nm = toNodeMaterial(m) as THREE.Material & { maskNode?: unknown; isNodeMaterial?: boolean }
+  if (nm.isNodeMaterial && !nm.maskNode) nm.maskNode = lodMask
+  return nm
+}
 
 /**
  * One level-of-detail decision per car, applied to all of its parts (the body, wheels, calipers,
@@ -81,32 +121,44 @@ class CarLOD extends THREE.LOD {
   /** the level the main camera picked, and the car's depth in its view (m) */
   mainLevel = 0
   depth = 0
-  private shown = -1
+  /** the main camera's level and, while a change fades, the level fading out (-1: none) */
+  private target = -1
+  private from = -1
+  private fadeStart = 0
+  private shown = ''
+  private wins: THREE.Vector2[]
   private _camPos = new THREE.Vector3()
   private _objPos = new THREE.Vector3()
   constructor(private parts: THREE.Object3D[][]) {
     super()
     this.layers.enable(HERO_LAYER)
-    this.show(0)
-  }
-  private show(level: number) {
-    if (level === this.shown) return
-    this.shown = level
-    this.parts.forEach((list, k) => {
-      for (const o of list) o.visible = k === level
+    this.wins = parts.map((list) => {
+      const w = new THREE.Vector2(0, 2)
+      for (const o of list) o.traverse((x) => (x.userData.lodWin = w))
+      return w
     })
-    ;(this as unknown as { _currentLevel: number })._currentLevel = level
+    this.show(0, -1)
+  }
+  /** shows level a (and level b, fading), hides the rest */
+  private show(a: number, b: number) {
+    const key = a + ':' + b
+    if (key === this.shown) return
+    this.shown = key
+    this.parts.forEach((list, k) => {
+      for (const o of list) o.visible = k === a || k === b
+    })
+    ;(this as unknown as { _currentLevel: number })._currentLevel = a
   }
   update(camera: THREE.Camera) {
     const last = this.parts.length - 1
-    if (camera.userData.probe) return this.show(last)
+    if (camera.userData.probe) return this.show(last, -1)
     if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
       // a cascade whose receivers this car's shadow cannot reach (sunShadow.ts tagCascadeDepths)
       const r = camera.userData.cascadeDepth as [number, number] | undefined
-      if (r && (this.depth < r[0] || this.depth > r[1])) return this.show(-1)
+      if (r && (this.depth < r[0] || this.depth > r[1])) return this.show(-1, -1)
       // cascades whose texels are coarser than the far level's tolerance (8 cm) draw that
       const far = ((camera.userData.cascadeTexel as number | undefined) ?? 0) > 0.08 ? last : 1
-      return this.show(Math.min(last, Math.max(this.mainLevel, far)))
+      return this.show(Math.min(last, Math.max(this.mainLevel, far)), -1)
     }
     this._camPos.setFromMatrixPosition(camera.matrixWorld)
     this._objPos.setFromMatrixPosition(this.matrixWorld)
@@ -119,7 +171,32 @@ class CarLOD extends THREE.LOD {
     // switch to a coarser level beyond its distance, back to a finer one 10% inside it
     while (level < last && d >= LOD_DISTANCES[level + 1] * (level + 1 <= this.mainLevel ? 0.9 : 1)) level++
     this.mainLevel = level
-    this.show(level)
+    const now = performance.now()
+    if (this.target < 0) this.target = level
+    else if (level !== this.target) {
+      if (level === this.from) {
+        // back to the level that was fading out: reverse the fade from where it stands
+        const t = Math.min(1, (now - this.fadeStart) / FADE_MS)
+        this.fadeStart = now - (1 - t) * FADE_MS
+      } else this.fadeStart = now
+      this.from = this.target
+      this.target = level
+    }
+    let t = this.from >= 0 ? (now - this.fadeStart) / FADE_MS : 1
+    if (t >= 1) this.from = -1
+    // debug (window.__lodMix = { from, to, t }): every car held part way through a fade, to look at it
+    const mix = (globalThis as unknown as { __lodMix?: { from: number; to: number; t: number } }).__lodMix
+    if (mix) {
+      this.from = Math.min(last, mix.from)
+      this.target = Math.min(last, mix.to)
+      t = mix.t
+    }
+    for (const w of this.wins) w.copy(FULL)
+    if (this.from >= 0) {
+      this.wins[this.target].set(0, t)
+      this.wins[this.from].set(t, 2)
+    }
+    this.show(this.target, this.from)
   }
 }
 
@@ -514,7 +591,7 @@ function normaliseMaterial(mat: THREE.Material, mirror?: MirrorEnv) {
     m.clearcoatRoughness = Math.min(m.clearcoatRoughness, 0.06)
   }
   if (m.metalness > 0 && !m.transparent && !/mirror/i.test(name)) return realMetals(m)
-  return mat
+  return toNodeMaterial(mat)
 }
 
 /**
@@ -655,6 +732,7 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
       if (/Light_Rear/i.test(name)) rearLights.push(out as THREE.MeshStandardMaterial)
       if (/Disc/i.test(name)) discs.push(out as THREE.MeshStandardMaterial)
     }
+    out = fadeable(out)
     if (out !== mat) disposables.push(out)
     own.set(mat, out)
     return out
@@ -680,6 +758,7 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
       else out = hubMaterial(s)
       disposables.push(out)
     }
+    out = fadeable(out)
     wheelOwn.set(mat, out)
     return out
   }
@@ -766,6 +845,7 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
   const suit = new THREE.MeshStandardNodeMaterial({ color: new THREE.Color(opts.driverColor ?? opts.color).multiplyScalar(0.7), roughness: 0.85 })
   const helmetMat = new THREE.MeshPhysicalNodeMaterial({ color: accent, roughness: 0.22, clearcoat: 1, metalness: 0.1 })
   const visorMat = new THREE.MeshPhysicalNodeMaterial({ color: 0x050505, roughness: 0.05, metalness: 0.9 })
+  for (const m of [suit, helmetMat, visorMat]) fadeable(m)
   disposables.push(suit, helmetMat, visorMat)
   const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.3, 6, 12), suit)
   torso.position.set(helmetPos.x, helmetPos.y - 0.4, helmetPos.z - 0.08)
