@@ -309,8 +309,11 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
   // (0.1: a green track; ~0.25 a straight; ~0.6 through a corner; 0.8 and more in a braking zone)
   const rl = dyn ? smoothstep(0.12, 0.88, dyn.r) : exp(d.sub(racing).div(1.25).pow(2).negate())
   // the tyres are brushes: each pass paints a stroke along the direction of travel, heavier where it
-  // presses harder (braking, the corners); a field of cars leaves overlapping strokes of every weight
-  const rubberAmt = rl.mul(tyreStrokes(s, d, brake)).clamp(0, 1)
+  // presses harder (braking, the corners); a field of cars leaves overlapping strokes of every weight.
+  // The cars travel along their lines, not along the track: where the racing line crosses the track
+  // (into and out of a corner, at up to ~15 degrees) the strokes follow it, so they are laid out across
+  // the offset from the racing line (strokes along the track's own direction crossed the marks)
+  const rubberAmt = rl.mul(tyreStrokes(s, d.sub(racing), brake)).clamp(0, 1)
   // fresh rubber (albedo ~0.03) over grey, dusty aggregate (~0.08): the line reads as a dark band
   albedo = albedo.mul(mix(float(1.15), float(0.38), rubberAmt))
   // rubber polishes the aggregate: the line is the glossiest part of the road (~0.45), the dusty
