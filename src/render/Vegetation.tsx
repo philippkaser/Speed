@@ -11,8 +11,11 @@
 //    forest floor baked into the terrain from the same function;
 //  - the grass is a mown sward of short patches along the verges (clumps of Poly Haven's
 //    grass_medium_01, 1800 triangles, scaled to 10-14 cm) within ~12 m of the camera, packed per
-//    instance, shrinking and dithering out into the ground's turf (materials.ts), which carries the
-//    lawn beyond on its own (no far cards: they read as dark hedges along the verge); one draw.
+//    instance; from there to 45-55 m a sparser sward of the same blades (two fifths of each clump's
+//    cards, thinning out with distance, alpha-hashed and read no coarser than mip 2, so the blades
+//    keep their light and dark detail instead of averaging into the ground's colour), dithering out
+//    into the ground's turf (materials.ts), which carries the lawn beyond on its own (no far cards:
+//    they read as dark hedges along the verge); one draw each.
 // Instances live in a grid of cells. Each frame the visible cells are packed into the instance buffer
 // nearest first; only a change in that set uploads anything. The shadow cascades draw the prefix of
 // instances their range needs, and the meshes cross-fade into the impostors with a dither (no pop).
@@ -32,6 +35,8 @@ import {
   floor,
   fract,
   Fn,
+  fwidth,
+  log2,
   max,
   mix,
   mod,
@@ -244,6 +249,46 @@ function placeGrass(track: Track, density: number) {
     }
   }
   void DS
+  return new Float32Array(out)
+}
+
+/** The grass clump with a share of its cards (whole cards, picked by a hash): the middle distance's
+ *  sparser, cheaper sward. Shares the clump's vertex attributes. */
+function grassSubset(src: THREE.BufferGeometry, share: number) {
+  const idx = src.getIndex()!.array as ArrayLike<number>
+  const nV = src.getAttribute('position').count
+  const parent = new Int32Array(nV).map((_, i) => i)
+  const find = (a: number): number => {
+    while (parent[a] !== a) a = parent[a] = parent[parent[a]]
+    return a
+  }
+  for (let t = 0; t < idx.length; t += 3) {
+    const a = find(idx[t])
+    parent[find(idx[t + 1])] = a
+    parent[find(idx[t + 2])] = a
+  }
+  const kept: number[] = []
+  for (let t = 0; t < idx.length; t += 3) {
+    const r = find(idx[t])
+    const h = Math.sin(r * 12.9898 + 4.1) * 43758.5453
+    if (h - Math.floor(h) < share) kept.push(idx[t], idx[t + 1], idx[t + 2])
+  }
+  const g = new THREE.BufferGeometry()
+  for (const k of ['position', 'normal', 'uv', 'wind']) g.setAttribute(k, src.getAttribute(k))
+  g.setIndex(kept)
+  g.boundingBox = src.boundingBox?.clone() ?? null
+  g.boundingSphere = src.boundingSphere?.clone() ?? null
+  return g
+}
+
+/** A share of the grass patches (by a hash of their place), each `grow` times wider. */
+function thinPatches(g: Float32Array, share: number, grow: number) {
+  const out: number[] = []
+  for (let i = 0; i < g.length; i += STRIDE) {
+    const h = Math.sin(g[i] * 0.731 + g[i + 2] * 1.913) * 43758.5453
+    if (h - Math.floor(h) >= share) continue
+    for (let k = 0; k < STRIDE; k++) out.push(k === 4 ? g[i + k] * grow : g[i + k])
+  }
   return new Float32Array(out)
 }
 
@@ -562,10 +607,22 @@ interface VegMaterialOpts {
   upNormal?: number
   /** cards: grow wider with distance (0..1 over the fade-out range) as they thin out, keeping cover */
   widen?: number
+  /**
+   * test the texture's alpha against a screen dither instead of a fixed threshold: the coverage then
+   * follows the mipmaps' averaged alpha, so thin blades keep their share of the pixels at a distance
+   * (against a fixed alpha test they thin out to nothing)
+   */
+  hashedAlpha?: boolean
+  /**
+   * the coarsest mip level the atlas is read at: the blades keep their light and dark detail at a
+   * distance instead of averaging into the ground's colour (with the hashed alpha and the temporal AA
+   * the sub-pixel blades resolve to a textured sward, not to aliasing)
+   */
+  mipCap?: number
 }
 
 function vegMaterial(o: VegMaterialOpts) {
-  const m = new THREE.MeshStandardNodeMaterial({ side: THREE.DoubleSide, alphaTest: o.alphaTest })
+  const m = new THREE.MeshStandardNodeMaterial({ side: THREE.DoubleSide, alphaTest: o.hashedAlpha ? 0 : o.alphaTest })
   const iA: N = attribute('iA', 'vec4')
   const dist = iA.xyz.sub(vegCam).length().mul(vegLens)
   const fade = smoothstep(o.fadeOut[0], o.fadeOut[1], dist)
@@ -578,7 +635,12 @@ function vegMaterial(o: VegMaterialOpts) {
   const tf = instanceTransform(o.wind, o.shrink ? float(1).sub(fade.mul(0.6)) : undefined, alive, widen)
   m.positionNode = tf.node
   const vFade = varying(fade, 'vVegFade')
-  const tex = texture(o.atlas, uv())
+  let tex: N = texture(o.atlas, uv())
+  if (o.mipCap !== undefined) {
+    const size = (o.atlas.image as { width?: number } | undefined)?.width ?? 1024
+    const lod = log2(max(fwidth(uv().x), fwidth(uv().y)).mul(size).max(1e-4)).clamp(0, o.mipCap)
+    tex = texture(o.atlas, uv()).level(lod)
+  }
   const tint = mix(vec3(o.tintA.r, o.tintA.g, o.tintA.b), vec3(o.tintB.r, o.tintB.g, o.tintB.b), tf.iB.z)
   const leaf = tf.w.y
   let albedo: N = tex.rgb.mul(mix(vec3(1), tint, leaf))
@@ -639,6 +701,8 @@ function vegMaterial(o: VegMaterialOpts) {
   const d = ign(screenCoordinate.xy)
   let keep: N = d.greaterThanEqual(vFade)
   if (o.fadeIn) keep = keep.and(d.lessThan(varying(smoothstep(o.fadeIn[0], o.fadeIn[1], dist), 'vVegFadeIn')))
+  // (a second dither, decorrelated from the fade's)
+  if (o.hashedAlpha) keep = keep.and(tex.a.greaterThan(ign(screenCoordinate.xy.add(vec2(37.3, 17.9))).mul(0.85).add(0.08)))
   m.maskNode = keep
   return m
 }
@@ -1128,7 +1192,29 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
           instanceRange: near,
         }),
       )
-      console.info(`[veg] ${g.length / STRIDE} grass patches`)
+      // the middle distance, out to 45-55 m: a sparser sward of the same blades (two fifths of the
+      // clump's cards, every patch near and a third far away), crossing the near clumps with a dither
+      // where they end, alpha-hashed so its blades keep their cover as the texture's mips average
+      // them; lit more like the ground it stands on (its canopy darkening was a dark band at a distance)
+      const far = 34 + 14 * Math.min(density, 1.4)
+      // (?nograssmid: without it, for comparisons)
+      const gMid = debugFlag('nograssmid') ? new Float32Array(0) : thinPatches(g, 1, 1.15)
+      layers.push(
+        new VegLayer({
+          ...opts,
+          instances: gMid,
+          name: 'grass-mid',
+          geometry: grassSubset(grass.geometry, 0.4),
+          material: vegMaterial({ ...common, canopy: { root: 0.86, selfShadow: 0.82 }, hashedAlpha: true, mipCap: 2, widen: 0.6, fadeIn: [near - 3, near], fadeOut: [far - 14, far] }),
+          cell: 12,
+          maxDist: far,
+          instanceRange: far,
+          // every patch where the near clumps end, thinning to a third by the far end (the cards
+          // widen as they thin, keeping the cover)
+          keep: (dist) => Math.min(1, Math.max(0.33, 1 - (dist - near) / (far - near))),
+        }),
+      )
+      console.info(`[veg] ${g.length / STRIDE} grass patches (${gMid.length / STRIDE} in the middle distance)`)
     }
     // the distant trees' shadows on the ground (sunShadow.ts): crown size and height from each
     // model's bounds, scaled per tree
