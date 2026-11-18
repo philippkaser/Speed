@@ -9,10 +9,11 @@
 //    with views of the real tree baked at load time (16 directions, colour and normals), lit like the
 //    meshes. The forests are closed canopies in their cores (scenery/forest.ts), standing on a dark
 //    forest floor baked into the terrain from the same function;
-//  - the grass is a mown sward of short patches along the verges (clumps of Poly Haven's
+//  - the grass (placed by grassPlacement.ts, off the kerbs and the road) is a mown sward of short
+//    patches along the verges (clumps of Poly Haven's
 //    grass_medium_01, 1800 triangles, scaled to 10-14 cm) within ~12 m of the camera, packed per
 //    instance; from there to 45-55 m a sparser sward of the same blades (two fifths of each clump's
-//    cards, thinning out with distance, alpha-hashed and read no coarser than mip 2, so the blades
+//    cards, thinning out patch by patch with distance, read no coarser than mip 2, so the blades
 //    keep their light and dark detail instead of averaging into the ground's colour), dithering out
 //    into the ground's turf (materials.ts), which carries the lawn beyond on its own (no far cards:
 //    they read as dark hedges along the verge); one draw each.
@@ -62,10 +63,9 @@ import { motionTime } from './motionHistory'
 import { csmState, sunState } from './Environment'
 import { cascadesFar, castInNearCascades, farTreeShadow, setSunShadowTerm, setTreeShadows, type TreeShadowCaster } from './sunShadow'
 import { valueNoise2 } from '../physics/math'
-import { Surface } from '../physics/ground'
 import { useSettings } from '../state/settings'
-import { DS, type Track } from '../track/track'
-import { pitLane } from '../track/pitlane'
+import type { Track } from '../track/track'
+import { GRASS_GAP, GRASS_REACH, placeGrass, type GrassPatches } from './grassPlacement'
 import { debugFlag } from '../util/debug'
 import type { TerrainHeight } from './trackGeometry'
 import { loadVegetation, vegState, type VegMesh } from './worldAssets'
@@ -193,65 +193,6 @@ function placeTrees(track: Track, heights: TerrainHeight, density: number) {
   return { conifers: new Float32Array(conifers), broad: new Float32Array(broad) }
 }
 
-/** Grass patches on the verges: from the end of the kerb or paved runoff to the barrier, and a strip behind it. */
-function placeGrass(track: Track, density: number) {
-  const r = rng(track.def.seed * 7 + 3)
-  const out: number[] = []
-  // a mown sward: short patches (10-14 cm) close together; the ground's own turf carries the cover
-  // between and beyond them
-  const step = 0.62 / Math.sqrt(Math.max(density, 0.2))
-  const p = { x: 0, y: 0, z: 0 }
-  const lane = pitLane(track)
-  const L = track.length
-  const wrap = (s: number) => ((s % L) + L + L / 2) % L - L / 2
-  for (let s = 0; s < L; s += step) {
-    const i = track.idx(s)
-    for (const side of [1, -1]) {
-      const S = side > 0 ? track.L : track.R
-      // past the worn soil margin (vergeMaterial): the patch's blades must not spill onto it or the road
-      const edge = track.hw[i] + S.kerb[i] + (S.paved[i] >= 0.4 ? S.paved[i] : 0) + 0.3
-      const wall = S.wall[i]
-      const gravel = S.outer[i] === Surface.Gravel
-      const sw = wrap(s)
-      for (let d = edge; d < wall + 9; d += step) {
-        const dd = d + (r() - 0.5) * step * 0.9
-        const sc = 1.0 + r() * 0.35
-        // the barrier itself, gravel traps, the pit road and lane, the grandstands
-        if (Math.abs(dd - wall) < 0.9) continue
-        if (gravel && dd < wall - 1.5) continue
-        // the patch reaches ~0.7 m x scale from its centre
-        if (dd - 0.6 * sc < edge) continue
-        if (side > 0 && sw > -830 && sw < 330 && Math.abs(dd - lane.roadD(sw)) < 7) continue
-        if (side > 0 && sw > -270 && sw < 80 && dd > wall - 1) continue
-        if (side < 0 && sw > -190 && sw < 240 && dd > wall) continue
-        const ss = s + (r() - 0.5) * step * 0.9
-        track.pointAt(ss, side * dd, p)
-        // mown short inside the barrier, longer behind it
-        const behind = dd - wall
-        const sy = (behind > 0 ? 0.55 : 0.27) + r() * 0.1
-        // tone (tint): the ground's mowing stripes under the patch (vergeMaterial), darker behind the barrier
-        const x = Math.sin((behind * Math.PI) / 2.5) / 0.3
-        const stripe = behind > 0 ? 0.2 : Math.min(1, Math.max(0, x * 0.5 + 0.5))
-        out.push(p.x, p.y - 0.02, p.z, r() * Math.PI * 2, sc, sy, stripe * 0.85 + r() * 0.15, r() * 6.283)
-      }
-      // the sward's own edge: the mower leaves a ragged fringe of longer grass whose blades lean over
-      // the worn margin and, in places, the edge of the asphalt (no ruler-straight line)
-      if (gravel) continue
-      for (let k = 0; k < 2; k++) {
-        const sc = 0.85 + r() * 0.4
-        const dd = edge - 0.3 + sc * (0.12 + r() * 0.5)
-        if (side > 0 && sw > -830 && sw < 330 && Math.abs(dd - lane.roadD(sw)) < 7) continue
-        if (side > 0 && sw > -270 && sw < 80 && dd > wall - 1) continue
-        if (side < 0 && sw > -190 && sw < 240 && dd > wall) continue
-        track.pointAt(s + (r() - 0.5) * step, side * dd, p)
-        out.push(p.x, p.y - 0.02, p.z, r() * Math.PI * 2, sc, 0.3 + r() * 0.16, 0.35 + r() * 0.3, r() * 6.283)
-      }
-    }
-  }
-  void DS
-  return new Float32Array(out)
-}
-
 /** The grass clump with a share of its cards (whole cards, picked by a hash): the middle distance's
  *  sparser, cheaper sward. Shares the clump's vertex attributes. */
 function grassSubset(src: THREE.BufferGeometry, share: number) {
@@ -281,16 +222,31 @@ function grassSubset(src: THREE.BufferGeometry, share: number) {
   return g
 }
 
-/** A share of the grass patches (by a hash of their place), each `grow` times wider. */
-function thinPatches(g: Float32Array, share: number, grow: number) {
+/**
+ * The grass patches for a layer that draws them `grow` times wider, and up to `widen` times wider
+ * again at a distance: each no wider than its room allows (no blade on the kerb or the road; the
+ * patches next to it are drawn smaller, the smallest left out).
+ */
+function widerPatches(g: GrassPatches, grow: number, widen: number) {
   const out: number[] = []
-  for (let i = 0; i < g.length; i += STRIDE) {
-    const h = Math.sin(g[i] * 0.731 + g[i + 2] * 1.913) * 43758.5453
-    if (h - Math.floor(h) >= share) continue
-    for (let k = 0; k < STRIDE; k++) out.push(k === 4 ? g[i + k] * grow : g[i + k])
+  const d = g.data
+  for (let p = 0; p < g.room.length; p++) {
+    const i = p * STRIDE
+    const sc = Math.min(d[i + 4] * grow, (g.room[p] - GRASS_GAP) / (GRASS_REACH * widen))
+    if (sc < 0.5) continue
+    for (let k = 0; k < STRIDE; k++) out.push(k === 4 ? sc : d[i + k])
   }
   return new Float32Array(out)
 }
+
+/** A layer's share of instances drawn at a distance: all up to `near`, thinning to `min` at `far`. */
+interface Thin {
+  near: number
+  far: number
+  min: number
+}
+const thinAt = (t: Thin, dist: number) => Math.min(1, Math.max(t.min, 1 - (dist - t.near) / (t.far - t.near)))
+const TAU = Math.PI * 2
 
 // ------------------------------------------------------------------------------------- cells
 
@@ -307,11 +263,13 @@ interface Cell {
  * Sorts instances into square cells (contiguous ranges) with bounding spheres. Within a cell the order
  * is random, so any prefix of a cell is an even thinning of it.
  */
-function buildCells(inst: Float32Array, size: number, height: number) {
+function buildCells(inst: Float32Array, size: number, height: number, byPhase = false) {
   const n = inst.length / STRIDE
   const keyOf = (i: number) => Math.floor(inst[i * STRIDE] / size) * 65536 + Math.floor(inst[i * STRIDE + 2] / size)
   const r = rng(977)
-  const rank = Float32Array.from({ length: n }, () => r())
+  // (thinned layers: in the order of the instance's rank, its wind phase over 2 pi, which the shader
+  // thins by too)
+  const rank = byPhase ? Float32Array.from({ length: n }, (_, i) => inst[i * STRIDE + 7]) : Float32Array.from({ length: n }, () => r())
   const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => keyOf(a) - keyOf(b) || rank[a] - rank[b])
   const data = new Float32Array(inst.length)
   const cells: Cell[] = []
@@ -362,8 +320,14 @@ interface LayerOpts {
   shadowMargin: number
   /** how far the car's reflection probe sees this layer (0: not at all) */
   probeRange: number
-  /** share of a cell's instances drawn at a distance (1: all); far grass thins out */
-  keep?: (dist: number) => number
+  /**
+   * thin the layer out with distance, instance by instance: each has a rank (its wind phase over 2 pi)
+   * and is drawn while its rank is below the share for its distance, shrinking away as the share
+   * passes it (vegMaterial's `thin`). Cells are packed with the instances their nearest point can
+   * show, in rank order. (Thinning by a count per cell, as the camera moved, the cells' counts changed
+   * by one patch at a time and random patches blinked in and out all over the middle distance.)
+   */
+  thin?: Thin
   /**
    * per-instance draw distance (m, on-screen terms): only instances this close are packed (the near
    * level of detail of the grass). The cells near the camera are few, so this is cheap; the buffer is
@@ -390,7 +354,7 @@ class VegLayer {
   mainCamera: THREE.Camera | null = null
 
   constructor(public o: LayerOpts) {
-    const { data, cells } = buildCells(o.instances, o.cell, o.height)
+    const { data, cells } = buildCells(o.instances, o.cell, o.height, !!o.thin)
     this.data = data
     this.cells = cells
     const g = new THREE.InstancedBufferGeometry()
@@ -474,9 +438,10 @@ class VegLayer {
     const r2 = (range + 0.8) * (range + 0.8)
     for (const { i, d } of list) {
       const c = this.cells[i]
-      const count = this.o.keep ? Math.ceil(c.count * Math.min(1, this.o.keep(d * lens))) : c.count
-      for (let k = 0; k < count; k++) {
+      const share = this.o.thin ? thinAt(this.o.thin, d * lens) * TAU : Infinity
+      for (let k = 0; k < c.count; k++) {
         const s = (c.start + k) * STRIDE
+        if (this.data[s + 7] >= share) break
         if (range) {
           const dx = this.data[s] - _cp.x,
             dy = this.data[s + 1] - _cp.y,
@@ -608,21 +573,19 @@ interface VegMaterialOpts {
   /** cards: grow wider with distance (0..1 over the fade-out range) as they thin out, keeping cover */
   widen?: number
   /**
-   * test the texture's alpha against a screen dither instead of a fixed threshold: the coverage then
-   * follows the mipmaps' averaged alpha, so thin blades keep their share of the pixels at a distance
-   * (against a fixed alpha test they thin out to nothing)
-   */
-  hashedAlpha?: boolean
-  /**
    * the coarsest mip level the atlas is read at: the blades keep their light and dark detail at a
-   * distance instead of averaging into the ground's colour (with the hashed alpha and the temporal AA
-   * the sub-pixel blades resolve to a textured sward, not to aliasing)
+   * distance instead of averaging into the ground's colour. The alpha test's threshold drops with the
+   * level read, so thin blades keep their cover as the mipmaps average their alpha (against a fixed
+   * threshold they thin out to nothing). (It used to test against a dither fixed to the screen: the
+   * camera's sub-pixel jitter moved the blades over it, and they shimmered in motion.)
    */
   mipCap?: number
+  /** the layer's thinning with distance (LayerOpts.thin): instances shrink away as it passes their rank */
+  thin?: Thin
 }
 
 function vegMaterial(o: VegMaterialOpts) {
-  const m = new THREE.MeshStandardNodeMaterial({ side: THREE.DoubleSide, alphaTest: o.hashedAlpha ? 0 : o.alphaTest })
+  const m = new THREE.MeshStandardNodeMaterial({ side: THREE.DoubleSide, alphaTest: o.mipCap !== undefined ? 0 : o.alphaTest })
   const iA: N = attribute('iA', 'vec4')
   const dist = iA.xyz.sub(vegCam).length().mul(vegLens)
   const fade = smoothstep(o.fadeOut[0], o.fadeOut[1], dist)
@@ -631,14 +594,24 @@ function vegMaterial(o: VegMaterialOpts) {
     alive = step(fade, 0.999)
     if (o.fadeIn) alive = alive.mul(step(0.001, smoothstep(o.fadeIn[0], o.fadeIn[1], dist)))
   }
+  if (o.thin) {
+    const t = o.thin
+    const share = float(1)
+      .sub(dist.sub(t.near).div(t.far - t.near))
+      .clamp(t.min, 1)
+    const rank = attribute('iB', 'vec4').w.div(TAU)
+    const shown = smoothstep(0, 0.07, share.sub(rank))
+    alive = alive ? alive.mul(shown) : shown
+  }
   const widen: N = o.widen ? float(1).add(smoothstep(o.fadeOut[0] * 0.4, o.fadeOut[1], dist).mul(o.widen)) : undefined
   const tf = instanceTransform(o.wind, o.shrink ? float(1).sub(fade.mul(0.6)) : undefined, alive, widen)
   m.positionNode = tf.node
   const vFade = varying(fade, 'vVegFade')
   let tex: N = texture(o.atlas, uv())
+  let lod: N = undefined
   if (o.mipCap !== undefined) {
     const size = (o.atlas.image as { width?: number } | undefined)?.width ?? 1024
-    const lod = log2(max(fwidth(uv().x), fwidth(uv().y)).mul(size).max(1e-4)).clamp(0, o.mipCap)
+    lod = log2(max(fwidth(uv().x), fwidth(uv().y)).mul(size).max(1e-4)).clamp(0, o.mipCap)
     tex = texture(o.atlas, uv()).level(lod)
   }
   const tint = mix(vec3(o.tintA.r, o.tintA.g, o.tintA.b), vec3(o.tintB.r, o.tintB.g, o.tintB.b), tf.iB.z)
@@ -701,8 +674,7 @@ function vegMaterial(o: VegMaterialOpts) {
   const d = ign(screenCoordinate.xy)
   let keep: N = d.greaterThanEqual(vFade)
   if (o.fadeIn) keep = keep.and(d.lessThan(varying(smoothstep(o.fadeIn[0], o.fadeIn[1], dist), 'vVegFadeIn')))
-  // (a second dither, decorrelated from the fade's)
-  if (o.hashedAlpha) keep = keep.and(tex.a.greaterThan(ign(screenCoordinate.xy.add(vec2(37.3, 17.9))).mul(0.85).add(0.08)))
+  if (lod) keep = keep.and(tex.a.greaterThan(float(o.alphaTest).div(lod.mul(0.4).add(1))))
   m.maskNode = keep
   return m
 }
@@ -1160,7 +1132,8 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
       layers.push(impostorLayer)
     }
     if (grass && !debugFlag('nograss') && density >= 0.5) {
-      const g = placeGrass(track, density)
+      const G = placeGrass(track, density)
+      const g = G.data
       // the modelled clumps near the camera (each instance packed only while within `near`); beyond,
       // the ground alone
       const near = 9 + 2.5 * Math.min(density, 1.4)
@@ -1197,21 +1170,22 @@ export function Vegetation({ track, heights }: { track: Track; heights: TerrainH
       // where they end, alpha-hashed so its blades keep their cover as the texture's mips average
       // them; lit more like the ground it stands on (its canopy darkening was a dark band at a distance)
       const far = 34 + 14 * Math.min(density, 1.4)
+      const thin: Thin = { near, far, min: 0.33 }
       // (?nograssmid: without it, for comparisons)
-      const gMid = debugFlag('nograssmid') ? new Float32Array(0) : thinPatches(g, 1, 1.15)
+      const gMid = debugFlag('nograssmid') ? new Float32Array(0) : widerPatches(G, 1.15, 1.6)
       layers.push(
         new VegLayer({
           ...opts,
           instances: gMid,
           name: 'grass-mid',
           geometry: grassSubset(grass.geometry, 0.4),
-          material: vegMaterial({ ...common, canopy: { root: 0.86, selfShadow: 0.82 }, hashedAlpha: true, mipCap: 2, widen: 0.6, fadeIn: [near - 3, near], fadeOut: [far - 14, far] }),
+          material: vegMaterial({ ...common, canopy: { root: 0.86, selfShadow: 0.82 }, mipCap: 2, widen: 0.6, thin, fadeIn: [near - 3, near], fadeOut: [far - 14, far] }),
           cell: 12,
           maxDist: far,
           instanceRange: far,
           // every patch where the near clumps end, thinning to a third by the far end (the cards
           // widen as they thin, keeping the cover)
-          keep: (dist) => Math.min(1, Math.max(0.33, 1 - (dist - near) / (far - near))),
+          thin,
         }),
       )
       console.info(`[veg] ${g.length / STRIDE} grass patches (${gMid.length / STRIDE} in the middle distance)`)
