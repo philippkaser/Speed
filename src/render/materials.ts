@@ -39,6 +39,7 @@ import {
   vec3,
 } from 'three/tsl'
 import { getTextures } from './textures'
+import { debugFlag } from '../util/debug'
 import { groundSet, type GroundSet } from './worldAssets'
 import { farTreeShadow, setSunShadowTerm } from './sunShadow'
 import { photoSkyHorizon } from './photoSky'
@@ -211,8 +212,9 @@ export function skidTexture(track: Track) {
   const map = bakeSkidMarks(track)
   const tex = new THREE.DataTexture(map.data, SKID_COLS, map.rows, THREE.RedFormat, THREE.UnsignedByteType)
   tex.magFilter = THREE.LinearFilter
-  tex.minFilter = THREE.LinearMipmapLinearFilter
-  tex.generateMipmaps = true
+  const mips = !debugFlag('skidnomip')
+  tex.minFilter = mips ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter
+  tex.generateMipmaps = mips
   tex.anisotropy = 8
   tex.wrapS = THREE.ClampToEdgeWrapping
   tex.wrapT = THREE.RepeatWrapping
@@ -356,9 +358,10 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
   // its own car's line, many of them well off the racing line; the heaviest crop through the corners
   if (skidTex) {
     const skid = skidMarks(skidTex, s, d, track?.length ?? 1)
-    albedo = mix(albedo, vec3(0.017, 0.017, 0.018), skid.mul(0.85))
-    // smeared rubber: a little glossier than the dusty tarmac either side
-    rough = mix(rough, rough.mul(0.8), skid)
+    albedo = mix(albedo, debugFlag('skiddebug') ? vec3(0.8, 0.02, 0.02) : vec3(0.017, 0.017, 0.018), skid.mul(0.85))
+    // a smear of rubber over the aggregate: rubber's own matte sheen (~0.75), not the polish of the
+    // rubbered line (the line is polished by thousands of passes; a mark is one tyre's deposit)
+    rough = mix(rough, rough.max(0.75), skid)
   }
 
   // marbles: pellets of rubber thrown off line, thickest on the outside of the corners (the dynamic
