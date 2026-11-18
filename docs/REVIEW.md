@@ -164,17 +164,20 @@ the passing scenario, the camera's steadiness and the picture's targets.
   only darken the outside of a corner by about 10 % at a distance.
 - **Skid marks:** the old ones were two analytic tyre tracks either side of the racing line in the
   braking and traction zones; the owner asked for many more, off the ideal line, some on the
-  straights, really messy through the corners. Now a race weekend's worth is baked per track
-  (`src/track/skidMarks.ts`, ~150 ms): ~680 marks, ~1,650 tyre tracks, each on its own car's line
-  (half near the racing line but drifting across it, a third anywhere across the road, the rest on
-  the inside), 40 % more than 2 m off the racing line; lock-ups, slides running wide (one in five to
-  the kerb), wheelspin, weaving and moments on the straights; fresh to faded, broken in places. Seen
-  in captures of a braking zone, the hairpin (from above and at driver height), a fast corner and a
-  straight: dark crossing arcs through the hairpin, fewer and longer ones through the fast corner,
-  marks across the width of the braking zone, a few faint ones on the straight. First drawn a little
-  glossier than the asphalt, they caught the sky against the light and showed as light streaks; now
-  matte (a smear of rubber, roughness ~0.75). The inside of some corners is still fairly clean, and
-  no mark is drawn on a kerb's paint unless the map puts one there.
+  straights, really messy through the corners, and then for more and messier still, in the same
+  material as the other rubber. Now a race weekend's worth is baked per track
+  (`src/track/skidMarks.ts`, ~150 ms): ~1,430 marks, ~2,900 tyre tracks, each on its own car's line
+  (near the racing line but drifting across it, anywhere across the road, or on the inside), half
+  more than 2 m off the racing line; lock-ups (some bending towards the apex), slides running wide
+  (one in five to the kerb, some snaking), short scrubs all over the corners, wheelspin, weaving and
+  moments on the straights; fresh to faded, broken in places. They are one layer with the rubbered
+  line (same darkening, same polish), and the kerb rubber and the live marks share its albedo
+  (0.025) and roughness (0.42). Seen in captures of a braking zone, the hairpin, a fast corner and a
+  straight: the corners and the braking zone covered across their width, marks on the straight. With
+  the sun behind the camera they read dark; against the light the polished rubber reflects the sky
+  and the marks show as bright silvery streaks (a matte version, roughness ~0.75, read dark from
+  every side). The baked marks are fixed for a race: the live marks are a separate technique (decal
+  quads, at most 6,000), and the adaptive rubber map is too coarse (2 m by 0.31 m) to hold a mark.
 - **Effects:** tyre smoke is shaded as a scattering medium and reads as billowing smoke from the chase
   camera, the side and above (in captures from placed cameras the puffs used to face the chase camera
   and showed as slivers: fixed). It is still too uniformly white, without darker undersides. Skid
