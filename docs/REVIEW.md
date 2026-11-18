@@ -162,6 +162,18 @@ the passing scenario, the camera's steadiness and the picture's targets.
   not seen in a capture. 8 seeded races: no contacts, spins or off-tracks, 118 clean overtakes. Larger
   line wander (0.15-0.4 m) cost the GT3 0.7 s a lap alone and put the Aurel into the walls. The marbles
   only darken the outside of a corner by about 10 % at a distance.
+- **Skid marks:** the old ones were two analytic tyre tracks either side of the racing line in the
+  braking and traction zones; the owner asked for many more, off the ideal line, some on the
+  straights, really messy through the corners. Now a race weekend's worth is baked per track
+  (`src/track/skidMarks.ts`, ~150 ms): ~680 marks, ~1,650 tyre tracks, each on its own car's line
+  (half near the racing line but drifting across it, a third anywhere across the road, the rest on
+  the inside), 40 % more than 2 m off the racing line; lock-ups, slides running wide (one in five to
+  the kerb), wheelspin, weaving and moments on the straights; fresh to faded, broken in places. Seen
+  in captures of a braking zone and the hairpin (from above and at driver height): dark
+  crossing arcs through the corners, marks across the width of the braking zone. First drawn a
+  little glossier than the asphalt, they caught the sky against the light and showed as light streaks;
+  now matte (a smear of rubber, roughness ~0.75). The inside of some corners is still fairly clean, and
+  no mark is drawn on a kerb's paint unless the map puts one there.
 - **Effects:** tyre smoke is shaded as a scattering medium and reads as billowing smoke from the chase
   camera, the side and above (in captures from placed cameras the puffs used to face the chase camera
   and showed as slivers: fixed). It is still too uniformly white, without darker undersides. Skid
