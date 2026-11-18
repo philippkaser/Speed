@@ -178,6 +178,18 @@ the passing scenario, the camera's steadiness and the picture's targets.
   and the marks show as bright silvery streaks (a matte version, roughness ~0.75, read dark from
   every side). The baked marks are fixed for a race: the live marks are a separate technique (decal
   quads, at most 6,000), and the adaptive rubber map is too coarse (2 m by 0.31 m) to hold a mark.
+- **Grass:** the owner saw it reaching onto the road, flickering, and asked for a little less of it.
+  Placed across the track at its own point, around corners some patches stood on the paved runoff and
+  8.7 % reached a kerb, the asphalt or a runoff (12 % at the middle distance's width); in captures,
+  tufts on the runoff along a barrier and on the paved strip inside the hairpin. Now each patch is
+  measured from the nearest point of the track (`src/render/grassPlacement.ts`, tested): none, and
+  the captures show both places clean. The middle distance thinned by a count per 12 m cell, so
+  random patches blinked in and out as the camera moved, and its alpha was cut by a screen-fixed
+  dither the TAA's jitter moved the blades over; now each patch shrinks away smoothly at its own
+  rank, and the alpha threshold drops with the mip level instead. The flicker is reasoned from the
+  code; stills cannot show it and it was not seen in motion here. 17 % fewer patches: in the
+  hairpin view 1.60M grass triangles, was 1.88M. Near the road the sward now starts 0.8-1 m in from
+  the kerb's edge, on the soil margin and the turf.
 - **Effects:** tyre smoke is shaded as a scattering medium and reads as billowing smoke from the chase
   camera, the side and above (in captures from placed cameras the puffs used to face the chase camera
   and showed as slivers: fixed). It is still too uniformly white, without darker undersides. Skid
