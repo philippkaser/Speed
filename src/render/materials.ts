@@ -43,6 +43,7 @@ import { groundSet, type GroundSet } from './worldAssets'
 import { farTreeShadow, setSunShadowTerm } from './sunShadow'
 import { photoSkyHorizon } from './photoSky'
 import { RUBBER_HALF, RUBBER_ROW, type Track } from '../track/track'
+import { bakeSkidMarks, SKID_COLS, SKID_HALF } from '../track/skidMarks'
 
 type N = any
 
@@ -199,6 +200,27 @@ export function rubberTexture(track: Track) {
   return { tex, refresh, rows }
 }
 
+/**
+ * The skid marks a race weekend has left (track/skidMarks.ts), baked once into a single-channel map in
+ * track coordinates: across the road (SKID_COLS over +-SKID_HALF m) and along the lap (one row per
+ * ~0.5 m). Mipmapped and anisotropic: seen along the road at a grazing angle, its rows squeeze into a
+ * few pixels.
+ */
+export function skidTexture(track: Track) {
+  const t0 = performance.now()
+  const map = bakeSkidMarks(track)
+  const tex = new THREE.DataTexture(map.data, SKID_COLS, map.rows, THREE.RedFormat, THREE.UnsignedByteType)
+  tex.magFilter = THREE.LinearFilter
+  tex.minFilter = THREE.LinearMipmapLinearFilter
+  tex.generateMipmaps = true
+  tex.anisotropy = 8
+  tex.wrapS = THREE.ClampToEdgeWrapping
+  tex.wrapT = THREE.RepeatWrapping
+  tex.needsUpdate = true
+  console.info(`[track] skid marks baked in ${(performance.now() - t0).toFixed(0)} ms: ${map.tracks} tyre tracks, ${map.offLine} of them well off the racing line`)
+  return tex
+}
+
 // ------------------------------------------------------------------------------------------ road
 
 /**
@@ -236,7 +258,17 @@ function tyreStrokes(s: N, d: N, brake: N, fine = 0.28) {
   return clamp(strokes.sub(0.5).mul(contrast.mul(1.9)).add(0.62 + 0.28 - fine).add(grooves.mul(fine)).add(pulses.mul(0.18)), 0, 1.3)
 }
 
-export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, track?: { length: number }) {
+/**
+ * The baked skid marks at a point of the track (s along the lap, d across it): 0..1, with the tread's
+ * streaks along them (the marks run along the road to within ~15 degrees, so streaks stretched along s).
+ */
+function skidMarks(tex: THREE.Texture, s: N, d: N, length: number) {
+  const k = texture(tex, vec2(d.add(SKID_HALF).div(2 * SKID_HALF), s.div(length))).r
+  const streak = mx_noise_float(vec3(s.mul(0.7), d.mul(16), 3.3)).mul(0.5).add(0.5)
+  return k.mul(mix(float(0.62), float(1.08), streak)).clamp(0, 1)
+}
+
+export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, track?: { length: number }, skidTex?: THREE.Texture) {
   const m = new THREE.MeshStandardNodeMaterial()
   const tr = aTrack()
   const tr2 = attribute('aTrack2', 'vec4')
@@ -320,20 +352,14 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
   // tarmac off it the most matte
   rough = mix(rough.mul(1.08).min(0.95), rough.mul(0.58), rubberAmt)
 
-  // skid marks: pairs of tyre tracks either side of the racing line, wandering, in fragments, where
-  // the cars brake hard and spin their wheels out of slow corners
-  const u = d.sub(racing)
-  const skidZone = clamp(brake.mul(1.6).add(traction.mul(1.3)), 0, 1)
-  const tracks = (o: number, seed: number, w: number) => {
-    const wb = mx_noise_float(vec3(s.mul(0.045), seed, 0)).mul(0.55).add(o)
-    const t0 = exp(u.sub(wb).sub(0.8).div(w).pow(2).negate())
-    const t1 = exp(u.sub(wb).add(0.8).div(w).pow(2).negate())
-    const frag = smoothstep(0.0, 0.45, mx_noise_float(vec3(s.mul(0.06), seed * 1.7, 4.4)))
-    return t0.add(t1).mul(frag)
+  // skid marks: a race weekend's lock-ups, slides, wheelspin and moments (track/skidMarks.ts), each on
+  // its own car's line, many of them well off the racing line; the heaviest crop through the corners
+  if (skidTex) {
+    const skid = skidMarks(skidTex, s, d, track?.length ?? 1)
+    albedo = mix(albedo, vec3(0.017, 0.017, 0.018), skid.mul(0.85))
+    // smeared rubber: a little glossier than the dusty tarmac either side
+    rough = mix(rough, rough.mul(0.8), skid)
   }
-  const skid = clamp(tracks(0, 2.2, 0.12).add(tracks(0.45, 6.1, 0.1).mul(0.7)), 0, 1).mul(skidZone).mul(0.75)
-  albedo = albedo.mul(float(1).sub(skid.mul(0.6)))
-  rough = mix(rough, rough.mul(0.82), skid)
 
   // marbles: pellets of rubber thrown off line, thickest on the outside of the corners (the dynamic
   // track's map; without it, near the edges in the braking and traction zones)
@@ -460,7 +486,7 @@ export function runoffMaterial() {
  * profile in the shading, the paint chipped at the edges of the blocks, black rubber where the cars
  * ride over the inner half, grass and dirt thrown onto the outer edge.
  */
-export function kerbMaterial(rubber?: { tex: THREE.Texture; rows: number }) {
+export function kerbMaterial(rubber?: { tex: THREE.Texture; rows: number }, skid?: { tex: THREE.Texture; length: number }) {
   const m = new THREE.MeshStandardNodeMaterial()
   const tr = aTrack()
   const u = tr.x,
@@ -485,7 +511,9 @@ export function kerbMaterial(rubber?: { tex: THREE.Texture; rows: number }) {
   const laid = rubber
     ? smoothstep(0.1, 0.6, texture(rubber.tex, vec2(dk.add(RUBBER_HALF).div(2 * RUBBER_HALF), s.div(RUBBER_ROW).div(rubber.rows))).r).mul(tyreStrokes(s, dk, float(0), 0.04))
     : float(0)
-  const rub = max(smoothstep(0.45, 0.0, u).mul(n).mul(0.3), laid.mul(0.9)).clamp(0, 0.92)
+  // and the skid marks of the cars that slid or locked up over them
+  const marks = skid ? skidMarks(skid.tex, s, dk, skid.length).mul(0.85) : float(0)
+  const rub = max(max(smoothstep(0.45, 0.0, u).mul(n).mul(0.3), laid.mul(0.9)), marks).clamp(0, 0.92)
   col = mix(col, vec3(0.03, 0.03, 0.032), rub)
   const dirt = smoothstep(0.75, 1.0, u).mul(mx_noise_float(vec3(s.mul(1.3), 5.1, 0)).mul(0.5).add(0.5))
   col = mix(col, vec3(0.07, 0.06, 0.035), dirt.mul(0.6))

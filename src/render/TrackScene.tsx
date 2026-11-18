@@ -2,7 +2,7 @@ import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three/webgpu'
 import type { Track } from '../track/track'
-import { rubberTexture, armcoMaterial, concreteWallMaterial, fenceMaterial, kerbMaterial, markingMaterial, mountainMaterial, roadMaterial, runoffMaterial, terrainMaterial, tyreWallMaterial, vergeMaterial } from './materials'
+import { rubberTexture, skidTexture, armcoMaterial, concreteWallMaterial, fenceMaterial, kerbMaterial, markingMaterial, mountainMaterial, roadMaterial, runoffMaterial, terrainMaterial, tyreWallMaterial, vergeMaterial } from './materials'
 import { Scenery } from './Scenery'
 import { debugFlag } from '../util/debug'
 import { buildBarriers, buildKerbs, buildMarkings, buildMountains, buildRoad, buildRunoff, buildTerrain, buildVerge, chunkGrid, coarseGrid, type MountainSet } from './trackGeometry'
@@ -47,8 +47,10 @@ export function TrackScene({ track }: { track: Track }) {
     const t0 = performance.now()
     const rubber = rubberTexture(track)
     g.userData.rubber = rubber
-    g.add(mesh(buildRoad(track), roadMaterial(rubber, track), { name: 'road' }))
-    g.add(mesh(buildKerbs(track), kerbMaterial(rubber), { name: 'kerbs' }))
+    const skid = skidTexture(track)
+    g.userData.skid = skid
+    g.add(mesh(buildRoad(track), roadMaterial(rubber, track, skid), { name: 'road' }))
+    g.add(mesh(buildKerbs(track), kerbMaterial(rubber, { tex: skid, length: track.length }), { name: 'kerbs' }))
     g.add(mesh(buildRunoff(track), runoffMaterial(), { name: 'runoff' }))
     g.add(mesh(buildVerge(track), vergeMaterial(), { name: 'verge' }))
     const markings = mesh(buildMarkings(track, 20), markingMaterial(), { name: 'markings' })
@@ -153,6 +155,7 @@ export function TrackScene({ track }: { track: Track }) {
         const m = o as THREE.Mesh
         m.geometry?.dispose()
       })
+      ;(group.userData.skid as THREE.Texture | undefined)?.dispose()
     },
     [group],
   )
