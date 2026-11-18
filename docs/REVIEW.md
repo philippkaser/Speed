@@ -169,10 +169,11 @@ the passing scenario, the camera's steadiness and the picture's targets.
   (half near the racing line but drifting across it, a third anywhere across the road, the rest on
   the inside), 40 % more than 2 m off the racing line; lock-ups, slides running wide (one in five to
   the kerb), wheelspin, weaving and moments on the straights; fresh to faded, broken in places. Seen
-  in captures of a braking zone and the hairpin (from above and at driver height): dark
-  crossing arcs through the corners, marks across the width of the braking zone. First drawn a
-  little glossier than the asphalt, they caught the sky against the light and showed as light streaks;
-  now matte (a smear of rubber, roughness ~0.75). The inside of some corners is still fairly clean, and
+  in captures of a braking zone, the hairpin (from above and at driver height), a fast corner and a
+  straight: dark crossing arcs through the hairpin, fewer and longer ones through the fast corner,
+  marks across the width of the braking zone, a few faint ones on the straight. First drawn a little
+  glossier than the asphalt, they caught the sky against the light and showed as light streaks; now
+  matte (a smear of rubber, roughness ~0.75). The inside of some corners is still fairly clean, and
   no mark is drawn on a kerb's paint unless the map puts one there.
 - **Effects:** tyre smoke is shaded as a scattering medium and reads as billowing smoke from the chase
   camera, the side and above (in captures from placed cameras the puffs used to face the chase camera
