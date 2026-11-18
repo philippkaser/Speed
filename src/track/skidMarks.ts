@@ -138,94 +138,167 @@ export function bakeSkidMarks(track: Track, density = 1, seed = track.def.seed *
   const carLine = (s0: number, len: number, out: number): ((x: number) => number) => {
     const k = r()
     const slope = (r() - 0.5) * (2.4 / Math.max(len, 20))
-    if (k < 0.5) {
-      const o0 = gauss() * 1.3
+    if (k < 0.42) {
+      const o0 = gauss() * 1.4
       return (x) => racing(s0 + x) + o0 + slope * x
     }
-    if (k < 0.82) {
+    if (k < 0.8) {
       // anywhere across the road, following the road's sweep more than the racing line's
       const hw = track.hw[idx(s0)]
       const target = (r() * 2 - 1) * (hw - 1.1)
       const o0 = target - racing(s0) * 0.4
       return (x) => racing(s0 + x) * 0.4 + o0 + slope * x
     }
-    const o0 = -out * (1.8 + r() * 2.4)
+    const o0 = -out * (1.8 + r() * 2.8)
     return (x) => racing(s0 + x) + o0 + slope * x
   }
+  /** a car's tyre: GT3 fronts ~0.3 m wide, rears ~0.33 */
+  const tyre = (rear: boolean) => (rear ? 0.3 : 0.27) + r() * 0.05
   /** a mark's darkness: fresh ones black, old ones grey */
   const age = () => 0.25 + 0.7 * r() ** 0.7
 
-  for (let s = 0; s < L; s += 2.5) {
-    const i = idx(s)
+  const STEP = 2
+  for (let s0 = 0; s0 < L; s0 += STEP) {
+    const i = idx(s0)
     const out = -Math.sign(track.racingCurv[i]) || 1
-    const pB = 0.55 * brake[i],
-      pC = 0.42 * corner[i],
-      pE = 0.5 * exit[i],
-      pS = 0.022
-    const total = (pB + pC + pE + pS) * density
-    if (r() > total) continue
-    const pick = r() * (pB + pC + pE + pS)
-    if (pick < pB) {
-      // a lock-up into the braking zone: one front tyre or both, along the car's path (its own line)
-      counts.lockup++
-      const len = 6 + r() ** 1.5 * 34
-      const path = carLine(s, len, out)
-      const curve = (r() - 0.5) * 0.8
-      const both = r() < 0.6
-      const a0 = age()
-      for (const side of both ? [-1, 1] : [r() < 0.5 ? -1 : 1])
-        lay({ s0: s, len, width: 0.24, broken: r() * 0.6, d: (x) => path(x) + curve * (x / len) ** 2 + side * AXLE, a: (u) => a0 * (1 - 0.7 * u) * smoothstep(0, 0.04, u) })
-    } else if (pick < pB + pC) {
-      // a slide through the corner: the rear tyres drifting to the outside, the fronts a little
-      // inside them; now and then one that runs right out to the edge
-      counts.slide++
-      const len = 10 + r() * 38
-      const line = carLine(s, len, out)
-      const wide = r() < 0.2
-      const drift = wide ? 3 + r() * 3.5 : 0.3 + r() * 2.6
-      const a0 = age()
-      const fronts = r() < 0.35
-      const path = (x: number) => line(x) + out * drift * smoothstep(0, 1, x / len)
-      for (const side of [-1, 1]) {
-        lay({ s0: s, len, width: 0.26, broken: r() * 0.8, d: (x) => path(x) + side * AXLE, a: (u) => a0 * Math.sin(Math.PI * Math.min(1, u * 1.15)) ** 0.6 })
-        if (fronts) {
-          // the fronts run inside the rears by the slip angle's offset
-          const off = -out * (0.25 + r() * 0.45)
-          lay({ s0: s + 1.2, len: len * 0.8, width: 0.24, broken: r(), d: (x) => path(x + 1.2) + side * AXLE + off, a: (u) => a0 * 0.6 * Math.sin(Math.PI * u) })
+    // marks starting in these 2 m: on average density x (pB + pC + pE + pS)
+    const pB = 0.7 * brake[i],
+      pC = 0.8 * corner[i],
+      pE = 0.7 * exit[i],
+      pS = 0.03
+    const sum = pB + pC + pE + pS
+    for (let m = Math.floor(sum * density + r()); m > 0; m--) {
+      const s = s0 + r() * STEP
+      const pick = r() * sum
+      if (pick < pB) {
+        // a lock-up into the braking zone: one front tyre or both, along the car's path (its own line)
+        counts.lockup++
+        const len = 6 + r() ** 1.5 * 34
+        const path = carLine(s, len, out)
+        // (a car turning in while still locked: the marks bend towards the apex)
+        const curve = r() < 0.3 ? -out * (0.5 + r() * 1.6) : (r() - 0.5) * 0.8
+        const both = r() < 0.6
+        const a0 = age()
+        const w = tyre(false)
+        for (const side of both ? [-1, 1] : [r() < 0.5 ? -1 : 1])
+          lay({
+            s0: s,
+            len,
+            width: w,
+            broken: r() * 0.6,
+            d: (x) => path(x) + curve * (x / len) ** 2 + side * AXLE,
+            a: (u) => a0 * (1 - 0.7 * u) * smoothstep(0, 0.04, u),
+          })
+      } else if (pick < pB + pC) {
+        // a slide through the corner: the rear tyres drifting to the outside, the fronts a little
+        // inside them; now and then one that runs right out to the edge
+        counts.slide++
+        const a0 = age()
+        if (r() < 0.35) {
+          // a scrub: one tyre, a few metres, bending; the corners are covered in them
+          const len = 2 + r() * 7
+          const path = carLine(s, len, out)
+          const bend = (r() - 0.5) * 1.6
+          const side = r() < 0.5 ? -1 : 1
+          lay({
+            s0: s,
+            len,
+            width: tyre(r() < 0.6),
+            broken: r() * 0.3,
+            d: (x) => path(x) + bend * (x / len) ** 2 + side * AXLE,
+            a: (u) => a0 * Math.sin(Math.PI * u) ** 0.5,
+          })
+          continue
         }
-      }
-    } else if (pick < pB + pC + pE) {
-      // wheelspin out of the corner: dark where the power went down, fading; a wobble where the rear
-      // stepped out and was caught
-      counts.wheelspin++
-      const len = 7 + r() * 26
-      const path = carLine(s, len, out)
-      const wob = r() < 0.5 ? 0.15 + r() * 0.45 : 0
-      const lam = 6 + r() * 8
-      const a0 = age()
-      for (const side of [-1, 1])
-        lay({ s0: s, len, width: 0.27, broken: r() * 0.4, d: (x) => path(x) + wob * Math.sin((x / lam) * 2 * Math.PI) * (1 - x / len) + side * AXLE, a: (u) => a0 * (1 - u) ** 1.3 })
-    } else {
-      // the straights: weaving to warm the tyres, a lock-up, wheelspin, a moment
-      counts.straight++
-      const kind = r()
-      const a0 = age() * 0.8
-      if (kind < 0.45) {
-        // (a driver's weave is not a clean sine: two of them, of different swings)
-        const len = 40 + r() * 90
-        const amp = 1.2 + r() * 2.3
-        const lam = 28 + r() * 30,
-          lam2 = 9 + r() * 9,
+        const len = 10 + r() * 38
+        const line = carLine(s, len, out)
+        const wide = r() < 0.22
+        const drift = wide ? 3 + r() * 3.5 : 0.3 + r() * 2.6
+        const fronts = r() < 0.35
+        // a fishtail: the rear stepping out and back, the marks snaking
+        const snake = r() < 0.3 ? 0.25 + r() * 0.6 : 0
+        const lam = 7 + r() * 9,
           ph = r() * 6.28
-        const o0 = (r() - 0.5) * 4
+        const path = (x: number) => line(x) + out * drift * smoothstep(0, 1, x / len)
+        const tail = (x: number) => snake * Math.sin((x / lam) * 2 * Math.PI + ph)
+        const w = tyre(true)
+        for (const side of [-1, 1]) {
+          lay({
+            s0: s,
+            len,
+            width: w,
+            broken: r() * 0.8,
+            d: (x) => path(x) + tail(x) + side * AXLE,
+            a: (u) => a0 * Math.sin(Math.PI * Math.min(1, u * 1.15)) ** 0.6,
+          })
+          if (fronts) {
+            // the fronts run inside the rears by the slip angle's offset
+            const off = -out * (0.25 + r() * 0.45)
+            lay({
+              s0: s + 1.2,
+              len: len * 0.8,
+              width: tyre(false),
+              broken: r(),
+              d: (x) => path(x + 1.2) + side * AXLE + off,
+              a: (u) => a0 * 0.6 * Math.sin(Math.PI * u),
+            })
+          }
+        }
+      } else if (pick < pB + pC + pE) {
+        // wheelspin out of the corner: dark where the power went down, fading; a wobble where the rear
+        // stepped out and was caught
+        counts.wheelspin++
+        const len = 7 + r() * 26
+        const path = carLine(s, len, out)
+        const wob = r() < 0.5 ? 0.15 + r() * 0.45 : 0
+        const lam = 6 + r() * 8
+        const a0 = age()
+        const w = tyre(true)
         for (const side of [-1, 1])
-          lay({ s0: s, len, width: 0.24, broken: 0.3 + r() * 0.6, d: (x) => racing(s + x) * 0.3 + o0 + amp * Math.sin((x / lam) * 2 * Math.PI) + 0.25 * amp * Math.sin((x / lam2) * 2 * Math.PI + ph) + side * AXLE, a: (u) => a0 * 0.55 * Math.sin(Math.PI * u) })
+          lay({
+            s0: s,
+            len,
+            width: w,
+            broken: r() * 0.4,
+            d: (x) => path(x) + wob * Math.sin((x / lam) * 2 * Math.PI) * (1 - x / len) + side * AXLE,
+            a: (u) => a0 * (1 - u) ** 1.3,
+          })
       } else {
-        const len = 5 + r() * 20
-        const o0 = (r() - 0.5) * 7
-        const dir = (r() - 0.5) * 0.08
-        for (const side of r() < 0.5 ? [-1, 1] : [r() < 0.5 ? -1 : 1])
-          lay({ s0: s, len, width: 0.25, broken: r() * 0.5, d: (x) => racing(s + x) * 0.5 + o0 + dir * x + side * AXLE, a: (u) => a0 * (1 - 0.8 * u) })
+        // the straights: weaving to warm the tyres, a lock-up, wheelspin, a moment
+        counts.straight++
+        const kind = r()
+        const a0 = age() * 0.8
+        if (kind < 0.45) {
+          // (a driver's weave is not a clean sine: two of them, of different swings)
+          const len = 40 + r() * 90
+          const amp = 1.2 + r() * 2.3
+          const lam = 28 + r() * 30,
+            lam2 = 9 + r() * 9,
+            ph = r() * 6.28
+          const o0 = (r() - 0.5) * 4
+          for (const side of [-1, 1])
+            lay({
+              s0: s,
+              len,
+              width: 0.28,
+              broken: 0.3 + r() * 0.6,
+              d: (x) => racing(s + x) * 0.3 + o0 + amp * Math.sin((x / lam) * 2 * Math.PI) + 0.25 * amp * Math.sin((x / lam2) * 2 * Math.PI + ph) + side * AXLE,
+              a: (u) => a0 * 0.55 * Math.sin(Math.PI * u),
+            })
+        } else {
+          const len = 5 + r() * 20
+          const o0 = (r() - 0.5) * 7
+          const dir = (r() - 0.5) * 0.08
+          for (const side of r() < 0.5 ? [-1, 1] : [r() < 0.5 ? -1 : 1])
+            lay({
+              s0: s,
+              len,
+              width: 0.29,
+              broken: r() * 0.5,
+              d: (x) => racing(s + x) * 0.5 + o0 + dir * x + side * AXLE,
+              a: (u) => a0 * (1 - 0.8 * u),
+            })
+        }
       }
     }
   }

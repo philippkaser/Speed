@@ -202,6 +202,15 @@ export function rubberTexture(track: Track) {
 }
 
 /**
+ * Tyre rubber laid on the track, one material wherever it lies: the rubbered line and the baked skid
+ * marks on the asphalt (as factors on the asphalt's own albedo and roughness), the rubber on the
+ * kerbs and the marks the cars lay live (render/Effects.tsx). Fresh rubber is nearly black and, worked
+ * into the surface, glossier than what is around it.
+ */
+export const RUBBER_ALBEDO = 0.025
+export const RUBBER_ROUGHNESS = 0.42
+
+/**
  * The skid marks a race weekend has left (track/skidMarks.ts), baked once into a single-channel map in
  * track coordinates: across the road (SKID_COLS over +-SKID_HALF m) and along the lap (one row per
  * ~0.5 m). Mipmapped and anisotropic: seen along the road at a grazing angle, its rows squeeze into a
@@ -347,22 +356,19 @@ export function roadMaterial(rubber?: { tex: THREE.Texture; rows: number }, trac
   // The cars travel along their lines, not along the track: where the racing line crosses the track
   // (into and out of a corner, at up to ~15 degrees) the strokes follow it, so they are laid out across
   // the offset from the racing line (strokes along the track's own direction crossed the marks)
-  const rubberAmt = rl.mul(tyreStrokes(s, d.sub(racing), brake)).clamp(0, 1)
-  // fresh rubber (albedo ~0.03) over grey, dusty aggregate (~0.08): the line reads as a dark band
+  const lineRubber = rl.mul(tyreStrokes(s, d.sub(racing), brake)).clamp(0, 1)
+  // skid marks: a race weekend's lock-ups, slides, scrubs, wheelspin and moments (track/skidMarks.ts),
+  // each on its own car's line, many of them well off the racing line; the heaviest crop through the
+  // corners. The same rubber as the line, laid in one go: one layer, one material
+  const skid = skidTex ? skidMarks(skidTex, s, d, track?.length ?? 1) : float(0)
+  const rubberAmt = float(1).sub(float(1).sub(lineRubber).mul(float(1).sub(skid)))
+  // fresh rubber (albedo ~0.025, RUBBER_ALBEDO) over grey, dusty aggregate (~0.08): the line and the
+  // marks read dark
   albedo = albedo.mul(mix(float(1.15), float(0.38), rubberAmt))
-  // rubber polishes the aggregate: the line is the glossiest part of the road (~0.45), the dusty
-  // tarmac off it the most matte
+  if (skidTex && debugFlag('skiddebug')) albedo = mix(albedo, vec3(0.8, 0.02, 0.02), skid)
+  // rubber polishes the aggregate and fills its pores: the line and the marks are the glossiest parts
+  // of the road (~0.42, RUBBER_ROUGHNESS), the dusty tarmac off them the most matte
   rough = mix(rough.mul(1.08).min(0.95), rough.mul(0.58), rubberAmt)
-
-  // skid marks: a race weekend's lock-ups, slides, wheelspin and moments (track/skidMarks.ts), each on
-  // its own car's line, many of them well off the racing line; the heaviest crop through the corners
-  if (skidTex) {
-    const skid = skidMarks(skidTex, s, d, track?.length ?? 1)
-    albedo = mix(albedo, debugFlag('skiddebug') ? vec3(0.8, 0.02, 0.02) : vec3(0.017, 0.017, 0.018), skid.mul(0.85))
-    // a smear of rubber over the aggregate: rubber's own matte sheen (~0.75), not the polish of the
-    // rubbered line (the line is polished by thousands of passes; a mark is one tyre's deposit)
-    rough = mix(rough, rough.max(0.75), skid)
-  }
 
   // marbles: pellets of rubber thrown off line, thickest on the outside of the corners (the dynamic
   // track's map; without it, near the edges in the braking and traction zones)
@@ -517,14 +523,14 @@ export function kerbMaterial(rubber?: { tex: THREE.Texture; rows: number }, skid
   // and the skid marks of the cars that slid or locked up over them
   const marks = skid ? skidMarks(skid.tex, s, dk, skid.length).mul(0.85) : float(0)
   const rub = max(max(smoothstep(0.45, 0.0, u).mul(n).mul(0.3), laid.mul(0.9)), marks).clamp(0, 0.92)
-  col = mix(col, vec3(0.03, 0.03, 0.032), rub)
+  col = mix(col, vec3(RUBBER_ALBEDO, RUBBER_ALBEDO, RUBBER_ALBEDO * 1.05), rub)
   const dirt = smoothstep(0.75, 1.0, u).mul(mx_noise_float(vec3(s.mul(1.3), 5.1, 0)).mul(0.5).add(0.5))
   col = mix(col, vec3(0.07, 0.06, 0.035), dirt.mul(0.6))
   // gaps between blocks
   const gap = float(1).sub(smoothstep(0.0, 0.012, fs).mul(smoothstep(1.0, 0.988, fs)))
   col = mix(col, col.mul(0.35), gap)
   m.colorNode = col
-  m.roughnessNode = mix(mix(float(0.42), float(0.78), chip), float(0.62), rub)
+  m.roughnessNode = mix(mix(float(0.42), float(0.78), chip), float(RUBBER_ROUGHNESS), rub)
   m.metalnessNode = float(0)
   // rumble ridges across the kerb (deeper than the physics' few millimetres, for the eye) and the
   // block gaps, as a height for the shading

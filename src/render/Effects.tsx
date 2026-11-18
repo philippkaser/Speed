@@ -18,6 +18,7 @@ import { clamp } from '../physics/math'
 import { sunState } from './Environment'
 import { debugFlag } from '../util/debug'
 import { particleScene, particleU, smokeMaterial, sparkMaterial } from './particles'
+import { RUBBER_ALBEDO, RUBBER_ROUGHNESS } from './materials'
 
 const MAX_SMOKE = 1600
 const MAX_SPARKS = 400
@@ -68,8 +69,9 @@ function skidMaterial() {
   const a = attribute('aAlpha', 'float')
   const across = uv().x
   const grooves = mx_noise_float(vec3(across.mul(40), uv().y.mul(0.5), 0)).mul(0.3).add(0.7)
-  m.colorNode = vec3(0.012, 0.012, 0.012)
-  m.roughnessNode = float(0.7)
+  // the same rubber as the track's line, marks and kerbs (materials.ts)
+  m.colorNode = vec3(RUBBER_ALBEDO, RUBBER_ALBEDO, RUBBER_ALBEDO * 1.05)
+  m.roughnessNode = float(RUBBER_ROUGHNESS)
   m.opacityNode = a.mul(grooves).mul(smoothstep(0.0, 0.15, across).mul(smoothstep(1.0, 0.85, across)))
   return m
 }
