@@ -60,7 +60,9 @@ describe('skid marks', () => {
       for (let c = 0; c < SKID_COLS; c++) {
         if (!map.data[row * SKID_COLS + c]) continue
         const d = (c + 0.5) * cell - SKID_HALF
-        const lim = (d > 0 ? track.hw[i] + track.L.kerb[i] : track.hw[i] + track.R.kerb[i]) + 0.35
+        // (a row is half a metre long, the track sampled every metre: where a kerb ends, either sample)
+        const edge = (j: number) => track.hw[j] + (d > 0 ? track.L.kerb[j] : track.R.kerb[j])
+        const lim = Math.max(edge(Math.max(0, i - 1)), edge(i), edge(Math.min(track.n - 1, i + 1))) + 0.35
         if (Math.abs(d) > lim) bad++
       }
     }

@@ -2,7 +2,9 @@
 // track coordinates (s along the lap, d across it) for the road and kerb shaders.
 //
 // Racing is messy. Every car brakes, slides and spins its wheels on a line a little different from the
-// ideal one, and some of them make mistakes. So the marks are not drawn along the racing line:
+// ideal one, and some of them make mistakes. So the marks are not drawn along the racing line: each
+// is on its own car's line (carLine below: near the racing line and drifting across it, anywhere across
+// the road, or on the inside), and they are of every kind:
 //  - lock-ups into the braking zones: one or both front tyres, straight along the car's path, dark
 //    where the tyre stopped and fading as the brakes come off, anywhere from on the line to well off it;
 //  - slides through the corners: arcs that drift towards the outside as the car runs wide, often both
@@ -116,6 +118,8 @@ export function bakeSkidMarks(track: Track, density = 1, seed = track.def.seed *
       const c1 = Math.min(SKID_COLS - 1, Math.ceil((d + half + cell + SKID_HALF) / cell))
       for (let c = c0; c <= c1; c++) {
         const dc = (c + 0.5) * cell - SKID_HALF
+        // (never past the kerb, where the kerb starts or ends within the mark's width)
+        if (Math.abs(dc) > (dc > 0 ? track.hw[i] + track.L.kerb[i] : track.hw[i] + track.R.kerb[i])) continue
         // the tyre's width with soft edges, a little lighter down the middle (the tread's grooves)
         const e = Math.abs(dc - d)
         const p = smoothstep(half + cell * 0.6, half - cell * 0.6, e) * (1 - 0.25 * smoothstep(half * 0.6, 0, e) * 0.5)
@@ -125,16 +129,39 @@ export function bakeSkidMarks(track: Track, density = 1, seed = track.def.seed *
     }
   }
   const racing = (s: number) => track.racing[idx(s)]
+  /**
+   * The line of the car that left a mark, as a lateral position along it (m) from distance x. Most cars
+   * are near the racing line, but not on it, and drifting across it; a good share are somewhere else
+   * entirely (in traffic, side by side, on a lap of their own); some are on the inside, defending or
+   * diving for a pass (`out`: the side of the outside of the corner).
+   */
+  const carLine = (s0: number, len: number, out: number): ((x: number) => number) => {
+    const k = r()
+    const slope = (r() - 0.5) * (2.4 / Math.max(len, 20))
+    if (k < 0.5) {
+      const o0 = gauss() * 1.3
+      return (x) => racing(s0 + x) + o0 + slope * x
+    }
+    if (k < 0.82) {
+      // anywhere across the road, following the road's sweep more than the racing line's
+      const hw = track.hw[idx(s0)]
+      const target = (r() * 2 - 1) * (hw - 1.1)
+      const o0 = target - racing(s0) * 0.4
+      return (x) => racing(s0 + x) * 0.4 + o0 + slope * x
+    }
+    const o0 = -out * (1.8 + r() * 2.4)
+    return (x) => racing(s0 + x) + o0 + slope * x
+  }
   /** a mark's darkness: fresh ones black, old ones grey */
   const age = () => 0.25 + 0.7 * r() ** 0.7
 
   for (let s = 0; s < L; s += 2.5) {
     const i = idx(s)
     const out = -Math.sign(track.racingCurv[i]) || 1
-    const pB = 0.4 * brake[i],
-      pC = 0.24 * corner[i],
-      pE = 0.4 * exit[i],
-      pS = 0.014
+    const pB = 0.55 * brake[i],
+      pC = 0.42 * corner[i],
+      pE = 0.5 * exit[i],
+      pS = 0.022
     const total = (pB + pC + pE + pS) * density
     if (r() > total) continue
     const pick = r() * (pB + pC + pE + pS)
@@ -142,23 +169,23 @@ export function bakeSkidMarks(track: Track, density = 1, seed = track.def.seed *
       // a lock-up into the braking zone: one front tyre or both, along the car's path (its own line)
       counts.lockup++
       const len = 6 + r() ** 1.5 * 34
-      const o0 = gauss() * 1.1
+      const path = carLine(s, len, out)
       const curve = (r() - 0.5) * 0.8
       const both = r() < 0.6
       const a0 = age()
       for (const side of both ? [-1, 1] : [r() < 0.5 ? -1 : 1])
-        lay({ s0: s, len, width: 0.24, broken: r() * 0.6, d: (x) => racing(s + x) + o0 + curve * (x / len) ** 2 + side * AXLE, a: (u) => a0 * (1 - 0.7 * u) * smoothstep(0, 0.04, u) })
+        lay({ s0: s, len, width: 0.24, broken: r() * 0.6, d: (x) => path(x) + curve * (x / len) ** 2 + side * AXLE, a: (u) => a0 * (1 - 0.7 * u) * smoothstep(0, 0.04, u) })
     } else if (pick < pB + pC) {
       // a slide through the corner: the rear tyres drifting to the outside, the fronts a little
       // inside them; now and then one that runs right out to the edge
       counts.slide++
       const len = 10 + r() * 38
-      const o0 = gauss() * 1.4
-      const wide = r() < 0.12
-      const drift = wide ? 3 + r() * 3 : 0.3 + r() * 2.6
+      const line = carLine(s, len, out)
+      const wide = r() < 0.2
+      const drift = wide ? 3 + r() * 3.5 : 0.3 + r() * 2.6
       const a0 = age()
       const fronts = r() < 0.35
-      const path = (x: number) => racing(s + x) + o0 + out * drift * smoothstep(0, 1, x / len)
+      const path = (x: number) => line(x) + out * drift * smoothstep(0, 1, x / len)
       for (const side of [-1, 1]) {
         lay({ s0: s, len, width: 0.26, broken: r() * 0.8, d: (x) => path(x) + side * AXLE, a: (u) => a0 * Math.sin(Math.PI * Math.min(1, u * 1.15)) ** 0.6 })
         if (fronts) {
@@ -172,12 +199,12 @@ export function bakeSkidMarks(track: Track, density = 1, seed = track.def.seed *
       // stepped out and was caught
       counts.wheelspin++
       const len = 7 + r() * 26
-      const o0 = gauss() * 1.0
+      const path = carLine(s, len, out)
       const wob = r() < 0.5 ? 0.15 + r() * 0.45 : 0
       const lam = 6 + r() * 8
       const a0 = age()
       for (const side of [-1, 1])
-        lay({ s0: s, len, width: 0.27, broken: r() * 0.4, d: (x) => racing(s + x) + o0 + wob * Math.sin((x / lam) * 2 * Math.PI) * (1 - x / len) + side * AXLE, a: (u) => a0 * (1 - u) ** 1.3 })
+        lay({ s0: s, len, width: 0.27, broken: r() * 0.4, d: (x) => path(x) + wob * Math.sin((x / lam) * 2 * Math.PI) * (1 - x / len) + side * AXLE, a: (u) => a0 * (1 - u) ** 1.3 })
     } else {
       // the straights: weaving to warm the tyres, a lock-up, wheelspin, a moment
       counts.straight++
