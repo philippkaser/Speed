@@ -41,7 +41,7 @@ import {
 import { getTextures } from './textures'
 import { debugFlag } from '../util/debug'
 import { groundSet, type GroundSet } from './worldAssets'
-import { farTreeShadow, setSunShadowTerm } from './sunShadow'
+import { farTreeShadow, GRASS_CONTACT, setContactStrength, setSunShadowTerm } from './sunShadow'
 import { photoSkyHorizon } from './photoSky'
 import { RUBBER_HALF, RUBBER_ROW, type Track } from '../track/track'
 import { bakeSkidMarks, SKID_COLS, SKID_HALF } from '../track/skidMarks'
@@ -554,6 +554,8 @@ export function vergeMaterial() {
   const grass = grassColor(smoothstep(1, 6, behind).mul(0.6))
   const gtex = texture(tex.gravel.map, uv().mul(8 / 3))
   const w = smoothstep(0.3, 0.7, gravelW)
+  // the grass tufts' contact shadows on the lawn are partial (sunShadow.ts); the gravel takes them in full
+  setContactStrength(m, mix(float(GRASS_CONTACT), float(1), w))
   // mowing stripes: 2.5 m bands along the track, alternating light and dark (the 3D grass standing on
   // them carries the same tone, Vegetation.tsx placeGrass)
   const stripe = smoothstep(-0.3, 0.3, sin(behind.mul(Math.PI / 2.5)))
@@ -652,6 +654,8 @@ export function terrainMaterial() {
   const m = new THREE.MeshStandardNodeMaterial()
   // beyond the shadow cascades, the distant forests' shadows on the ground (sunShadow.ts)
   setSunShadowTerm(m, farTreeShadow())
+  // grass grows on it: the tufts' contact shadows are partial
+  setContactStrength(m, GRASS_CONTACT)
   // forest floor (leaf litter in the canopy's shade) exactly where the trees stand: aTrack.y is the
   // canopy cover baked from the tree placement (scenery/forest.ts)
   const tr = aTrack()

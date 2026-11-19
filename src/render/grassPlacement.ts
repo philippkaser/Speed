@@ -97,10 +97,11 @@ export function placeGrass(track: Track, density: number): GrassPatches {
         rooms.push(Math.min(room, GRASS_ROOM))
       }
       // the sward's own edge: the mower leaves a ragged fringe of longer grass whose blades lean over
-      // the worn soil margin up to the kerb or the asphalt, not onto it (no ruler-straight line)
+      // the worn soil margin up to the kerb or the asphalt, not onto it (no ruler-straight line):
+      // narrower tufts, so they can stand closer to it
       if (gravel) continue
-      for (let k = 0; k < 2; k++) {
-        const sc = 0.85 + r() * 0.4
+      for (let k = 0; k < 3; k++) {
+        const sc = 0.55 + r() * 0.35
         const dd = edge + sc * GRASS_REACH + GRASS_GAP + r() * 0.3
         if (side > 0 && sw > -830 && sw < 330 && Math.abs(dd - lane.roadD(sw)) < 7) continue
         if (side > 0 && sw > -270 && sw < 80 && dd > wall - 1) continue

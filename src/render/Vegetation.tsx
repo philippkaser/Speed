@@ -61,7 +61,7 @@ import {
 } from 'three/tsl'
 import { motionTime } from './motionHistory'
 import { csmState, sunState } from './Environment'
-import { cascadesFar, castInNearCascades, farTreeShadow, setSunShadowTerm, setTreeShadows, type TreeShadowCaster } from './sunShadow'
+import { cascadesFar, castInNearCascades, farTreeShadow, GRASS_CONTACT, setContactStrength, setSunShadowTerm, setTreeShadows, type TreeShadowCaster } from './sunShadow'
 import { valueNoise2 } from '../physics/math'
 import { useSettings } from '../state/settings'
 import type { Track } from '../track/track'
@@ -670,6 +670,8 @@ function vegMaterial(o: VegMaterialOpts) {
     const h = tf.w.x.clamp(0, 1)
     m.aoNode = mix(float(o.canopy.root), float(1), smoothstep(0, 0.85, h))
     setSunShadowTerm(m, mix(float(o.canopy.selfShadow), float(1), smoothstep(0.05, 0.9, h)))
+    // the blades shade each other through gaps and translucency, not as solid tufts
+    setContactStrength(m, GRASS_CONTACT)
   }
   const d = ign(screenCoordinate.xy)
   let keep: N = d.greaterThanEqual(vFade)

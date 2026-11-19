@@ -25,7 +25,7 @@
 // shadow), and its centre is snapped to the map's texel grid so it does not shimmer as the car moves.
 import * as THREE from 'three/webgpu'
 import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js'
-import { float, positionView, positionWorld, shadow, smoothstep, texture, uniform } from 'three/tsl'
+import { float, mix, positionView, positionWorld, shadow, smoothstep, texture, uniform } from 'three/tsl'
 import { carShadowNode } from './carShadowAtlas'
 import { contactShadowNode } from './contactShadows'
 
@@ -105,6 +105,20 @@ const farU = {
 export function setSunShadowTerm(material: THREE.Material, term: N) {
   ;(material as { sunShadowNode?: N }).sunShadowNode = term
 }
+
+/**
+ * How much of the screen-space contact shadow a material takes (0..1; 1 by default). The contact
+ * shadows treat whatever is in the depth buffer as solid, some 0.15-0.25 m thick, and block the sun
+ * in full where they find it: right for a kerb's lip, a post or a tyre, but a tuft of grass is a few
+ * thin, translucent blades with gaps between them, and every tuft cast a solid black blob on the ground
+ * under it. Grass and the ground it grows on take part of it.
+ */
+export function setContactStrength(material: THREE.Material, k: number | N) {
+  ;(material as { contactStrength?: number | N }).contactStrength = k
+}
+
+/** what grass (and the ground under it) takes of the contact shadows */
+export const GRASS_CONTACT = 0.4
 
 /** The distant trees' shadow at this fragment (1 within the cascades' range): for far receivers. */
 export const farTreeShadow = (): N => farShadowNode
@@ -192,7 +206,9 @@ export class SunShadowNode extends CSMShadowNode {
     const heroShadowNode = atlasState.on ? carShadowNode : heroMapNode
     // (the distant trees' map is not here: only the far receivers sample it, see farTreeShadow; every
     // texture here is bound in every lit material, and WebGPU allows 16 per shader stage)
-    let all = csm.mul(heroShadowNode).mul(contactShadowNode)
+    const k = (builder.material as { contactStrength?: number | N } | null)?.contactStrength
+    const contact = k === undefined ? contactShadowNode : mix(float(1), contactShadowNode, k)
+    let all = csm.mul(heroShadowNode).mul(contact)
     // the material's own sun shadow term, once (materials' receivedShadowNode would be applied by
     // every cascade and by the hero map, i.e. several times over)
     const own = (builder.material as { sunShadowNode?: N } | null)?.sunShadowNode
@@ -202,7 +218,7 @@ export class SunShadowNode extends CSMShadowNode {
     // only, 4 everything but the contact shadows
     const m = shadowDebugMode
     const noContact = own ? csm.mul(heroShadowNode).mul(own) : csm.mul(heroShadowNode)
-    return m.equal(1).select(heroShadowNode, m.equal(2).select(csm, m.equal(3).select(contactShadowNode, m.equal(4).select(noContact, all))))
+    return m.equal(1).select(heroShadowNode, m.equal(2).select(csm, m.equal(3).select(contact, m.equal(4).select(noContact, all))))
   }
 }
 
