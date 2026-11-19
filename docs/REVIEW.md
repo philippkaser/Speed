@@ -188,8 +188,11 @@ the passing scenario, the camera's steadiness and the picture's targets.
   dither the TAA's jitter moved the blades over; now each patch shrinks away smoothly at its own
   rank, and the alpha threshold drops with the mip level instead. The flicker is reasoned from the
   code; stills cannot show it and it was not seen in motion here. 17 % fewer patches: in the
-  hairpin view 1.60M grass triangles, was 1.88M. Near the road the sward now starts 0.8-1 m in from
-  the kerb's edge, on the soil margin and the turf.
+  hairpin view 1.60M grass triangles, was 1.88M. Near the road narrower fringe tufts stand 0.45-0.6 m
+  from the kerb or the asphalt. The owner then asked whether the grass cast hard black shadows: it
+  did, through the screen-space contact shadows (each tuft a solid, near-black blob; with them off,
+  the tufts lit green). Grass, lawns and terrain now take 40 % of them: in captures the tufts keep
+  some shading at their roots, without the blobs.
 - **Effects:** tyre smoke is shaded as a scattering medium and reads as billowing smoke from the chase
   camera, the side and above (in captures from placed cameras the puffs used to face the chase camera
   and showed as slivers: fixed). It is still too uniformly white, without darker undersides. Skid
