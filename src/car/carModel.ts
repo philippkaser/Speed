@@ -309,8 +309,9 @@ type UNum = ReturnType<typeof _uNum>
 
 /**
  * Headlights: a dark chrome reflector under the lens, the lamp a slanted band (bodies.ts classify):
- * an LED daytime-running strip along the band's upper edge and a projector lens in its outer half,
- * both following the lamp's own slant (a strip along a fixed line ran out of the lamp onto its edge).
+ * an LED daytime-running strip along the band's upper edge and a projector (a dark glass lens in a
+ * chrome ring) in its outer half, both following the lamp's own slant (a strip along a fixed line
+ * ran out of the lamp onto its edge; a lit projector read as a white blob by day).
  */
 function headlightMaterial(emissive: UNum, hl: BodyDef['headlight']) {
   const m = new THREE.MeshPhysicalNodeMaterial({ color: 0x14161a, metalness: 0.9, roughness: 0.12, clearcoat: 1 })
@@ -320,9 +321,15 @@ function headlightMaterial(emissive: UNum, hl: BodyDef['headlight']) {
   const span = hl.yMax - hl.yMin
   const yc = u.mul(0.35 * span).add(hl.yMin + 0.35 * span)
   const strip = smoothstep(0.012, 0.006, abs(p.y.sub(yc.add(0.18 * span))))
+  // the projector: by day a dark glass lens in a chrome ring (only the strip is lit)
   const pu = u.sub(0.72).mul(hl.xMax - hl.xMin)
-  const projector = smoothstep(0.05, 0.04, pu.mul(pu).add(p.y.sub(yc).mul(p.y.sub(yc))).sqrt())
-  m.emissiveNode = vec3(0.85, 0.9, 1.0).mul(emissive).mul(strip.add(projector.mul(0.6)))
+  const pr = pu.mul(pu).add(p.y.sub(yc).mul(p.y.sub(yc))).sqrt()
+  const lens = smoothstep(0.03, 0.027, pr)
+  const ring = smoothstep(0.038, 0.035, pr).mul(float(1).sub(lens))
+  m.colorNode = mix(mix(vec3(0.075, 0.08, 0.09), vec3(0.62, 0.63, 0.65), ring), vec3(0.01, 0.012, 0.015), lens)
+  m.roughnessNode = mix(mix(float(0.12), float(0.08), ring), float(0.03), lens)
+  m.metalnessNode = mix(float(0.9), float(0), lens)
+  m.emissiveNode = vec3(0.85, 0.9, 1.0).mul(emissive).mul(strip)
   // the lens: dust and the odd fly
   const b = triMap('b', p, normalLocal, 1.5)
   m.clearcoatRoughnessNode = mix(float(0.02), float(0.15), smoothstep(0.4, 0.85, b.g))
