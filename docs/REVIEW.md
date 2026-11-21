@@ -204,10 +204,14 @@ the passing scenario, the camera's steadiness and the picture's targets.
   and worn at the block ends; on the procedural Aurel, the clean factory paint now carries brake dust
   around the arches and picked-up rubber on the tread, and the window, lamp and intake outlines, a
   staircase of ~3 cm teeth (each triangle took one material), are clean curves since the triangles
-  along material edges are split. The buildings changed little at 10-30 m (the detail is millimetres;
-  a modern pit building is fairly clean), the start-line paint little at a grazing angle. Not solved:
-  the crowd is flat painted figures and reads as cartoon at any distance; the GT3 models' own textures
-  were not touched.
+  along material edges are split; its headlight, a ragged black patch with a serrated white band,
+  is a dark lamp with its LED strip along the top and a projector lens in a chrome ring. The tyre
+  walls' tyres were tori (smooth doughnuts): now turned from a tyre's section, faded and dusty. The
+  buildings changed little at 10-30 m (the detail is millimetres; a modern pit building is fairly
+  clean), the start-line paint little at a grazing angle. Not solved: the crowd is flat painted
+  figures and reads as cartoon at any distance; tyre stacks stand every 2 m rather than as a bolted,
+  belted wall; the GT3 models' own textures were not touched. One full test run failed one test
+  while captures loaded the machine; two reruns passed 107/107 (not identified).
 - **Effects:** tyre smoke is shaded as a scattering medium and reads as billowing smoke from the chase
   camera, the side and above (in captures from placed cameras the puffs used to face the chase camera
   and showed as slivers: fixed). It is still too uniformly white, without darker undersides. Skid
