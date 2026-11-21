@@ -4,8 +4,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three/webgpu'
 import type { CarEntry } from '../game/game'
 import { game } from '../game/game'
-import { buildCarModel, type CarModel } from '../car/carModel'
-import { buildGltfCar, hasGltfCar, onCarModels, requestCarModel } from '../car/gltfCars'
+import { emptyCarModel, type CarModel } from '../car/carModel'
+import { buildGltfCar, modelFor, onCarModels, requestCarModel } from '../car/gltfCars'
 import { getCar } from '../physics/spec'
 import { registerWheels } from './motionHistory'
 
@@ -21,21 +21,19 @@ function autoAccent(color: string) {
   return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b > 0.35 ? '#141518' : '#e9ebee'
 }
 
-export function CarVisual({ entry, lod = 0 }: { entry: CarEntry; lod?: number }) {
+export function CarVisual({ entry }: { entry: CarEntry; lod?: number }) {
   // this car's detailed model: requested as the car is first drawn (the models in use load first),
-  // swapped in when it arrives
+  // swapped in when it arrives (until then an empty stand-in keeps its place); if it fails to load,
+  // the car takes one of the others
   useMemo(() => entry.model && requestCarModel(entry.model), [entry.model])
-  const [modelsReady, setModelsReady] = useState(() => hasGltfCar(entry.model))
+  const [shown, setShown] = useState(() => modelFor(entry.model))
   useEffect(() => {
-    setModelsReady(hasGltfCar(entry.model))
-    return onCarModels(() => setModelsReady(hasGltfCar(entry.model)))
+    setShown(modelFor(entry.model))
+    return onCarModels(() => setShown(modelFor(entry.model)))
   }, [entry.model])
   const model = useMemo(
-    () =>
-      modelsReady && hasGltfCar(entry.model)
-        ? buildGltfCar(entry.model, getCar(entry.carId), { color: entry.color, accent: entry.accent ?? autoAccent(entry.color) })
-        : buildCarModel(entry.carId, entry.color, lod, { accent: entry.accent, number: entry.number }),
-    [entry.carId, entry.color, lod, entry.accent, entry.number, entry.model, entry.isPlayer, modelsReady],
+    () => (shown ? buildGltfCar(shown, getCar(entry.carId), { color: entry.color, accent: entry.accent ?? autoAccent(entry.color) }) : emptyCarModel(getCar(entry.carId))),
+    [entry.carId, entry.color, entry.accent, entry.isPlayer, shown],
   )
   useEffect(() => {
     // no screen-space AO / GI on the cars (PostFX): its noise would sit on the clear coat's reflections

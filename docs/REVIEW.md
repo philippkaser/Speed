@@ -233,14 +233,8 @@ the passing scenario, the camera's steadiness and the picture's targets.
   under power only, the gear held through the corner. With the lower gears really held, the rear ABS
   had to hold the rear tyres short of their peak and count the cornering load: straight braking
   drifts 0.09 degrees, 250-60 km/h in 112.6 m, was 116.5 m.)
-- **Aurel 660 GT:** its first setup was neutral to oversteering: a lift at 170 km/h in a 250 m corner
-  slid the car 21 degrees, and with 60 % of the braking at the front it swapped ends braking from
-  270 km/h. Brakes 70 % front, the roll stiffness forward, more rear downforce and a differential that
-  locks on the overrun: 2 degrees on the same lift; the AI's two test laps went from 22 s off the track
-  and 9 wall hits to 0.2 s and none. Not solved: over five laps and across driver skills the AI still
-  loses the car about once in two or three laps (fast changes of direction under power or brake, at
-  200 km/h and more). Planning it with less grip, cooler tyres, earlier or later opposite lock, other
-  steering gains and a traction limit ahead of the slip each moved the slides elsewhere without
-  removing them. A race in this car is single-class, so eleven AI drivers have this problem.
+- **Aurel 660 GT:** removed, with the procedurally sculpted car bodies (the owner's call): it had only
+  such a body, and its AI never stopped losing the car about once in two or three laps. Every car is
+  now one of the three GT3 models.
 - **Verification:** SwiftShader only. No frame time on a real GPU, no check of the WebGL2 fallback after
   the vegetation and shadow-atlas changes, no HDR display.

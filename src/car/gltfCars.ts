@@ -203,6 +203,7 @@ class CarLOD extends THREE.LOD {
 /** Models the cars on the track use (requestCarModel): they load first. */
 const wanted = new Set<GltfCarId>()
 const loads = new Map<GltfCarId, Promise<void>>()
+const failed = new Set<GltfCarId>()
 let loader: GLTFLoader | null = null
 
 /** A car uses this model (the session, CarVisual): it starts loading now, before the others. */
@@ -261,7 +262,10 @@ function loadModel(id: GltfCarId): Promise<void> {
     })
     .catch((e) => {
       gltfState.failed = String(e?.message ?? e)
-      console.warn(`[car] detailed car model ${id} unavailable, using procedural bodies:`, e)
+      failed.add(id)
+      console.warn(`[car] detailed car model ${id} unavailable (its cars take another model):`, e)
+      // the others, for its cars to take
+      for (const c of GLTF_CARS) if (c.id !== id) loadModel(c.id)
     })
     .finally(() => {
       for (const l of listeners) l()
@@ -352,6 +356,18 @@ export function gltfCarCredits() {
 
 export function hasGltfCar(id: GltfCarId | undefined): id is GltfCarId {
   return !!id && templates.has(id)
+}
+
+/** A detailed model that has arrived, for a car whose own model is unavailable (failed to load). */
+export function anyGltfCar(): GltfCarId | undefined {
+  return templates.keys().next().value
+}
+
+/** The model a car shows: its own once it has arrived; another one if its own failed to load; none while it loads. */
+export function modelFor(id: GltfCarId | undefined): GltfCarId | undefined {
+  if (hasGltfCar(id)) return id
+  if (!id || failed.has(id)) return anyGltfCar()
+  return undefined
 }
 
 // ------------------------------------------------------------------------------------------------ livery

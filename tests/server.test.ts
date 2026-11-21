@@ -56,7 +56,7 @@ test('lobby -> countdown -> state relay -> results', async () => {
   const wa = await a.wait('welcome')
   const wb = await b.wait('welcome')
   a.send({ type: 'hello', name: 'Alice', carId: 'vanta-gt3', color: '#ff0000' })
-  b.send({ type: 'hello', name: 'Bob', carId: 'aurel-gt', color: '#0000ff' })
+  b.send({ type: 'hello', name: 'Bob', carId: 'vanta-gt3', color: '#0000ff' })
   a.send({ type: 'create', laps: 2, timeOfDay: 17 })
   const r1 = await a.wait('room')
   expect(r1.room.hostId).toBe(wa.id)

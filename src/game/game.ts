@@ -216,8 +216,8 @@ export class Game {
       for (let i = 0; i < cfg.opponents; i++) {
         if (cfg.mode === 'race' && slot === playerSlot) slot++
         const g = gridSlots[slot++] ?? gridSlots[gridSlots.length - 1]
-        // races are single-class (the player's car); the menu attract mode shows a mixed field
-        const carId = cfg.mode === 'race' ? cfg.carId : i % 3 === 2 ? 'aurel-gt' : 'vanta-gt3'
+        // races are single-class (the player's car); the menu's attract mode shows the GT3 field
+        const carId = cfg.mode === 'race' ? cfg.carId : 'vanta-gt3'
         const spec = getCar(carId)
         const v = new Vehicle(spec)
         v.reset(g.x, g.z, g.yaw, this.track)

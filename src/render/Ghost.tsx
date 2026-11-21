@@ -1,17 +1,24 @@
 // Time-trial ghost: replays the best lap as a translucent car.
 import { useFrame } from '@react-three/fiber'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import * as THREE from 'three/webgpu'
 import { abs, dot, float, normalView, positionViewDirection, vec3 } from 'three/tsl'
-import { buildCarModel } from '../car/carModel'
+import { buildGltfCar, modelFor, onCarModels } from '../car/gltfCars'
 import { game } from '../game/game'
+import { getCar } from '../physics/spec'
 
 const _q0 = new THREE.Quaternion(),
   _q1 = new THREE.Quaternion()
 
 export function Ghost() {
   const entry = game.player
-  const model = useMemo(() => (entry ? buildCarModel(entry.carId, '#9fd4ff', 1) : null), [entry])
+  // the player's own model (once it has arrived), drawn as a translucent shell
+  const [shown, setShown] = useState(() => modelFor(entry?.model))
+  useEffect(() => {
+    setShown(modelFor(entry?.model))
+    return onCarModels(() => setShown(modelFor(entry?.model)))
+  }, [entry])
+  const model = useMemo(() => (entry && shown ? buildGltfCar(shown, getCar(entry.carId), { color: '#9fd4ff', accent: '#9fd4ff' }) : null), [entry, shown])
   useEffect(() => {
     if (!model) return
     const mat = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false })
@@ -29,6 +36,13 @@ export function Ghost() {
       }
     })
     model.setVisibleParts({ interior: false })
+    // one level of detail (the model's levels cross-fade through their own materials, replaced here:
+    // all of them would draw on top of each other), the middle one: enough for a translucent shell
+    model.root.traverse((o) => {
+      const lod = /_lod(\d)$/.exec(o.name)
+      if (lod) o.visible = lod[1] === '1'
+      else if (/_fixed$/.test(o.name)) o.visible = false
+    })
     return () => model.dispose()
   }, [model])
 

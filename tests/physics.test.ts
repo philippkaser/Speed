@@ -284,16 +284,6 @@ describe('automatic gearbox (the player\'s car)', () => {
     expect(r.slip).toBeLessThan(10)
   })
 
-  test('the road car does not swing its tail on a lift in a fast corner', () => {
-    // Aurel 660 GT, 250 m radius at 170 km/h (0.9 g, three quarters of its grip), throttle closed with
-    // the steering held: 21 degrees of slide within 3 s with its first setup (neutral roll balance,
-    // little rear downforce, an open differential on the overrun)
-    const r = corner(1, 250, 170, { throttle: 0, brake: 0 })
-    console.log(`${CARS[1].name} lift at 170 km/h: ${r.g0.toFixed(2)} g, body slip +${r.slip.toFixed(1)} deg`)
-    expect(r.g0).toBeGreaterThan(0.8)
-    expect(r.slip).toBeLessThan(5)
-  })
-
   for (const [ci, spec] of CARS.entries()) {
     const top = spec.gears.length
     test(`${spec.name}: takes each gear once through a braking zone, never one up`, () => {

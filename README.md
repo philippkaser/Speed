@@ -16,7 +16,7 @@ Measurement tools: `bun scripts/feel-probe.ts` (drive feel: 18 scenarios through
 
 Asset builds (only needed when the source art in `new assets/` or `src/car/*/source` changes; the results in `public/` are committed): `bun scripts/build-car-models.ts [id]`, `bun scripts/build-world-assets.ts [sky] [ground] [trees] [grass]`.
 
-Useful URL switches: `?team` (straight into a team race), `?hq` (Team HQ), `?drive` (straight into a practice session), `?race`, `?showroom`, `?car=aurel-gt`, `?gt3=amg-gt3|ferrari-296-gt3|mustang-gt3` (the GT3's bodywork), `?q=low|medium|high|ultra`, `?webgl` (force the WebGL2 backend), `?webgpu` (force WebGPU and never fall back), `?autopilot` (AI drives your car).
+Useful URL switches: `?team` (straight into a team race), `?hq` (Team HQ), `?drive` (straight into a practice session), `?race`, `?showroom`, `?gt3=amg-gt3|ferrari-296-gt3|mustang-gt3` (the GT3's bodywork), `?q=low|medium|high|ultra`, `?webgl` (force the WebGL2 backend), `?webgpu` (force WebGPU and never fall back), `?autopilot` (AI drives your car).
 
 Debug switches: `window.__lookSun = true` (turn the camera to the sun, to look at the glare), `window.__camPose = { pos: [x, y, z], look: [x, y, z], fov }` (a fixed camera, for look development and A/B views; `?vegdebug` puts tree positions in `window.__vegDebug.trees` and lets `window.__sunShadow.mode.value` show parts of the sun's shadow: 1 the hero car's map only, 2 the cascades only, 3 the contact shadows only, 4 all but the contact shadows), `?notaa`, `?nocontact`, `window.__wantHdr = true` / `window.__hdrSeq = n` (the next frame / n frames as the camera's exposed linear image, half floats in `window.__hdr` / `window.__hdrs`, for look development), `?aedebug` (the auto exposure's meter reading, target and current exposure in `window.__ae`), `?procsky` (the dynamic sky regardless of the setting), `?notrees`, `?noimpostors`, `?impostorsonly` (impostors at every distance), `?impdebug` (impostor quads: red where coverage fails), `?nograss`, `?showvel` (motion vectors as the blur sees them; spinning wheel parts in blue, calipers in magenta), `?showtiles` (the motion blur's neighbour-max tiles), `?sidecam` / `?sidecam=front|rear|post|heli` (tracking shot alongside the car, a fixed trackside camera placed ahead of the car when `window.__postcam = true` is set, or the broadcast helicopter), `?simonly` (run the game without rendering, for measuring camera and object motion), `?donut` (full lock and full throttle with traction control off, for tyre smoke), `?fxdebug` (the smoke, sparks and skid marks' state in `window.__fx`), `?skiddebug` (the baked skid marks painted red, to see where they lie), `?skidnomip` (the skid map without mipmaps), `?offscreen` (render into a render target, used by the headless tests).
 
@@ -90,12 +90,12 @@ A rigid-body simulation at a fixed **600 Hz**, independent of the frame rate, wi
 
 Measured in `bun test` (flat ground, warm tyres):
 
-| | Vanta R-GT3 (slicks) | Aurel 660 GT (sports tyres) |
-|---|---|---|
-| 0–100 km/h | 3.6 s | 4.2 s |
-| top speed | 281 km/h (gearing) | 323 km/h (drag) |
-| 200–0 km/h | 75 m, 2.4 g peak | 112 m |
-| skidpad (R 60 m) | 1.64 g | 1.14 g |
+| | Vanta R-GT3 (slicks) |
+|---|---|
+| 0–100 km/h | 3.6 s |
+| top speed | 281 km/h (gearing) |
+| 200–0 km/h | 75 m, 2.4 g peak |
+| skidpad (R 60 m) | 1.64 g |
 
 `tests/tyre.test.ts` checks the tyre and kinematics against known physical behaviour: pneumatic trail = a/3 at small slip, aligning-moment peak before the force peak, falling μ and rising peak slip with load, the combined-slip friction circle, low camber stiffness, inner-shoulder heating from negative camber, negative camber gain and a migrating roll centre. `docs/COMPARISON.md` compares SPEED with AC/ACC, iRacing, Forza Motorsport and GT7, area by area.
 
@@ -184,15 +184,7 @@ The G-buffer fits WebGPU's default 32-byte colour-attachment budget, and the ren
   - **Team liveries:** each car recolours the model's livery texture in the shader, mapping the navy base to the team colour and the red accents to the team accent, so logos and decals stay intact. The Mustang's lighter blue stripes become a lighter shade of the team colour.
   - **Level of detail** is chosen by on-screen size: the TV cameras' long lenses get the full model even from far away. The full model to ~30 m (at a 50 degree lens), the simplified one (~100k triangles, 10 draws) to ~220 m, where a car is ~50 px long at 1080p, then the far one (2 draws). A change cross-fades over 0.3 s instead of popping: both levels draw, each where a screen-space dither (interleaved gradient noise, shifted every frame) falls inside its share, the incoming share growing as the outgoing one shrinks; the temporal AA blends the dither into a fade. Shadow maps and reflection probes draw a single level whole. `window.__lodMix = { from, to, t }` holds every car part way through a fade, to look at it.
   - Wheels spin, steer and follow the suspension, discs glow with brake temperature, brake lights respond to the pedal, and there is a driver in team colours.
-  - The other cars keep the procedural bodies below.
-- **Procedural cars** (`src/car/carModel.ts`): bodies are sculpted as **signed distance fields**, meshed with Surface Nets and snapped back onto the exact surface:
-  - lofted tub and greenhouse, smooth-blended fenders, cut wheel arches, intakes, vents and a Kamm tail
-  - triangles are classified into paint, glass, carbon, lights, grille and wheel wells; close up, triangles straddling two materials are split along the edge (twice, ~7 mm steps), so windows, lamps and intakes have clean outlines instead of a staircase of 3 cm teeth
-  - clear-coat metallic-flake paint with a procedural livery and race numbers; the clear coat has orange peel and swirl marks, and the car carries a few laps' worth of dirt: road grime on the lower body, brake dust around the wheels, marbles peppering the panels behind them, stone chips and flies on the nose (matte, on top of the clear coat)
-  - carbon with the weave's relief under a scuffed lacquer, textured trim plastic, smeared glass, headlights with the LED strip and projector following the lamp's shape, exhaust tips blued and golden by heat and sooted at the lip
-  - lathe tyres with sidewall lettering, picked-up rubber and graining on the tread and brake dust on the sidewall, multi-spoke rims and centre locks
-  - brake discs that glow with the simulated brake temperature
-  - airfoil wing, cockpit with a driver and a steering wheel that turns
+  - Every car is one of these three models (the procedurally sculpted bodies and the Aurel 660 GT, which had only such a body, are gone). Until a car's model has arrived it is an empty stand-in that keeps its place; if a model fails to load, its cars take one of the others. The time trial's ghost is the player's own model as a translucent shell.
 - **World**:
   - **photo-scanned surfaces** (Poly Haven): race asphalt, older pit lane asphalt (runoff and pit lane), mown grass and leafy forest floor. `bun scripts/build-world-assets.ts ground` packs each set into a colour map (ambient occlusion baked in, 1024 px) and a data map (normal x/y + roughness at the scan's full 2048 px: the fine relief and the play of roughness in the light are what make the surfaces read as real up close, more than the colour's resolution). In the shaders:
     - two decorrelated samples per surface (the second rotated, scaled and shifted), blended by slow noise with a variance-preserving blend, so the 2–3 m scans never visibly repeat

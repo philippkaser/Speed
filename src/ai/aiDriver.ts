@@ -141,7 +141,7 @@ export class AIDriver {
     this.rebuildProfile()
     vehicle.assists = { abs: true, tc: 2, steering: 0, autoGear: true, stability: false }
     // race cars (sequential box): shift like a racing driver; road cars keep their road schedule
-    // (on the Aurel the racing downshifts put engine braking into a rear that already locks)
+    // (on a road car the racing downshifts put engine braking into a rear that already locks)
     vehicle.racingShift = vehicle.spec.shiftTime <= 0.08
   }
 
@@ -173,7 +173,7 @@ export class AIDriver {
   /** This driver's own line: no two drivers take a corner on exactly the same line. A lateral shift
    *  of the racing line that wanders slowly along the lap (swings of 250-450 m, so a corner keeps its
    *  shape and its speed), 0.08-0.2 m either way, its own for each driver. (0.15-0.4 m cost the GT3
-   *  0.7 s a lap alone and put the marginal Aurel into the walls.) */
+   *  0.7 s a lap alone and put the road car of the time into the walls.) */
   private wanderAmp = -1
   private wanderPh = [0, 0, 0, 0]
   wander(i: number) {
