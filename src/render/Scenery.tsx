@@ -8,7 +8,7 @@ import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo } from 'react'
 import { Vegetation } from './Vegetation'
 import * as THREE from 'three/webgpu'
-import { color, Fn, instanceIndex, mix, step, uniform } from 'three/tsl'
+import { color, fract, Fn, instanceIndex, mix, smoothstep, step, uniform, uv } from 'three/tsl'
 import { game } from '../game/game'
 import type { Track } from '../track/track'
 import type { TerrainHeight } from './trackGeometry'
@@ -20,6 +20,8 @@ import { buildProps, frameDir } from './scenery/props'
 import { signAtlas, signKit, SLOT, SPONSORS } from './scenery/signage'
 import { crowdMesh, type Spectator } from './scenery/crowd'
 import { castInNearCascades } from './sunShadow'
+import { bumpView } from './materials'
+import { breakUpRoughness, detailAt } from './surfaceDetail'
 
 export const gantryLights = uniform(0) // number of lit red pairs (0..5); -1 = green
 
@@ -85,12 +87,22 @@ export function Scenery({ track, heights }: { track: Track; heights: TerrainHeig
     // ---- start lamps on the gantry's light panel: 5 columns x 2 red, plus the green state
     {
       const m = frameDir(track, -3, 0, 0, 1)
-      const lampMat = new THREE.MeshStandardNodeMaterial({ color: 0x050505, roughness: 0.3 })
+      // a polycarbonate lens over a matrix of LEDs: Fresnel rings in its surface, a faint tint when
+      // off, dust and smears on it, the LEDs lit as dots behind it
+      const lampMat = new THREE.MeshStandardNodeMaterial()
       const idx = Fn(() => instanceIndex.toFloat())()
       const col = idx.mod(5)
       const lit = step(col.add(0.5), gantryLights).mul(step(0, gantryLights))
       const green = step(gantryLights, -0.5)
-      lampMat.emissiveNode = mix(color(0, 0, 0), color(14, 0.2, 0.05), lit).add(color(0.2, 10, 1).mul(green))
+      const lu = uv().sub(0.5)
+      const rr = lu.length()
+      const rings = fract(rr.mul(22))
+      const leds = smoothstep(0.32, 0.18, fract(lu.mul(13)).sub(0.5).length()).mul(smoothstep(0.47, 0.44, rr))
+      const dl = detailAt(lu.add(idx.mul(0.37)), 3)
+      lampMat.colorNode = mix(color(0.012, 0.004, 0.004), color(0.06, 0.055, 0.05), smoothstep(0.4, 0.85, dl.smudges).mul(0.5))
+      lampMat.roughnessNode = breakUpRoughness(0.12, dl, { k: 0.2, scratch: 0.45, smudge: 0.8 })
+      lampMat.normalNode = bumpView(rings.mul(0.00025))
+      lampMat.emissiveNode = mix(color(0, 0, 0), color(14, 0.2, 0.05), lit).add(color(0.2, 10, 1).mul(green)).mul(leds.mul(1.6).add(0.12))
       const disc = new THREE.CircleGeometry(0.2, 16)
       disc.rotateY(Math.PI / 2)
       const lamps = new THREE.InstancedMesh(disc, lampMat, 10)

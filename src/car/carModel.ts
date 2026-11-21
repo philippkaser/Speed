@@ -1,12 +1,17 @@
 // Assembles a complete car: SDF-sculpted body, wheels, aero parts, cockpit and driver.
 import * as THREE from 'three/webgpu'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { abs, color, float, fract, max, mix, mx_noise_vec3, normalize, normalView, normalViewGeometry, positionLocal, positionViewDirection, pow, smoothstep, step, texture, uniform, uv, vec2, vec3 } from 'three/tsl'
+import { abs, clamp, color, float, fract, max, mix, mx_noise_vec3, normalize, normalLocal, normalView, normalViewGeometry, positionLocal, positionViewDirection, pow, smoothstep, step, texture, uniform, uv, vec2, vec3 } from 'three/tsl'
 import { getCar, type CarSpec } from '../physics/spec'
 import type { Vehicle } from '../physics/vehicle'
 import { canvasTexture } from '../render/textures'
+import { bumpView } from '../render/materials'
+import { breakUpRoughness, detailAt, detailHeight, triMap } from '../render/surfaceDetail'
 import { type BodyDef, makeBody, Mat, MAT_COUNT } from './bodies'
 import { surfaceNets } from './sdf'
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type N = any
 
 export interface CarModel {
   root: THREE.Group
@@ -136,18 +141,75 @@ export function paintMaterial(base: string, body: BodyDef, num: number, accentCo
   const doorF = smoothstep(0.004, 0.0, abs(p.z.sub(0.62))).mul(step(0.25, p.y)).mul(step(p.y, 0.8)).mul(step(0.75, ax))
   const doorR = smoothstep(0.004, 0.0, abs(p.z.add(body.style === 'coupe' ? 0.75 : 0.5))).mul(step(0.25, p.y)).mul(step(p.y, 0.8)).mul(step(0.75, ax))
   col = mix(col, col.mul(0.15), max(doorF, doorR))
+  // ---- a race car after a few laps (surfaceDetail.ts): the fine detail at ~4 mm a bump (the clear
+  // coat's orange peel, swirl marks and fine scratches from washing), the coarse at ~1 m a tile
+  const nl = normalLocal
+  const fine = triMap('a', p, nl, 4) // grain, mottle, scratch
+  const peel = triMap('c', p, nl, 4).b
+  const coarse = triMap('b', p, nl, 1) // streaks, smudges, chips
+  const spots = triMap('c', p, nl, 1.5) // pits (marbles, chips, bugs)
+  // road grime on the lower body, thickest on the sills and the lower rear, ragged at its top
+  const grimeTop = float(0.32).add(coarse.r.sub(0.5).mul(0.25))
+  const grime = float(1).sub(smoothstep(float(0.08), grimeTop, p.y)).mul(mix(float(0.55), float(1), coarse.r)).mul(0.75)
+  // brake dust: the wheels spray it on the body behind and around them; rubber picked up from the
+  // track (marbles) peppers the panels behind each wheel low down
+  let brakeDust: N = float(0),
+    marbles: N = float(0)
+  for (const w of body.wheels) {
+    const dy = p.y.sub(w.y),
+      dz = p.z.sub(w.z)
+    const r = dy.mul(dy).add(dz.mul(dz)).sqrt()
+    const side = smoothstep(Math.abs(w.x) - 0.35, Math.abs(w.x) - 0.1, ax)
+    const behind = smoothstep(0.15, -0.25, dz)
+    brakeDust = max(brakeDust, smoothstep(w.r + 0.45, w.r + 0.02, r).mul(side).mul(mix(float(0.45), float(1), behind)))
+    const zone = smoothstep(0.0, -0.15, dz.add(w.r)).mul(smoothstep(-1.1, -0.6, dz.add(w.r))).mul(smoothstep(w.y + 0.25, w.y - 0.05, p.y)).mul(side)
+    marbles = max(marbles, zone.mul(smoothstep(0.3, 0.55, spots.r)))
+  }
+  // the nose: stone chips (to the primer) and flies
+  const nose = smoothstep(body.zFront - 0.45, body.zFront - 0.05, p.z).mul(smoothstep(0.1, 0.6, nl.z))
+  const chips = nose.mul(smoothstep(0.45, 0.7, spots.r))
+  const bugs = nose.mul(smoothstep(0.75, 0.95, spots.g)).mul(step(0.6, coarse.g.add(spots.b)))
+  const dirtCol = vec3(0.16, 0.145, 0.12)
+  col = mix(col, dirtCol, grime.mul(0.55))
+  col = mix(col, vec3(0.07, 0.058, 0.045), brakeDust.mul(0.6))
+  col = mix(col, vec3(0.5, 0.5, 0.49), chips.mul(0.85))
+  col = mix(col, vec3(0.04, 0.035, 0.02), bugs.mul(0.8))
+  col = mix(col, vec3(0.02, 0.02, 0.022), marbles)
+  // dirt and the rubber sit on top of the clear coat: matte, no clear coat there
+  const covered = clamp(grime.mul(0.8).add(brakeDust.mul(0.7)).add(marbles).add(bugs), 0, 1)
   m.colorNode = col
   const metallic = c.getHSL({ h: 0, s: 0, l: 0 }).s > 0.2 ? 0.55 : 0.25
-  m.metalnessNode = mix(float(metallic), float(0.1), max(accentMask, numMask))
-  m.roughnessNode = float(0.34)
-  // metallic flakes: high frequency normal perturbation under the clear coat
+  m.metalnessNode = mix(mix(float(metallic), float(0.1), max(accentMask, numMask)), float(0), max(covered, chips))
+  m.roughnessNode = mix(float(0.34), float(0.85), covered)
+  // metallic flakes: high frequency normal perturbation under the clear coat; the marbles stand proud
   const flake = mx_noise_vec3(p.mul(700)).mul(0.055)
-  m.normalNode = normalize(normalView.add(flake.mul(metallic)))
-  // the clear coat itself is smooth (a mirror over the flakes), and reflects like the GT3 models'
-  // (gltfCars.ts): ~2.2x the physical 4% head-on, the exact Fresnel towards grazing angles
-  m.clearcoatNormalNode = normalViewGeometry
+  m.normalNode = bumpView(marbles.mul(0.0008).add(chips.mul(-0.0002)), normalize(normalView.add(flake.mul(metallic))))
+  // the clear coat: a mirror over the flakes, its surface not quite flat (orange peel, ~4 mm bumps a
+  // few microns high: the reflections ripple), swirl marks and fine scratches dulling it in places,
+  // dull where wiped or dirty; it reflects like the GT3 models' (gltfCars.ts): ~2.2x the physical 4%
+  // head-on, the exact Fresnel towards grazing angles
+  m.clearcoatNormalNode = bumpView(peel.sub(0.5).mul(0.000025).sub(fine.b.mul(0.000004)), normalViewGeometry)
+  m.clearcoatRoughnessNode = mix(float(0.03), float(0.12), fine.b.mul(0.8)).add(coarse.g.mul(0.05)).mul(mix(float(0.85), float(1.15), fine.r))
   const nvc = normalViewGeometry.dot(positionViewDirection).abs().clamp(0, 1)
-  m.clearcoatNode = mix(float(2.2), float(1), pow(float(1).sub(nvc), 5))
+  m.clearcoatNode = mix(float(2.2), float(1), pow(float(1).sub(nvc), 5)).mul(float(1).sub(covered))
+  return m
+}
+
+/**
+ * Exhaust tips: stainless steel blued and golden by the heat towards the outlet (temper colours), sooted
+ * black at the lip.
+ */
+function exhaustMaterial(zRear: number) {
+  const m = new THREE.MeshStandardNodeMaterial({ side: THREE.DoubleSide })
+  const p = positionLocal
+  const a = triMap('a', p, normalLocal, 3)
+  // 0 at the root of the tip, 1 at its lip
+  const t = smoothstep(zRear + 0.13, zRear - 0.05, p.z)
+  const temper = mix(mix(vec3(0.62, 0.6, 0.57), vec3(0.6, 0.45, 0.18), smoothstep(0.2, 0.5, t)), vec3(0.22, 0.2, 0.42), smoothstep(0.45, 0.8, t))
+  const soot = smoothstep(0.7, 0.98, t.add(a.g.sub(0.5).mul(0.2)))
+  m.colorNode = mix(temper.mul(mix(float(0.85), float(1.08), a.g)), vec3(0.02, 0.02, 0.02), soot)
+  m.metalnessNode = mix(float(1), float(0), soot)
+  m.roughnessNode = mix(mix(float(0.22), float(0.4), a.r).add(a.b.mul(0.15)), float(0.9), soot)
   return m
 }
 
@@ -160,11 +222,37 @@ function carbonMaterial() {
   m.colorNode = vec3(0.02, 0.021, 0.023).mul(weave.add(0.6))
   m.metalnessNode = float(0.3)
   m.roughnessNode = float(0.38)
+  // the weave's relief under the resin, the resin's own unevenness, and its lacquer scuffed and smeared
+  const q = positionLocal
+  const fine = triMap('a', q, normalLocal, 3)
+  const smear = triMap('b', q, normalLocal, 1).g
+  m.normalNode = bumpView(weave.mul(0.00004))
+  m.clearcoatNormalNode = bumpView(fine.r.sub(0.5).mul(0.00003), normalViewGeometry)
+  m.clearcoatRoughnessNode = mix(float(0.06), float(0.2), fine.b.mul(0.8)).add(smear.mul(0.08))
+  return m
+}
+
+/** Textured black plastic (trim, splitters' edges, mirrors' stalks): grain, scuffs, dust. */
+function trimMaterial() {
+  const m = new THREE.MeshStandardNodeMaterial()
+  const q = positionLocal
+  const a = triMap('a', q, normalLocal, 2)
+  m.colorNode = vec3(0.03, 0.032, 0.034).mul(mix(float(0.85), float(1.2), a.g)).add(smoothstep(0.4, 0.8, a.b).mul(0.02))
+  m.roughnessNode = mix(float(0.42), float(0.62), a.r).add(a.b.mul(0.15))
+  m.metalnessNode = float(0)
+  m.normalNode = bumpView(a.r.sub(0.5).mul(0.0003))
   return m
 }
 
 function glassMaterial() {
-  return new THREE.MeshPhysicalNodeMaterial({ color: 0x050607, metalness: 0, roughness: 0.02, transparent: true, opacity: 0.55, side: THREE.DoubleSide, clearcoat: 1, envMapIntensity: 1.5 })
+  const m = new THREE.MeshPhysicalNodeMaterial({ color: 0x050607, metalness: 0, roughness: 0.02, transparent: true, opacity: 0.55, side: THREE.DoubleSide, clearcoat: 1, envMapIntensity: 1.5 })
+  // smears where it was wiped, dust in its lower corners, flies on the screen
+  const b = triMap('b', positionLocal, normalLocal, 1.5)
+  const spots = triMap('c', positionLocal, normalLocal, 2).r
+  const film = clamp(smoothstep(0.35, 0.85, b.g).mul(0.6).add(smoothstep(0.6, 0.9, b.r).mul(0.3)).add(smoothstep(0.5, 0.8, spots).mul(0.5)), 0, 1)
+  m.roughnessNode = mix(float(0.02), float(0.16), film)
+  m.clearcoatRoughnessNode = mix(float(0.01), float(0.12), film)
+  return m
 }
 
 const _uNum = () => uniform(0)
@@ -196,8 +284,11 @@ function grilleMaterial() {
   const m = new THREE.MeshStandardNodeMaterial()
   const p = positionLocal.mul(70)
   const hex = smoothstep(0.35, 0.45, abs(fract(p.x).sub(0.5)).add(abs(fract(p.y.add(p.z)).sub(0.5))))
-  m.colorNode = mix(vec3(0.01, 0.01, 0.012), vec3(0.06, 0.06, 0.065), hex)
-  m.roughnessNode = float(0.6)
+  const a = triMap('a', positionLocal, normalLocal, 2)
+  m.colorNode = mix(vec3(0.01, 0.01, 0.012), vec3(0.06, 0.06, 0.065), hex).mul(mix(float(0.8), float(1.25), a.g))
+  m.roughnessNode = mix(float(0.5), float(0.72), a.r)
+  // the mesh's relief
+  m.normalNode = bumpView(hex.mul(0.0015))
   return m
 }
 
@@ -249,8 +340,18 @@ function tyreMaterial() {
   const label = texture(sidewallTex.tex, vec2(uv().x.mul(2), mix(v.mul(4.4).sub(0.2), float(1).sub(v).mul(4.4).sub(0.2), step(0.5, v)))).r
   const lettering = label.mul(side).mul(smoothstep(0.05, 0.12, v).mul(smoothstep(0.95, 0.88, v)))
   const tread = float(1).sub(side)
-  m.colorNode = mix(vec3(0.028, 0.028, 0.03), vec3(0.6, 0.6, 0.6), lettering.mul(0.85))
-  m.roughnessNode = mix(float(0.86), float(0.62), tread.mul(0.8)).sub(lettering.mul(0.2))
+  // the rubber's grain; on the tread, rubber picked up from the track (marbles) and the graining of a
+  // worked slick; brake dust greying the sidewall near the rim
+  const d = detailAt(vec2(uv().x.mul(2.1), v.mul(0.3)), 2)
+  const pickup = smoothstep(0.35, 0.6, d.pits).mul(tread)
+  const graining = smoothstep(0.55, 0.85, detailAt(vec2(uv().x.mul(2.1), v.mul(0.3).mul(6))).streaks).mul(tread)
+  const dustNear = smoothstep(0.3, 0.12, abs(v.sub(0.5)).sub(0.38).abs()).mul(side)
+  let col: N = mix(vec3(0.028, 0.028, 0.03), vec3(0.6, 0.6, 0.6), lettering.mul(0.85)).mul(mix(float(0.85), float(1.15), d.grain))
+  col = mix(col, vec3(0.06, 0.052, 0.045), dustNear.mul(0.5).mul(float(1).sub(lettering)))
+  col = mix(col, vec3(0.018, 0.018, 0.02), pickup)
+  m.colorNode = col
+  m.roughnessNode = breakUpRoughness(mix(float(0.86), float(0.62), tread.mul(0.8)).sub(lettering.mul(0.2)).add(graining.mul(0.12)), d, { k: 0.1 })
+  m.normalNode = bumpView(detailHeight(d, { grain: 0.0004 }).add(pickup.mul(0.0012)).sub(graining.mul(0.0003)))
   return m
 }
 
@@ -390,7 +491,7 @@ export function buildCarModel(carId: string, paint: string, lod = 0, livery?: Li
   const headU = uniform(3.5)
   const tailU = uniform(0.7)
   const num = livery?.number ?? numberSeq++ % 99
-  const trimMat = new THREE.MeshStandardNodeMaterial({ color: 0x08090a, roughness: 0.45, metalness: 0.1 })
+  const trimMat = trimMaterial()
   const wellMat = new THREE.MeshStandardNodeMaterial({ color: 0x030303, roughness: 0.95 })
   const carbon = carbonMaterial()
   const materials: THREE.Material[] = []
@@ -475,7 +576,7 @@ export function buildCarModel(carId: string, paint: string, lod = 0, livery?: Li
     pipe.translate(x, y, body.zRear + 0.04)
     exGeo.push(pipe)
   }
-  const exMesh = new THREE.Mesh(strip(exGeo), new THREE.MeshStandardNodeMaterial({ color: 0x2a2620, metalness: 1, roughness: 0.35, side: THREE.DoubleSide }))
+  const exMesh = new THREE.Mesh(strip(exGeo), exhaustMaterial(body.zRear))
   bodyGroup.add(exMesh)
   // exhaust flames
   const flameU = uniform(0)

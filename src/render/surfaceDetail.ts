@@ -72,6 +72,21 @@ export function detailTri(pos: N, n: N, scale = 1): Detail {
   }
 }
 
+/**
+ * One detail map ('a': grain, mottle, scratch; 'b': streaks, smudges, chips; 'c': pits, spangle, peel)
+ * sampled triplanar: three samples instead of detailTri's twelve, for what needs only a few channels.
+ */
+export function triMap(map: 'a' | 'b' | 'c', pos: N, n: N, scale = 1): N {
+  const t = detailMaps()[map]
+  const w0: N = (abs(n) as N).pow(4)
+  const w: N = w0.div(w0.x.add(w0.y).add(w0.z).max(1e-4))
+  const o = map === 'a' ? 0 : map === 'b' ? 0.31 : 0.67
+  return texture(t, vec2(pos.z, pos.y).mul(scale).add(o))
+    .mul(w.x)
+    .add(texture(t, vec2(pos.x, pos.z).mul(scale).add(o + 0.41)).mul(w.y))
+    .add(texture(t, vec2(pos.x, pos.y).mul(scale).add(o + 0.13)).mul(w.z))
+}
+
 /** Worn areas for a wear amount (0: none, ~0.3: well used, 0.6: battered), with a sharp but anti-aliased edge. */
 export function wearMask(d: Detail, amount: N | number, edge = 0.025): N {
   const t = float(1).sub(amount)
