@@ -307,17 +307,25 @@ function glassMaterial() {
 const _uNum = () => uniform(0)
 type UNum = ReturnType<typeof _uNum>
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const body_hl_y = (z: any) => float(0.56).sub(z.sub(2.0).mul(0.25))
-
-function headlightMaterial(emissive: UNum) {
+/**
+ * Headlights: a dark chrome reflector under the lens, the lamp a slanted band (bodies.ts classify):
+ * an LED daytime-running strip along the band's upper edge and a projector lens in its outer half,
+ * both following the lamp's own slant (a strip along a fixed line ran out of the lamp onto its edge).
+ */
+function headlightMaterial(emissive: UNum, hl: BodyDef['headlight']) {
   const m = new THREE.MeshPhysicalNodeMaterial({ color: 0x14161a, metalness: 0.9, roughness: 0.12, clearcoat: 1 })
   const p = positionLocal
-  // LED strip DRL + projector
-  // reflector housing with an LED daytime-running strip along the top edge
-  const strip = smoothstep(0.02, 0.012, abs(p.y.sub(body_hl_y(p.z))))
-  const projector = smoothstep(0.045, 0.035, p.x.abs().sub(0.62).abs().add(p.y.sub(0.5).abs()))
+  const ax = abs(p.x)
+  const u = ax.sub(hl.xMin).div(hl.xMax - hl.xMin).clamp(0, 1)
+  const span = hl.yMax - hl.yMin
+  const yc = u.mul(0.35 * span).add(hl.yMin + 0.35 * span)
+  const strip = smoothstep(0.012, 0.006, abs(p.y.sub(yc.add(0.18 * span))))
+  const pu = u.sub(0.72).mul(hl.xMax - hl.xMin)
+  const projector = smoothstep(0.05, 0.04, pu.mul(pu).add(p.y.sub(yc).mul(p.y.sub(yc))).sqrt())
   m.emissiveNode = vec3(0.85, 0.9, 1.0).mul(emissive).mul(strip.add(projector.mul(0.6)))
+  // the lens: dust and the odd fly
+  const b = triMap('b', p, normalLocal, 1.5)
+  m.clearcoatRoughnessNode = mix(float(0.02), float(0.15), smoothstep(0.4, 0.85, b.g))
   return m
 }
 
@@ -548,7 +556,7 @@ export function buildCarModel(carId: string, paint: string, lod = 0, livery?: Li
   materials[Mat.Glass] = glassMaterial()
   materials[Mat.Trim] = trimMat
   materials[Mat.Carbon] = carbon
-  materials[Mat.Headlight] = headlightMaterial(headU)
+  materials[Mat.Headlight] = headlightMaterial(headU, body.headlight)
   materials[Mat.Taillight] = taillightMaterial(tailU)
   materials[Mat.WheelWell] = wellMat
   materials[Mat.Grille] = grilleMaterial()

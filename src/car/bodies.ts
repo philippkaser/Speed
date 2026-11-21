@@ -38,6 +38,8 @@ export interface BodyDef {
   style: CarSpec['bodyStyle']
   wing: boolean
   exhausts: [number, number][] // (x, y) at the tail
+  /** the headlights' box (classify's lamp shape is a slanted band within it) */
+  headlight: { zMin: number; yMin: number; yMax: number; xMin: number; xMax: number }
   driverX: number
   eyeY: number
   eyeZ: number
@@ -275,6 +277,7 @@ export function makeBody(spec: CarSpec): BodyDef {
     style: spec.bodyStyle,
     wing: P.wing,
     exhausts: P.exhausts,
+    headlight: P.headlight,
     driverX: P.driverX,
     eyeY: P.eyeY,
     eyeZ: P.eyeZ,
