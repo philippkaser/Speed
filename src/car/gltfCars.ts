@@ -14,9 +14,11 @@ import * as THREE from 'three/webgpu'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { abs, attribute, BRDF_GGX, clearcoatNormalView, diffuseColor, dot, float, Fn, interleavedGradientNoise, materialColor, materialMetalness, max, min, mix, normalView, output, positionViewDirection, pow, screenCoordinate, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
+import { abs, attribute, BRDF_GGX, clamp, clearcoatNormalView, diffuseColor, dot, float, Fn, interleavedGradientNoise, materialColor, materialMetalness, max, min, mix, normalLocal, normalView, normalViewGeometry, output, positionLocal, positionViewDirection, pow, screenCoordinate, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
 import { makeMirrorEnv, mirrorRadiance, type MirrorEnv, type MirrorMaterial } from '../render/mirrorEnv'
 import { HERO_LAYER } from '../render/sunShadow'
+import { bumpView } from '../render/materials'
+import { triMap } from '../render/surfaceDetail'
 import type { CarSpec } from '../physics/spec'
 import type { Vehicle } from '../physics/vehicle'
 import type { CarModel } from './carModel'
@@ -458,7 +460,7 @@ class CarPaintMaterial extends THREE.MeshPhysicalNodeMaterial implements MirrorM
  * Livery recolouring: the model's paint scheme (a navy base with red accents) is remapped to the
  * team's colours by hue, saturation and value, so sponsor logos, numbers and baked shading survive.
  */
-function liveryMaterial(src: THREE.MeshPhysicalMaterial, paint: Meta['paint'], primary: THREE.Color, accent: THREE.Color, mirror: MirrorEnv) {
+function liveryMaterial(src: THREE.MeshPhysicalMaterial, paint: Meta['paint'], primary: THREE.Color, accent: THREE.Color, mirror: MirrorEnv, wear?: Wear) {
   const m = new CarPaintMaterial()
   mirror.materials.push(m)
   m.name = src.name + ':team'
@@ -537,9 +539,79 @@ function liveryMaterial(src: THREE.MeshPhysicalMaterial, paint: Meta['paint'], p
     }
     col = mix(col, (teamB as any).mul(shadeB), accW)
     // (black: see DARKEST)
-    m.colorNode = max(col, vec3(DARKEST))
-  } else m.color.copy(src.color)
+    col = max(col, vec3(DARKEST))
+    m.colorNode = wear ? raceWear(m, col, wear) : col
+  } else {
+    m.color.copy(src.color)
+    if (wear) m.colorNode = raceWear(m, vec3(src.color.r, src.color.g, src.color.b), wear)
+  }
   return { material: m, teamA, teamB }
+}
+
+/** What a car's paint has picked up (raceWear): where its wheels are, and how dirty it is. */
+interface Wear {
+  wheels: Meta['wheels']
+  /** the nose (model space z) */
+  zFront: number
+  /** 0..1: this car's share of dirt; and an offset so no two cars carry the same marks */
+  dirt: number
+  seed: number
+}
+
+/**
+ * A race car after some laps, on its paint (model space: the models are baked to metres, +z forward,
+ * ground at y = 0): road grime on the lower body, thickest on the sills and behind the wheels, ragged
+ * at its top; brake dust around the wheel arches; marbles (rubber the tyres picked up) peppering the
+ * panels behind each wheel; flies and stone chips on the nose. The dirt sits on the clear coat: matte
+ * where it lies. The clear coat itself is not a perfect mirror: orange peel (a few microns over ~4 mm,
+ * the reflections ripple), swirl marks and fine scratches from washing, smears where it was wiped.
+ * Returns the base colour; sets the clear coat's strength, roughness and normal.
+ */
+function raceWear(m: THREE.MeshPhysicalNodeMaterial, col: any, w: Wear): any {
+  const p: any = positionLocal.add(vec3(w.seed * 3.7, 0, w.seed * 1.3))
+  const pos: any = positionLocal
+  const nl: any = normalLocal
+  const fine = triMap('a', p, nl, 4) // grain, mottle, scratch
+  const peel = triMap('c', p, nl, 4).b
+  const coarse = triMap('b', p, nl, 1) // streaks, smudges, chips
+  const spots = triMap('c', p, nl, 1.5) // pits: marbles, chips, flies
+  const ax = abs(pos.x)
+  // road grime: the lower body, more on dirtier cars, its top ragged
+  const grimeTop = float(0.2 + 0.18 * w.dirt).add(coarse.r.sub(0.5).mul(0.2))
+  const grime = float(1).sub(smoothstep(float(0.06), grimeTop, pos.y)).mul(mix(float(0.5), float(1), coarse.r)).mul(0.45 + 0.4 * w.dirt)
+  let brake: any = float(0),
+    marbles: any = float(0)
+  for (const k of ['FL', 'FR', 'RL', 'RR'] as const) {
+    const [wx, wy, wz] = w.wheels[k].centre
+    const r = w.wheels[k].radius
+    const dy = pos.y.sub(wy),
+      dz = pos.z.sub(wz)
+    const d = dy.mul(dy).add(dz.mul(dz)).sqrt()
+    // the panels beside the wheel (outer surfaces), more behind it (the wheel throws it back)
+    const side = smoothstep(Math.abs(wx) - 0.45, Math.abs(wx) - 0.15, ax)
+    const behind = smoothstep(0.1, -0.3, dz)
+    brake = max(brake, smoothstep(r + 0.4, r + 0.03, d).mul(side).mul(mix(float(0.4), float(1), behind)))
+    const zone = smoothstep(0.0, -0.12, dz.add(r)).mul(smoothstep(-0.95, -0.5, dz.add(r))).mul(smoothstep(wy + 0.2, wy - 0.08, pos.y)).mul(side)
+    marbles = max(marbles, zone.mul(smoothstep(0.32, 0.55, spots.r)))
+  }
+  brake = brake.mul(0.35 + 0.4 * w.dirt)
+  const nose = smoothstep(w.zFront - 0.5, w.zFront - 0.05, pos.z).mul(smoothstep(0.15, 0.6, nl.z))
+  const chips = nose.mul(smoothstep(0.5, 0.72, spots.r))
+  const flies = nose.mul(smoothstep(0.78, 0.95, spots.g)).mul(step(0.65, coarse.g.add(spots.b)))
+  let c: any = col
+  c = mix(c, vec3(0.15, 0.135, 0.11), grime.mul(0.6))
+  c = mix(c, vec3(0.06, 0.05, 0.04), brake.mul(0.65))
+  c = mix(c, vec3(0.5, 0.5, 0.49), chips.mul(0.85))
+  c = mix(c, vec3(0.04, 0.035, 0.02), flies.mul(0.8))
+  c = mix(c, vec3(0.02, 0.02, 0.022), marbles)
+  const covered = clamp(grime.mul(0.9).add(brake.mul(0.8)).add(marbles).add(flies), 0, 1)
+  m.clearcoatNode = float(1).sub(covered.mul(0.92))
+  m.clearcoatRoughnessNode = mix(float(0.028), float(0.1), fine.b.mul(0.8))
+    .add(coarse.g.mul(0.04))
+    .mul(mix(float(0.88), float(1.12), fine.r))
+    .add(covered.mul(0.5))
+  m.clearcoatNormalNode = bumpView(peel.sub(0.5).mul(0.00002).sub(fine.b.mul(0.000003)).add(marbles.mul(0.0006)), normalViewGeometry)
+  return c
 }
 
 /**
@@ -708,7 +780,11 @@ export interface GltfCarOptions {
   /** this car gets its own copies of all materials (default: every car does, each carries its own reflection probe) */
   uniqueMaterials?: boolean
   driverColor?: string
+  /** a showroom car: no race dirt */
+  clean?: boolean
 }
+
+let carSerial = 0
 
 export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions): CarModel {
   const tpl = templates.get(id)!
@@ -722,6 +798,9 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
   root.userData.mirror = mirror
   const bodyGroup = new THREE.Group()
   root.add(bodyGroup)
+  // what this car's paint has picked up (raceWear): a share of dirt and marks of its own
+  const seed = (carSerial++ * 0.618034) % 1
+  const wear: Wear | undefined = opts.clean ? undefined : { wheels: meta.wheels, zFront: tpl.zFront, dirt: 0.35 + 0.65 * ((seed * 7.31) % 1), seed }
 
   // per-car materials: livery, brake lights, discs (plus everything when unique)
   const own = new Map<THREE.Material, THREE.Material>()
@@ -737,7 +816,7 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
     let out: THREE.Material = mat
     const name = mat.name ?? ''
     if (name === meta.livery && (mat as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial) {
-      livery = liveryMaterial(mat as THREE.MeshPhysicalMaterial, meta.paint, primary, accent, mirror)
+      livery = liveryMaterial(mat as THREE.MeshPhysicalMaterial, meta.paint, primary, accent, mirror, wear)
       out = livery.material
     } else if (name === 'lod:opaque' || name === 'lod:glass') {
       out = bakedMaterial(name === 'lod:glass', bakedU)
