@@ -613,7 +613,8 @@ function raceWear(m: THREE.MeshPhysicalNodeMaterial, col: any, w: Wear): any {
   c = mix(c, vec3(0.5, 0.5, 0.49), chips.mul(0.85))
   c = mix(c, vec3(0.04, 0.035, 0.02), flies.mul(0.8))
   c = mix(c, vec3(0.02, 0.02, 0.022), marbles)
-  if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('weardebug')) {
+  const dbg = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('weardebug') : null
+  if (dbg !== null && dbg !== 'dark') {
     // ?weardebug: the masks in loud colours (grime red, brake dust green, marbles blue, nose yellow)
     return vec3(grime, brake, marbles).add(vec3(nose, nose, 0).mul(0.5)).mul(2).add(col.mul(0.15))
   }
@@ -624,7 +625,8 @@ function raceWear(m: THREE.MeshPhysicalNodeMaterial, col: any, w: Wear): any {
     .mul(mix(float(0.88), float(1.12), fine.r))
     .add(covered.mul(0.5))
   m.clearcoatNormalNode = bumpView(peel.sub(0.5).mul(0.00002).sub(fine.b.mul(0.000003)).add(marbles.mul(0.0006)), normalViewGeometry)
-  return c
+  // (?weardebug=dark: the full path, its colour darkened: does it reach the screen?)
+  return dbg === 'dark' ? c.mul(0.1) : c
 }
 
 /**
