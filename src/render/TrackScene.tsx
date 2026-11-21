@@ -104,10 +104,42 @@ export function TrackScene({ track }: { track: Track }) {
     // cascade, 1.1 M triangles each), out of the farthest cascade (35 cm texels: a tyre is a texel or
     // two there). Shadow maps and cells far from the camera draw a coarser torus, kept in the same
     // buffers as a second index range (as the mountains do for the probes).
-    const fine = new THREE.TorusGeometry(0.24, 0.1, 8, 16)
-    const coarse = new THREE.TorusGeometry(0.24, 0.1, 5, 10)
+    // a tyre lying flat, turned from its section (radius, height): the bead's hole, the sidewalls
+    // bulging a little, rounded shoulders and a flat tread (a torus read as a smooth doughnut)
+    const section = (pts: [number, number][]) => pts.map(([r, y]) => new THREE.Vector2(r, y))
+    const fine = new THREE.LatheGeometry(
+      section([
+        [0.17, -0.07],
+        [0.2, -0.095],
+        [0.27, -0.106],
+        [0.318, -0.1],
+        [0.338, -0.082],
+        [0.346, -0.045],
+        [0.347, 0.0],
+        [0.346, 0.045],
+        [0.338, 0.082],
+        [0.318, 0.1],
+        [0.27, 0.106],
+        [0.2, 0.095],
+        [0.17, 0.07],
+        [0.165, 0],
+        [0.17, -0.07],
+      ]),
+      20,
+    )
+    const coarse = new THREE.LatheGeometry(
+      section([
+        [0.17, -0.07],
+        [0.3, -0.104],
+        [0.345, -0.06],
+        [0.345, 0.06],
+        [0.3, 0.104],
+        [0.17, 0.07],
+        [0.17, -0.07],
+      ]),
+      10,
+    )
     const tyreGeo = mergeGeometries([fine, coarse])
-    tyreGeo.rotateX(Math.PI / 2)
     const fineRange = [0, fine.index!.count] as const,
       coarseRange = [fine.index!.count, coarse.index!.count] as const
     fine.dispose()
@@ -120,7 +152,7 @@ export function TrackScene({ track }: { track: Track }) {
       castInNearCascades(chunk, 2)
       chunk.onBeforeRender = (_r, scene, camera) => {
         const shadowPass = !!(scene.overrideMaterial as { isShadowPassMaterial?: boolean } | null)?.isShadowPassMaterial
-        // a tyre 60 m away is ~10 px tall at 1080p: the coarse torus is indistinguishable there
+        // a tyre 60 m away is ~10 px tall at 1080p: the coarse section is indistinguishable there
         const far = !shadowPass && chunk.boundingSphere ? _c.setFromMatrixPosition(camera.matrixWorld).distanceTo(chunk.boundingSphere.center) - chunk.boundingSphere.radius > 60 : false
         const [start, count] = shadowPass || far ? coarseRange : fineRange
         tyreGeo.setDrawRange(start, count)
