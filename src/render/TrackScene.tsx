@@ -2,7 +2,7 @@ import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three/webgpu'
 import type { Track } from '../track/track'
-import { rubberTexture, skidTexture, armcoMaterial, concreteWallMaterial, fenceMaterial, kerbMaterial, markingMaterial, mountainMaterial, roadMaterial, runoffMaterial, terrainMaterial, tyreWallMaterial, vergeMaterial } from './materials'
+import { rubberTexture, skidTexture, armcoMaterial, postMaterial, concreteWallMaterial, fenceMaterial, kerbMaterial, markingMaterial, mountainMaterial, roadMaterial, runoffMaterial, terrainMaterial, tyreWallMaterial, vergeMaterial } from './materials'
 import { Scenery } from './Scenery'
 import { debugFlag } from '../util/debug'
 import { buildBarriers, buildKerbs, buildMarkings, buildMountains, buildRoad, buildRunoff, buildTerrain, buildVerge, chunkGrid, coarseGrid, type MountainSet } from './trackGeometry'
@@ -95,7 +95,7 @@ export function TrackScene({ track }: { track: Track }) {
     g.add(fence)
     const postGeo = new THREE.BoxGeometry(0.08, 1.0, 0.12)
     postGeo.translate(0, 0.45, 0)
-    const postMat = new THREE.MeshStandardNodeMaterial({ color: 0x8a8d90, metalness: 0.8, roughness: 0.4 })
+    const postMat = postMaterial()
     const posts = instanced(postGeo, postMat, b.posts, false)
     posts.userData.noProbe = true
     g.add(posts)

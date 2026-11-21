@@ -25,6 +25,7 @@ import {
   normalize,
   normalMap,
   normalView,
+  normalWorld,
   positionView,
   positionWorld,
   sign,
@@ -45,6 +46,7 @@ import { farTreeShadow, GRASS_CONTACT, setContactStrength, setSunShadowTerm } fr
 import { photoSkyHorizon } from './photoSky'
 import { RUBBER_HALF, RUBBER_ROW, type Track } from '../track/track'
 import { bakeSkidMarks, SKID_COLS, SKID_HALF } from '../track/skidMarks'
+import { breakUpRoughness, detailAt, detailHeight, detailTri, dust, weathering, wearMask, type Detail } from './surfaceDetail'
 
 type N = any
 
@@ -751,31 +753,135 @@ export function mountainMaterial() {
 
 // ------------------------------------------------------------------------------------- barriers
 
+/**
+ * Hot-dip galvanised steel (armco, posts, the catch fence): fresh zinc is a metal whose crystals
+ * ("spangle", 1-2 cm) each catch the light a little differently; with the years it dulls under a
+ * grey-white patina (zinc carbonate), patchy, more of it where the rain runs. Scratches cut through
+ * the patina to bright zinc.
+ */
+function galvanised(d: Detail, ageing: N) {
+  const crystal = d.spangle
+  // how far the patina has taken over here (0: fresh zinc)
+  const patina = clamp(ageing.add(d.mottle.sub(0.5).mul(0.7)).add(d.streaks.sub(0.5).mul(0.35)), 0, 1)
+  const bright = smoothstep(0.25, 0.7, d.scratch).mul(0.9)
+  const p = patina.mul(float(1).sub(bright))
+  const zinc = vec3(0.66, 0.68, 0.7).mul(mix(float(0.86), float(1.06), crystal))
+  const oxide = vec3(0.5, 0.51, 0.5).mul(mix(float(0.86), float(1.08), d.mottle)).mul(mix(float(0.96), float(1.03), crystal))
+  return {
+    col: mix(zinc, oxide, p),
+    metal: mix(float(1), float(0.3), p),
+    rough: mix(mix(float(0.2), float(0.4), crystal), breakUpRoughness(0.62, d, { k: 0.15, mottle: 0.12 }), p),
+  }
+}
+
+/** Sparse stretches along the lap where cars have hit or leant on a barrier (0..1), and a hue per stretch for the paint they left. */
+function contactZones(s: N) {
+  const z = smoothstep(0.42, 0.62, mx_noise_float(vec3(s.mul(0.045), 1.7, 0)).mul(0.5).add(0.5))
+  const hue = mx_cell_noise_float(vec3(floor(s.div(9)), 2.3, 0))
+  return { z, hue }
+}
+
+/** Paint transferred from the cars: red, white, blue, yellow or black, by the stretch. */
+function transferPaint(hue: N) {
+  return mix(mix(vec3(0.42, 0.03, 0.03), vec3(0.62, 0.62, 0.6), step(0.3, hue)), mix(vec3(0.04, 0.12, 0.42), vec3(0.62, 0.45, 0.04), step(0.75, hue)), step(0.55, hue))
+}
+
 export function armcoMaterial() {
   const m = new THREE.MeshStandardNodeMaterial({ side: THREE.DoubleSide })
-  const n = mx_noise_float(vec3(uv().x.mul(0.3), uv().y.mul(8), 0)).mul(0.5).add(0.5)
-  m.colorNode = vec3(0.62, 0.63, 0.64).mul(mix(float(0.75), float(1.05), n))
-  m.metalnessNode = float(0.85)
-  m.roughnessNode = mix(float(0.28), float(0.55), n)
+  const s = uv().x,
+    h = uv().y
+  const d = detailAt(vec2(s, h))
+  const g = galvanised(d, float(0.62))
+  let col: N = g.col,
+    rough: N = g.rough,
+    metal: N = g.metal
+  // road spray on the lower beam and the bottom of each: grey-brown film, thickest low down
+  const spray = float(1).sub(smoothstep(0.25, 0.95, h)).mul(mix(float(0.45), float(1), d.streaks)).mul(0.7)
+  col = mix(col, col.mul(vec3(0.62, 0.58, 0.52)), spray)
+  rough = mix(rough, float(0.8), spray.mul(0.6))
+  metal = mix(metal, float(0.1), spray.mul(0.5))
+  // where cars touched: black rubber smeared along the beams, paint left behind, the zinc scraped bright
+  const { z, hue } = contactZones(s)
+  const smear = detailAt(vec2(h.mul(3.1), s.mul(0.07)).add(vec2(0.2, 0.6))).streaks
+  const rubber = smoothstep(0.58, 0.82, smear).mul(z).mul(band(h, 0.35, 0.95))
+  const paintT = smoothstep(0.7, 0.86, smear).mul(z).mul(step(0.5, fract(hue.mul(5.3)))).mul(band(h, 0.4, 0.9))
+  const scrape = smoothstep(0.35, 0.7, d.scratch).mul(z)
+  col = mix(col, vec3(0.66, 0.68, 0.7), scrape.mul(0.8))
+  metal = mix(metal, float(1), scrape.mul(0.8))
+  rough = mix(rough, float(0.3), scrape.mul(0.8))
+  col = mix(col, transferPaint(hue), paintT.mul(0.85))
+  col = mix(col, vec3(0.03, 0.03, 0.032), rubber.mul(0.9))
+  metal = mix(metal, float(0), max(rubber, paintT))
+  rough = mix(rough, float(0.5), max(rubber, paintT))
+  m.colorNode = col
+  m.metalnessNode = metal
+  m.roughnessNode = rough
+  // the zinc's grain and pinholes, and the dents of the hits (broad and shallow)
+  const dents = z.mul(detailAt(vec2(s.mul(0.4), h.mul(0.8))).mottle.sub(0.5)).mul(0.012)
+  m.normalNode = bumpView(detailHeight(d, { grain: 0.00025, pits: 0.0002 }).add(dents))
   return m
 }
 
+/** The armco's posts: galvanised steel, splashed with road dirt. */
+export function postMaterial() {
+  const m = new THREE.MeshStandardNodeMaterial()
+  const d = detailTri(positionWorld, normalWorld)
+  const g = galvanised(d, float(0.7))
+  // (their height above the ground is not known here: the dirt by the mottle and the streaks)
+  const grime = smoothstep(0.45, 0.8, d.streaks).mul(0.35)
+  m.colorNode = mix(g.col, g.col.mul(vec3(0.6, 0.56, 0.5)), grime)
+  m.metalnessNode = g.metal
+  m.roughnessNode = mix(g.rough, float(0.8), grime)
+  m.normalNode = bumpView(detailHeight(d, { grain: 0.0003, pits: 0.0002 }))
+  return m
+}
+
+/**
+ * Concrete wall: the precast concrete's pores and mottling, its upper half painted in 4 m red and
+ * white blocks, the paint chalky and chipped (more on the edges of the blocks and where the cars
+ * rub), black rubber and paint scuffs from contact, rain streaks from the top, grime splashed up from
+ * the road, dust on the top face.
+ */
 export function concreteWallMaterial() {
   const t = getTextures().concrete
   const m = new THREE.MeshStandardNodeMaterial({ side: THREE.DoubleSide })
   const s = uv().x,
     h = uv().y
+  const d = detailAt(vec2(s, h))
   const tex = texture(t.map, vec2(s.div(4), h.div(4)))
-  // painted red/white blocks on the upper half
+  const up = normalWorld.y
+  const wall = float(1).sub(smoothstep(0.5, 0.8, abs(up)))
+  // concrete: the canvas's mottling, pores darker, a little lighter and warmer in patches
+  let conc: N = tex.rgb.mul(mix(float(0.88), float(1.08), d.mottle)).mul(float(1).sub(d.pits.mul(0.45)))
+  // painted blocks on the upper part, the paint worn back at the block ends and near the base of the paint
   const blocks = mod(floor(s.div(4)), 2)
+  const fs = fract(s.div(4))
+  const endWear = smoothstep(0.08, 0.0, min(fs, float(1).sub(fs)))
   const painted = step(0.35, h)
-  const paintCol = mix(vec3(0.6, 0.05, 0.04), vec3(0.8, 0.8, 0.78), blocks)
-  // grime: tyre marks low on the face, rain streaks from the top
-  const grime = mx_noise_float(vec3(s.mul(0.4), h.mul(0.6), 1.9)).mul(0.5).add(0.5)
-  const streak = mx_noise_float(vec3(s.mul(2.3), h.mul(0.15), 4.1)).mul(0.5).add(0.5)
-  const base = mix(tex.rgb, paintCol.mul(tex.rgb.mul(1.6).add(0.3)), painted.mul(0.85))
-  m.colorNode = base.mul(mix(float(1), float(0.72), smoothstep(0.55, 0.85, grime).mul(float(1).sub(smoothstep(0.1, 0.5, h))))).mul(mix(float(0.92), float(1.02), streak))
-  m.roughnessNode = mix(tex.a, float(0.6), painted)
+  const wear = wearMask(d, float(0.12).add(endWear.mul(0.35)).add(smoothstep(0.55, 0.35, h).mul(0.25)))
+  const paintCol = mix(vec3(0.5, 0.045, 0.035), vec3(0.72, 0.72, 0.7), blocks)
+  // chalked (UV-faded) paint in the mottle's high spots: lighter, flatter, rougher
+  const chalk = smoothstep(0.45, 0.85, d.mottle).mul(0.35)
+  const paint = mix(paintCol, paintCol.add(vec3(0.12, 0.12, 0.12)).min(0.8), chalk).mul(mix(float(0.94), float(1.04), d.grain))
+  const paintAmt = painted.mul(float(1).sub(wear))
+  let col: N = mix(conc, paint, paintAmt)
+  let rough: N = mix(breakUpRoughness(0.86, d, { k: 0.1, mottle: 0.06 }), breakUpRoughness(mix(float(0.48), float(0.7), chalk), d, { k: 0.12, scratch: 0.7, smudge: 0.5 }), paintAmt)
+  // contact: rubber and paint scuffs along the lower half, scrapes through the paint
+  const { z, hue } = contactZones(s)
+  const smear = detailAt(vec2(h.mul(3.1), s.mul(0.07)).add(vec2(0.7, 0.1))).streaks
+  const rubber = smoothstep(0.6, 0.85, smear).mul(z).mul(band(h, 0.12, 0.75))
+  const paintT = smoothstep(0.72, 0.88, smear).mul(z).mul(step(0.5, fract(hue.mul(5.3)))).mul(band(h, 0.2, 0.7))
+  col = mix(col, transferPaint(hue), paintT.mul(0.8))
+  col = mix(col, vec3(0.03, 0.03, 0.032), rubber.mul(0.85))
+  rough = mix(rough, float(0.5), max(rubber, paintT))
+  // weathering: streaks down the faces, grime from the road below 0.5 m, dust on the top
+  col = weathering(col, d, { wall, h, streak: 0.16, splashH: 0.5, mottle: 0.04 })
+  const dd = dust(col, rough, d, up, 0.35)
+  m.colorNode = dd.albedo
+  m.roughnessNode = dd.rough
+  m.metalnessNode = float(0)
+  // pores and grain in the concrete, the paint's edge a step above it
+  m.normalNode = bumpView(detailHeight(d, { grain: 0.0008, pits: 0.0018 }).mul(float(1).sub(paintAmt.mul(0.6))).add(paintAmt.mul(0.0003)))
   return m
 }
 
@@ -795,27 +901,58 @@ export function fenceMaterial(part: 'wire' | 'frame' = 'wire') {
   const wire = max(smoothstep(0.88, 0.97, a), smoothstep(0.88, 0.97, b))
   const post = smoothstep(0.96, 0.99, fract(s.div(4)))
   const top = smoothstep(4.05, 4.15, h)
-  m.colorNode = vec3(0.35, 0.36, 0.37)
-  m.metalnessNode = float(0.7)
-  m.roughnessNode = float(0.45)
+  // galvanised, older and duller than the armco
+  const d = detailAt(vec2(s, h))
+  const g = galvanised(d, float(0.75))
+  m.colorNode = g.col.mul(0.85)
+  m.metalnessNode = g.metal
+  m.roughnessNode = g.rough
   const frame = clamp(post.add(top), 0, 1)
   m.opacityNode = solid ? frame : clamp(wire.mul(0.55), 0, 1).mul(frame.oneMinus())
   return m
 }
 
+/**
+ * Road paint (the start line's chequers): worn through to the asphalt's tone in patches, the grain of
+ * the road under it, rubber from the tyres over it; the paint's own beads make it a little glossier.
+ */
 export function markingMaterial() {
   const m = new THREE.MeshStandardNodeMaterial({ polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })
   const checker = uv().x
-  m.colorNode = mix(vec3(0.03, 0.03, 0.03), vec3(0.75, 0.75, 0.73), checker)
-  m.roughnessNode = float(0.6)
+  const pw = positionWorld
+  const d = detailAt(vec2(pw.x, pw.z), 2)
+  const paint = mix(vec3(0.03, 0.03, 0.03), vec3(0.7, 0.7, 0.68), checker).mul(mix(float(0.92), float(1.05), d.grain))
+  const worn = wearMask(d, 0.2)
+  const asphalt = vec3(0.07, 0.07, 0.072).mul(mix(float(0.75), float(1.2), d.grain))
+  const rubber = smoothstep(0.5, 0.85, d.streaks).mul(0.5)
+  let col: N = mix(paint, asphalt, worn)
+  col = mix(col, vec3(0.025, 0.025, 0.027), rubber)
+  m.colorNode = col
+  m.roughnessNode = mix(breakUpRoughness(0.5, d, { k: 0.15 }), float(0.75), worn).mul(mix(float(1), float(0.85), rubber))
+  m.normalNode = bumpView(detailHeight(d, { grain: 0.0012, pits: 0.001 }).add(float(1).sub(worn).mul(0.0004)))
   return m
 }
 
+/**
+ * Tyre walls: old tyres, the rubber faded grey by the sun (more on some than others), dust and
+ * grit settled on their tops and in the treads, scuffed where they were hit.
+ */
 export function tyreWallMaterial() {
   const m = new THREE.MeshStandardNodeMaterial()
-  // worn rubber, some tyres greyer and dustier than others
-  const n = mx_noise_float(positionWorld.mul(2.1)).mul(0.5).add(0.5)
-  m.colorNode = mix(vec3(0.018, 0.018, 0.02), vec3(0.05, 0.048, 0.045), n)
-  m.roughnessNode = mix(float(0.7), float(0.9), n)
+  const pw = positionWorld
+  const d = detailTri(pw, normalWorld, 2)
+  // faded per tyre (the macro field changes over metres: neighbouring tyres differ)
+  const fade = smoothstep(0.3, 0.8, d.macro.mul(0.6).add(d.mottle.mul(0.4)))
+  let col: N = mix(vec3(0.022, 0.022, 0.024), vec3(0.075, 0.072, 0.068), fade).mul(mix(float(0.85), float(1.12), d.grain))
+  let rough: N = breakUpRoughness(mix(float(0.62), float(0.86), fade), d, { k: 0.12, scratch: 0.5 })
+  const dd = dust(col, rough, d, normalWorld.y, 0.55)
+  col = dd.albedo
+  rough = dd.rough
+  // scuffs: lighter, shinier rubber where the surface was torn
+  col = mix(col, col.mul(1.6), smoothstep(0.4, 0.8, d.scratch).mul(0.6))
+  m.colorNode = col
+  m.roughnessNode = rough
+  m.metalnessNode = float(0)
+  m.normalNode = bumpView(detailHeight(d, { grain: 0.0015, pits: 0.001, scratch: 0.0006 }))
   return m
 }

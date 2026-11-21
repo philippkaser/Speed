@@ -105,6 +105,23 @@ export function groundSet(id: 'asphalt' | 'pitlane' | 'grass' | 'leafy'): Ground
   return g
 }
 
+// ------------------------------------------------------------------------------------------ detail
+
+export interface DetailMaps {
+  /** grain, mottle, scratches */
+  a: THREE.Texture
+  /** streaks, smudges, chips */
+  b: THREE.Texture
+  /** pits, spangle, peel */
+  c: THREE.Texture
+}
+let detail: DetailMaps | null = null
+/** The surface detail maps of the procedural materials (scripts/build-detail-maps.ts, surfaceDetail.ts). */
+export function detailMaps(): DetailMaps {
+  if (!detail) detail = { a: tex('detail/detail-a.webp', false, { anisotropy: 8 }), b: tex('detail/detail-b.webp', false, { anisotropy: 8 }), c: tex('detail/detail-c.webp', false, { anisotropy: 8 }) }
+  return detail
+}
+
 // ------------------------------------------------------------------------------------------ vegetation
 
 interface AttrLayout {
@@ -182,6 +199,7 @@ export function loadVegetation() {
 export function loadWorldAssets(): Promise<void> {
   skyTextures()
   for (const id of ['asphalt', 'pitlane', 'grass', 'leafy'] as const) groundSet(id)
+  detailMaps()
   loadVegetation()
   return Promise.all(pending).then(() => undefined)
 }
