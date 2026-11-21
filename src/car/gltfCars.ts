@@ -14,7 +14,7 @@ import * as THREE from 'three/webgpu'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { abs, attribute, BRDF_GGX, clamp, clearcoatNormalView, diffuseColor, dot, float, Fn, interleavedGradientNoise, materialColor, materialMetalness, max, min, mix, normalLocal, normalView, normalViewGeometry, output, positionLocal, positionViewDirection, pow, screenCoordinate, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
+import { abs, attribute, BRDF_GGX, clamp, clearcoatNormalView, diffuseColor, dot, float, Fn, interleavedGradientNoise, materialColor, materialMetalness, max, min, mix, normalize, normalLocal, normalView, normalViewGeometry, output, positionLocal, positionViewDirection, pow, screenCoordinate, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
 import { makeMirrorEnv, mirrorRadiance, type MirrorEnv, type MirrorMaterial } from '../render/mirrorEnv'
 import { HERO_LAYER } from '../render/sunShadow'
 import { bumpView } from '../render/materials'
@@ -548,6 +548,12 @@ function liveryMaterial(src: THREE.MeshPhysicalMaterial, paint: Meta['paint'], p
   return { material: m, teamA, teamB }
 }
 
+/** The drawn mesh's transform to its model's space (adopt sets it per mesh: userData.toModel). */
+const _id4 = new THREE.Matrix4()
+const _id3 = new THREE.Matrix3()
+const modelMatrix: any = uniform(new THREE.Matrix4()).onObjectUpdate((frame: { object: THREE.Object3D | null }) => (frame.object?.userData.toModel as THREE.Matrix4 | undefined) ?? _id4)
+const modelNormal: any = uniform(new THREE.Matrix3()).onObjectUpdate((frame: { object: THREE.Object3D | null }) => (frame.object?.userData.toModelN as THREE.Matrix3 | undefined) ?? _id3)
+
 /** What a car's paint has picked up (raceWear): where its wheels are, and how dirty it is. */
 interface Wear {
   wheels: Meta['wheels']
@@ -568,9 +574,11 @@ interface Wear {
  * Returns the base colour; sets the clear coat's strength, roughness and normal.
  */
 function raceWear(m: THREE.MeshPhysicalNodeMaterial, col: any, w: Wear): any {
-  const p: any = positionLocal.add(vec3(w.seed * 3.7, 0, w.seed * 1.3))
-  const pos: any = positionLocal
-  const nl: any = normalLocal
+  // (the meshes' positions are stored quantized, scaled back by their nodes: each mesh's own transform
+  // to the model's space, set as it is drawn)
+  const pos: any = modelMatrix.mul(vec4(positionLocal, 1)).xyz
+  const nl: any = normalize(modelNormal.mul(normalLocal))
+  const p: any = pos.add(vec3(w.seed * 3.7, 0, w.seed * 1.3))
   const fine = triMap('a', p, nl, 4) // grain, mottle, scratch
   const peel = triMap('c', p, nl, 4).b
   const coarse = triMap('b', p, nl, 1) // streaks, smudges, chips
@@ -871,9 +879,14 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
     return o
   }
   const adopt = (o: THREE.Object3D) => {
+    // each mesh's transform to the model's space (the level's node down to the mesh: the positions
+    // are quantized, their nodes scale them back), for the paint's race wear
+    o.updateMatrixWorld(true)
     o.traverse((x) => {
       const m = x as THREE.Mesh
       if (!m.isMesh) return
+      m.userData.toModel = m.matrixWorld.clone()
+      m.userData.toModelN = new THREE.Matrix3().getNormalMatrix(m.matrixWorld)
       m.material = Array.isArray(m.material) ? m.material.map(swap) : swap(m.material)
     })
     return o
