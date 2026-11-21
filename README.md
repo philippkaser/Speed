@@ -187,9 +187,10 @@ The G-buffer fits WebGPU's default 32-byte colour-attachment budget, and the ren
   - The other cars keep the procedural bodies below.
 - **Procedural cars** (`src/car/carModel.ts`): bodies are sculpted as **signed distance fields**, meshed with Surface Nets and snapped back onto the exact surface:
   - lofted tub and greenhouse, smooth-blended fenders, cut wheel arches, intakes, vents and a Kamm tail
-  - triangles are classified into paint, glass, carbon, lights, grille and wheel wells
-  - clear-coat metallic-flake paint with a procedural livery and race numbers
-  - lathe tyres with sidewall lettering, multi-spoke rims and centre locks
+  - triangles are classified into paint, glass, carbon, lights, grille and wheel wells; close up, triangles straddling two materials are split along the edge (twice, ~7 mm steps), so windows, lamps and intakes have clean outlines instead of a staircase of 3 cm teeth
+  - clear-coat metallic-flake paint with a procedural livery and race numbers; the clear coat has orange peel and swirl marks, and the car carries a few laps' worth of dirt: road grime on the lower body, brake dust around the wheels, marbles peppering the panels behind them, stone chips and flies on the nose (matte, on top of the clear coat)
+  - carbon with the weave's relief under a scuffed lacquer, textured trim plastic, smeared glass, headlights with the LED strip and projector following the lamp's shape, exhaust tips blued and golden by heat and sooted at the lip
+  - lathe tyres with sidewall lettering, picked-up rubber and graining on the tread and brake dust on the sidewall, multi-spoke rims and centre locks
   - brake discs that glow with the simulated brake temperature
   - airfoil wing, cockpit with a driver and a steering wheel that turns
 - **World**:
@@ -200,8 +201,9 @@ The G-buffer fits WebGPU's default 32-byte colour-attachment budget, and the ren
   - procedural gravel and concrete
   - the racing line is rubbered into the road shader
   - terrain blended into hills and an alpine mountain ring
-  - armco, painted concrete walls, tyre walls, catch fences
-  - grandstands with crowds, pit building, start gantry with working lights, bridge, billboards, 300/200/100 m boards, marshal posts
+  - **surface detail for the procedural materials** (`scripts/build-detail-maps.ts`, `src/render/surfaceDetail.ts`): three tileable 1024 px data maps (~1 m a tile, 1.6 MB as near-lossless RGB WebP; nothing in alpha, which WebP encoders drop under transparent pixels): grain, mottle and scratches; rain streaks, smudges and a wear field; pits, galvanising crystals and orange peel. Every man-made surface samples them in its own metres (or triplanar on the procedural cars) for what makes a surface read as real: its roughness broken up by grain, polish, wiping and scratches, its normal breathing with pores, dents and scratches pressed in, mottling, rain streaks, grime splashed up from the ground, dust on what faces up, and wear thresholded from the wear field (chipped paint, worn edges)
+  - armco, posts and catch fences in galvanised steel (zinc crystals when fresh, a patchy grey patina with age, scratches cut bright, road spray low down, black rubber, paint transfer and dents where cars touched), painted concrete walls (pores, chalky paint worn back at the block ends, scuffs, rain streaks, road grime, dust on the top), sun-faded dusty tyre walls, worn start-line paint
+  - grandstands with crowds, pit building, start gantry with working lights (lenses with Fresnel rings over LED dots), bridge, billboards, 300/200/100 m boards, marshal posts. Their surfaces (`archMaterials.ts`): porous concrete with spalls, damp and algae low down and efflorescence from the joints; cladding panels with a faint bulge, smudges and dirt under the seams; ribbed metal and painted steel chipped to primer and bare metal, rusting at the foot and below the fixings; epoxy floors with tyre scuffs, oil stains and scratches; sun-faded, scuffed plastic seats; glass with a film of dust and dried rain; vinyl boards, slightly wavy, streaked and smudged
   - **vegetation** (`Vegetation.tsx`), every kind of it a single draw call however many plants there are:
     - two tree models (a pine and a broadleaf tree, Sketchfab, CC BY 4.0), baked by `bun scripts/build-world-assets.ts trees` into one mesh with one material each: trunk and leaf textures packed into one atlas, leaf cards flattened to quads, branches simplified (pine 2.2k, broadleaf 6.1k triangles), canopy normals bent outwards for soft, volumetric shading
     - each model is one instanced draw for every tree within ~220 m; beyond that every tree of every model is an **impostor**, one quad per tree in one more draw, baked at load time from the real meshes (16 directions, albedo and canopy normals), read back into textures with a coverage-preserving mip chain (plain mipmaps average an alpha-tested tree's coverage away until it vanishes in the distance), and lit like the meshes. Meshes and impostors cross-fade with a dither

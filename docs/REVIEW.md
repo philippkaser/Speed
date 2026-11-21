@@ -193,6 +193,21 @@ the passing scenario, the camera's steadiness and the picture's targets.
   did, through the screen-space contact shadows (each tuft a solid, near-black blob; with them off,
   the tufts lit green). Grass, lawns and terrain now take 40 % of them: in captures the tufts keep
   some shading at their roots, without the blobs.
+- **Materials (procedural):** the owner asked for a realistic material pass, the older generated
+  models first: every surface PBR, with small imperfections, use, breathing normals and roughness.
+  The texture libraries (Poly Haven, ambientCG) are not reachable from here, so three tileable detail
+  maps are baked (`scripts/build-detail-maps.ts`; the first bake stored data in alpha and the WebP
+  encoder discarded the colour under transparent pixels: blocky channels) and every man-made surface
+  builds its grain, pores, scratches, streaks, grime, dust and wear on them (`surfaceDetail.ts`). Seen
+  in before/after captures: the armco went from a smooth chrome-like tube to dull, mottled galvanised
+  steel, the posts from flat dark boxes to galvanised; the concrete wall's paint is streaked, chalky
+  and worn at the block ends; on the procedural Aurel, the clean factory paint now carries brake dust
+  around the arches and picked-up rubber on the tread, and the window, lamp and intake outlines, a
+  staircase of ~3 cm teeth (each triangle took one material), are clean curves since the triangles
+  along material edges are split. The buildings changed little at 10-30 m (the detail is millimetres;
+  a modern pit building is fairly clean), the start-line paint little at a grazing angle. Not solved:
+  the crowd is flat painted figures and reads as cartoon at any distance; the GT3 models' own textures
+  were not touched.
 - **Effects:** tyre smoke is shaded as a scattering medium and reads as billowing smoke from the chase
   camera, the side and above (in captures from placed cameras the puffs used to face the chase camera
   and showed as slivers: fixed). It is still too uniformly white, without darker undersides. Skid
