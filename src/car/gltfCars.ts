@@ -604,6 +604,10 @@ function raceWear(m: THREE.MeshPhysicalNodeMaterial, col: any, w: Wear): any {
   c = mix(c, vec3(0.5, 0.5, 0.49), chips.mul(0.85))
   c = mix(c, vec3(0.04, 0.035, 0.02), flies.mul(0.8))
   c = mix(c, vec3(0.02, 0.02, 0.022), marbles)
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('weardebug')) {
+    // ?weardebug: the masks in loud colours (grime red, brake dust green, marbles blue, nose yellow)
+    return vec3(grime, brake, marbles).add(vec3(nose, nose, 0).mul(0.5)).mul(2).add(col.mul(0.15))
+  }
   const covered = clamp(grime.mul(0.9).add(brake.mul(0.8)).add(marbles).add(flies), 0, 1)
   m.clearcoatNode = float(1).sub(covered.mul(0.92))
   m.clearcoatRoughnessNode = mix(float(0.028), float(0.1), fine.b.mul(0.8))
