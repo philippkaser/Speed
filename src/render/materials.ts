@@ -934,6 +934,47 @@ export function markingMaterial() {
 }
 
 /**
+ * The conveyor belt that faces a tyre wall: thick black rubber with the fabric ply's fine horizontal
+ * grain, faded by the sun in patches, galvanised strips bolted through it every 1.4 m (three bolts
+ * each), scuffed and marked where cars went in, and gravel dust thrown up from the trap in front,
+ * thickest at its foot.
+ */
+export function beltMaterial() {
+  const m = new THREE.MeshStandardNodeMaterial({ side: THREE.DoubleSide })
+  const s = uv().x,
+    h = uv().y
+  const d = detailAt(vec2(s, h))
+  const ply = detailAt(vec2(h.mul(14), s.mul(0.4)).add(vec2(0.3, 0.8))).streaks
+  const fade = smoothstep(0.35, 0.85, d.macro.mul(0.6).add(d.mottle.mul(0.4)))
+  let col: N = mix(vec3(0.028, 0.028, 0.03), vec3(0.07, 0.068, 0.066), fade).mul(mix(float(0.9), float(1.1), ply))
+  let rough: N = breakUpRoughness(mix(float(0.7), float(0.86), fade), d, { k: 0.1, scratch: 0.55 })
+  // the bolted strips
+  const fs = fract(s.div(1.4))
+  const strip = smoothstep(0.03, 0.025, abs(fs.sub(0.5)).sub(0.5).abs().mul(1.4))
+  const bolts = max(max(smoothstep(0.02, 0.014, vec2(fs.sub(0.5).abs().sub(0.5).abs().mul(1.4), h.sub(0.15)).length()), smoothstep(0.02, 0.014, vec2(fs.sub(0.5).abs().sub(0.5).abs().mul(1.4), h.sub(0.4)).length())), smoothstep(0.02, 0.014, vec2(fs.sub(0.5).abs().sub(0.5).abs().mul(1.4), h.sub(0.62)).length()))
+  const steel = vec3(0.45, 0.46, 0.46).mul(mix(float(0.8), float(1.05), d.spangle))
+  col = mix(col, steel, max(strip, bolts).mul(0.9))
+  rough = mix(rough, float(0.5), max(strip, bolts))
+  const metal = max(strip, bolts).mul(0.7)
+  // impacts: torn, lighter rubber, tyre and paint marks, in the contact stretches
+  const { z, hue } = contactZones(s)
+  const smear = detailAt(vec2(h.mul(3.1), s.mul(0.07)).add(vec2(0.5, 0.2))).streaks
+  const torn = smoothstep(0.4, 0.75, d.scratch).mul(z)
+  col = mix(col, col.mul(1.9).add(0.02), torn.mul(0.6))
+  col = mix(col, transferPaint(hue), smoothstep(0.74, 0.88, smear).mul(z).mul(step(0.5, fract(hue.mul(5.3)))).mul(0.8))
+  // gravel dust from the trap, thick at the foot, splashed higher in places
+  const dustTop = float(0.25).add(d.streaks.sub(0.5).mul(0.35))
+  const dusty = float(1).sub(smoothstep(float(0), dustTop, h)).mul(mix(float(0.5), float(1), d.mottle))
+  col = mix(col, vec3(0.3, 0.27, 0.22), dusty.mul(0.65))
+  rough = mix(rough, float(0.95), dusty.mul(0.6))
+  m.colorNode = col
+  m.roughnessNode = rough
+  m.metalnessNode = metal
+  m.normalNode = bumpView(ply.sub(0.5).mul(0.0004).add(strip.mul(0.003)).add(bolts.mul(0.006)).add(z.mul(d.mottle.sub(0.5)).mul(0.02)))
+  return m
+}
+
+/**
  * Tyre walls: old tyres, the rubber faded grey by the sun (more on some than others), dust and
  * grit settled on their tops and in the treads, scuffed where they were hit.
  */

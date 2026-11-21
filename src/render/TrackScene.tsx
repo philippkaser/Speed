@@ -2,7 +2,7 @@ import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three/webgpu'
 import type { Track } from '../track/track'
-import { rubberTexture, skidTexture, armcoMaterial, postMaterial, concreteWallMaterial, fenceMaterial, kerbMaterial, markingMaterial, mountainMaterial, roadMaterial, runoffMaterial, terrainMaterial, tyreWallMaterial, vergeMaterial } from './materials'
+import { rubberTexture, skidTexture, armcoMaterial, beltMaterial, postMaterial, concreteWallMaterial, fenceMaterial, kerbMaterial, markingMaterial, mountainMaterial, roadMaterial, runoffMaterial, terrainMaterial, tyreWallMaterial, vergeMaterial } from './materials'
 import { Scenery } from './Scenery'
 import { debugFlag } from '../util/debug'
 import { buildBarriers, buildKerbs, buildMarkings, buildMountains, buildRoad, buildRunoff, buildTerrain, buildVerge, chunkGrid, coarseGrid, type MountainSet } from './trackGeometry'
@@ -99,7 +99,7 @@ export function TrackScene({ track }: { track: Track }) {
     const posts = instanced(postGeo, postMat, b.posts, false)
     posts.userData.noProbe = true
     g.add(posts)
-    // Tyre walls: 4,400 tyres around the circuit. In cells of 150 m (each pass draws only the cells it
+    // Tyre walls: the top two layers of their tyres (~5,000) around the circuit. In cells of 150 m (each pass draws only the cells it
     // sees: one instanced mesh for the whole circuit drew every tyre in the view and in every shadow
     // cascade, 1.1 M triangles each), out of the farthest cascade (35 cm texels: a tyre is a texel or
     // two there). Shadow maps and cells far from the camera draw a coarser torus, kept in the same
@@ -144,6 +144,8 @@ export function TrackScene({ track }: { track: Track }) {
       coarseRange = [fine.index!.count, coarse.index!.count] as const
     fine.dispose()
     coarse.dispose()
+    // the belts facing them (trackGeometry: the tyres behind are drawn only above the belts)
+    g.add(mesh(b.belts, beltMaterial(), { cast: true, name: 'tyre-belts' }))
     const tyres = instanced(tyreGeo, tyreWallMaterial(), b.tyres)
     tyres.userData.noProbe = true
     g.add(tyres)

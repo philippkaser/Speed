@@ -535,6 +535,7 @@ export function buildBarriers(track: Track) {
   const concrete: THREE.BufferGeometry[] = []
   const posts: THREE.Matrix4[] = []
   const tyres: THREE.Matrix4[] = []
+  const belts: THREE.BufferGeometry[] = []
   const fence: THREE.BufferGeometry[] = []
   for (const side of [1, -1]) {
     const S = side > 0 ? track.L : track.R
@@ -600,7 +601,29 @@ export function buildBarriers(track: Track) {
       concrete,
       true,
     )
-    // posts every 2 m for armco, tyre stacks for tyre walls
+    // tyre walls as circuits build them: tyres touching in two staggered rows, four high, bolted
+    // together and faced with a rubber conveyor belt that takes the impact and spreads it. The belt
+    // hides the lower layers: only the top two are drawn
+    make(
+      2,
+      [
+        [-0.71, -0.05],
+        [-0.71, 0.74],
+      ],
+      2,
+      belts,
+      true,
+    )
+    for (let s = 0; s < track.length; s += 0.7)
+      for (let row = 0; row < 2; row++) {
+        const ss = s + row * 0.35
+        const i = track.idx(ss)
+        if (K[i] !== 2) continue
+        // the front row just behind the belt, the back row against the wall's line
+        track.pointAt(ss, side * (S.wall[i] - 0.35 + row * 0.69), tmp)
+        for (let lvl = 2; lvl < 4; lvl++) tyres.push(new THREE.Matrix4().makeTranslation(tmp.x, tmp.y + 0.11 + lvl * 0.22, tmp.z))
+      }
+    // posts every 2 m for armco
     for (let i = 0; i < track.n; i += 2) {
       const w = S.wall[i]
       if (K[i] === 0) {
@@ -608,14 +631,6 @@ export function buildBarriers(track: Track) {
         const m = new THREE.Matrix4().makeRotationY(Math.atan2(track.tx[i], track.tz[i]))
         m.setPosition(tmp.x, tmp.y, tmp.z)
         posts.push(m)
-      } else if (K[i] === 2) {
-        for (let row = 0; row < 2; row++)
-          for (let lvl = 0; lvl < 3; lvl++) {
-            const o = w - 0.35 + row * 0.62
-            track.pointAt(i * DS + (row % 2) * 0.3, side * o, tmp)
-            const m = new THREE.Matrix4().makeTranslation(tmp.x, tmp.y + 0.11 + lvl * 0.22, tmp.z)
-            tyres.push(m)
-          }
       }
     }
     // catch fence on fast sections & the straight
@@ -640,7 +655,7 @@ export function buildBarriers(track: Track) {
     }
     if (fpos.length) fence.push(finish(fpos, fuv, fidx))
   }
-  return { armco: mergeGeoms(armco), concrete: mergeGeoms(concrete), posts, tyres, fence: mergeGeoms(fence) }
+  return { armco: mergeGeoms(armco), concrete: mergeGeoms(concrete), posts, tyres, belts: mergeGeoms(belts), fence: mergeGeoms(fence) }
 }
 
 // ------------------------------------------------------------------------------------ markings
