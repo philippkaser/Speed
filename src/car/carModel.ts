@@ -57,27 +57,76 @@ export function buildBodyGeometry(spec: CarSpec, cell: number) {
     agree += nx * N[a] + ny * N[a + 1] + nz * N[a + 2] > 0 ? 1 : -1
   }
   if (agree < 0) for (let t = 0; t < I.length; t += 3) [I[t + 1], I[t + 2]] = [I[t + 2], I[t + 1]]
-  // classify triangles into material groups
+  // classify triangles into material groups. A triangle takes the material at its centre, so a
+  // material's edge was a staircase of whole triangles (~3 cm teeth along every window, lamp and
+  // intake). Where a triangle's corners disagree, it is split along the edge: into four (the edges'
+  // midpoints) and once more where the pieces' corners still disagree; each piece takes the material
+  // at its own centre (steps of ~7 mm). Close up only (the finest level of detail: +50 % triangles);
+  // from 30 m the teeth are a couple of pixels.
+  const splitDepth = cell < 0.035 ? 2 : 0
   const buckets: number[][] = Array.from({ length: MAT_COUNT }, () => [])
-  for (let t = 0; t < I.length; t += 3) {
-    const a = I[t] * 3,
-      b = I[t + 1] * 3,
-      c = I[t + 2] * 3
-    const x = (P[a] + P[b] + P[c]) / 3,
-      y = (P[a + 1] + P[b + 1] + P[c + 1]) / 3,
-      z = (P[a + 2] + P[b + 2] + P[c + 2]) / 3
-    let nx = N[a] + N[b] + N[c],
-      ny = N[a + 1] + N[b + 1] + N[c + 1],
-      nz = N[a + 2] + N[b + 2] + N[c + 2]
+  const pos: number[] = Array.from(P),
+    nrm: number[] = Array.from(N)
+  const classOf = (x: number, y: number, z: number, nx: number, ny: number, nz: number) => {
     const l = Math.hypot(nx, ny, nz) || 1
-    nx /= l
-    ny /= l
-    nz /= l
-    buckets[body.classify(x, y, z, nx, ny, nz)].push(I[t], I[t + 1], I[t + 2])
+    return body.classify(x, y, z, nx / l, ny / l, nz / l)
+  }
+  const nV = P.length / 3
+  const vClass = new Int8Array(nV)
+  for (let v = 0; v < nV; v++) vClass[v] = classOf(P[v * 3], P[v * 3 + 1], P[v * 3 + 2], N[v * 3], N[v * 3 + 1], N[v * 3 + 2])
+  const mid = (a: number, b: number) => {
+    pos.push((pos[a * 3] + pos[b * 3]) / 2, (pos[a * 3 + 1] + pos[b * 3 + 1]) / 2, (pos[a * 3 + 2] + pos[b * 3 + 2]) / 2)
+    nrm.push(nrm[a * 3] + nrm[b * 3], nrm[a * 3 + 1] + nrm[b * 3 + 1], nrm[a * 3 + 2] + nrm[b * 3 + 2])
+    const k = pos.length / 3 - 1
+    const l = Math.hypot(nrm[k * 3], nrm[k * 3 + 1], nrm[k * 3 + 2]) || 1
+    nrm[k * 3] /= l
+    nrm[k * 3 + 1] /= l
+    nrm[k * 3 + 2] /= l
+    return k
+  }
+  const vc = (v: number) => (v < nV ? vClass[v] : classOf(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2], nrm[v * 3], nrm[v * 3 + 1], nrm[v * 3 + 2]))
+  const centre = (a: number, b: number, c: number) =>
+    classOf(
+      (pos[a * 3] + pos[b * 3] + pos[c * 3]) / 3,
+      (pos[a * 3 + 1] + pos[b * 3 + 1] + pos[c * 3 + 1]) / 3,
+      (pos[a * 3 + 2] + pos[b * 3 + 2] + pos[c * 3 + 2]) / 3,
+      nrm[a * 3] + nrm[b * 3] + nrm[c * 3],
+      nrm[a * 3 + 1] + nrm[b * 3 + 1] + nrm[c * 3 + 1],
+      nrm[a * 3 + 2] + nrm[b * 3 + 2] + nrm[c * 3 + 2],
+    )
+  let split = 0
+  const emit = (a: number, b: number, c: number, ca: number, cb: number, cc: number, depth: number) => {
+    if ((ca === cb && cb === cc) || depth === 0) {
+      buckets[ca === cb && cb === cc ? ca : centre(a, b, c)].push(a, b, c)
+      return
+    }
+    split++
+    const ab = mid(a, b),
+      bc = mid(b, c),
+      ca2 = mid(c, a)
+    const cab = vc(ab),
+      cbc = vc(bc),
+      cca = vc(ca2)
+    emit(a, ab, ca2, ca, cab, cca, depth - 1)
+    emit(ab, b, bc, cab, cb, cbc, depth - 1)
+    emit(ca2, bc, c, cca, cbc, cc, depth - 1)
+    emit(ab, bc, ca2, cab, cbc, cca, depth - 1)
+  }
+  for (let t = 0; t < I.length; t += 3) {
+    const a = I[t],
+      b = I[t + 1],
+      c = I[t + 2]
+    const ca = vClass[a],
+      cb = vClass[b],
+      cc = vClass[c]
+    if (ca === cb && cb === cc) {
+      // (the centre decides, as before, where the corners agree: a feature narrower than a triangle)
+      buckets[centre(a, b, c)].push(a, b, c)
+    } else emit(a, b, c, ca, cb, cc, splitDepth)
   }
   const g = new THREE.BufferGeometry()
-  g.setAttribute('position', new THREE.BufferAttribute(P, 3))
-  g.setAttribute('normal', new THREE.BufferAttribute(N, 3))
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3))
+  g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nrm), 3))
   const all: number[] = []
   let start = 0
   for (let m = 0; m < MAT_COUNT; m++) {
@@ -88,7 +137,7 @@ export function buildBodyGeometry(spec: CarSpec, cell: number) {
   }
   g.setIndex(new THREE.BufferAttribute(new Uint32Array(all), 1))
   g.computeBoundingSphere()
-  console.info(`[car] ${spec.id} body ${(I.length / 3) | 0} tris in ${(performance.now() - t0).toFixed(0)} ms`)
+  console.info(`[car] ${spec.id} body ${(all.length / 3) | 0} tris (${split} split along material edges) in ${(performance.now() - t0).toFixed(0)} ms`)
   geometryCache.set(key, g)
   return g
 }
