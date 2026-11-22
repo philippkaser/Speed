@@ -586,7 +586,7 @@ function raceWear(m: THREE.MeshPhysicalNodeMaterial, col: any, w: Wear): any {
   const ax = abs(pos.x)
   // road grime: the lower body, more on dirtier cars, its top ragged
   const grimeTop = float(0.2 + 0.18 * w.dirt).add(coarse.r.sub(0.5).mul(0.2))
-  const grime = float(1).sub(smoothstep(float(0.06), grimeTop, pos.y)).mul(mix(float(0.55), float(1), coarse.r)).mul(0.6 + 0.4 * w.dirt)
+  const grime = float(1).sub(smoothstep(float(0.06), grimeTop, pos.y)).mul(mix(float(0.6), float(1), coarse.r)).mul(0.75 + 0.25 * w.dirt)
   let brake: any = float(0),
     marbles: any = float(0)
   for (const k of ['FL', 'FR', 'RL', 'RR'] as const) {
@@ -603,13 +603,14 @@ function raceWear(m: THREE.MeshPhysicalNodeMaterial, col: any, w: Wear): any {
     const zone = smoothstep(0.0, -0.12, dz.add(r)).mul(smoothstep(-0.95, -0.5, dz.add(r))).mul(smoothstep(wy + 0.2, wy - 0.08, pos.y)).mul(side)
     marbles = max(marbles, zone.mul(smoothstep(0.26, 0.48, spots.r)))
   }
-  brake = brake.mul(0.6 + 0.4 * w.dirt)
+  brake = brake.mul(0.85 + 0.15 * w.dirt)
   const nose = smoothstep(w.zFront - 0.5, w.zFront - 0.05, pos.z).mul(smoothstep(0.15, 0.6, nl.z))
   const chips = nose.mul(smoothstep(0.5, 0.72, spots.r))
   const flies = nose.mul(smoothstep(0.78, 0.95, spots.g)).mul(step(0.65, coarse.g.add(spots.b)))
   let c: any = col
-  c = mix(c, vec3(0.15, 0.135, 0.11), grime.mul(0.72))
-  c = mix(c, vec3(0.055, 0.045, 0.035), brake.mul(0.82))
+  // (bright paint sits in the camera's highlight shoulder: a film has to take most of its colour to show)
+  c = mix(c, vec3(0.13, 0.115, 0.095), grime.mul(0.85))
+  c = mix(c, vec3(0.04, 0.033, 0.026), brake.mul(0.92))
   c = mix(c, vec3(0.5, 0.5, 0.49), chips.mul(0.85))
   c = mix(c, vec3(0.04, 0.035, 0.02), flies.mul(0.8))
   c = mix(c, vec3(0.02, 0.02, 0.022), marbles)
@@ -618,8 +619,8 @@ function raceWear(m: THREE.MeshPhysicalNodeMaterial, col: any, w: Wear): any {
     // ?weardebug: the masks in loud colours (grime red, brake dust green, marbles blue, nose yellow)
     return vec3(grime, brake, marbles).add(vec3(nose, nose, 0).mul(0.5)).mul(2).add(col.mul(0.15))
   }
-  const covered = clamp(grime.mul(0.9).add(brake.mul(0.8)).add(marbles).add(flies), 0, 1)
-  m.clearcoatNode = float(1).sub(covered.mul(0.92))
+  const covered = clamp(grime.add(brake).add(marbles).add(flies), 0, 1)
+  m.clearcoatNode = float(1).sub(covered.mul(0.95))
   m.clearcoatRoughnessNode = mix(float(0.028), float(0.1), fine.b.mul(0.8))
     .add(coarse.g.mul(0.04))
     .mul(mix(float(0.88), float(1.12), fine.r))
