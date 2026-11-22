@@ -235,6 +235,18 @@ the passing scenario, the camera's steadiness and the picture's targets.
   drifts 0.09 degrees, 250-60 km/h in 112.6 m, was 116.5 m.)
 - **Aurel 660 GT:** removed, with the procedurally sculpted car bodies (the owner's call): it had only
   such a body, and its AI never stopped losing the car about once in two or three laps. Every car is
-  now one of the three GT3 models.
+  now one of the three GT3 models (captured: practice, a close-up and the race grid render them;
+  before a model arrives a car is an empty stand-in, and a model that fails takes another).
+- **GT3 race wear:** the GT3 liveries were showroom-clean. A wear layer on their paint: grime on the
+  lower body, brake dust trailing back from the arches in streaks, marbles behind the wheels, flies
+  and chips on the nose, the clear coat with orange peel and swirls. Three things went wrong on the
+  way, each found with a debug view rather than by eye: the models' positions are stored quantized,
+  so the masks first covered the whole car (fixed with each mesh's transform to the model's space);
+  the brake dust took the bonnet over a front wheel as beside it; and the first amounts did not read,
+  because bright paint sits in the camera's highlight shoulder (measured against `?nowear`: 124 to 98
+  in green where a third of the colour went). Now visible at a close range; at a distance the cars
+  look clean still.
+- **Tyre walls:** loose stacks every 2 m are now continuous belted walls (two staggered rows, the top
+  two layers drawn above a bolted conveyor belt); captured, they read as a circuit's tyre barrier.
 - **Verification:** SwiftShader only. No frame time on a real GPU, no check of the WebGL2 fallback after
   the vegetation and shadow-atlas changes, no HDR display.
