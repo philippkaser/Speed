@@ -817,7 +817,8 @@ export function buildGltfCar(id: GltfCarId, spec: CarSpec, opts: GltfCarOptions)
   root.add(bodyGroup)
   // what this car's paint has picked up (raceWear): a share of dirt and marks of its own
   const seed = (carSerial++ * 0.618034) % 1
-  const wear: Wear | undefined = opts.clean ? undefined : { wheels: meta.wheels, zFront: tpl.zFront, dirt: 0.35 + 0.65 * ((seed * 7.31) % 1), seed }
+  const noWear = opts.clean || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('nowear'))
+  const wear: Wear | undefined = noWear ? undefined : { wheels: meta.wheels, zFront: tpl.zFront, dirt: 0.35 + 0.65 * ((seed * 7.31) % 1), seed }
 
   // per-car materials: livery, brake lights, discs (plus everything when unique)
   const own = new Map<THREE.Material, THREE.Material>()
