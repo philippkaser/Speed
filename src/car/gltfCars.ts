@@ -14,11 +14,12 @@ import * as THREE from 'three/webgpu'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
-import { abs, attribute, BRDF_GGX, clamp, clearcoatNormalView, diffuseColor, dot, float, Fn, interleavedGradientNoise, materialColor, materialMetalness, max, min, mix, normalize, normalLocal, normalView, normalViewGeometry, output, positionLocal, positionViewDirection, pow, screenCoordinate, smoothstep, step, texture, uniform, uv, vec3, vec4 } from 'three/tsl'
+import { abs, attribute, BRDF_GGX, clamp, clearcoatNormalView, diffuseColor, dot, float, Fn, interleavedGradientNoise, materialColor, materialMetalness, max, min, mix, normalize, normalLocal, normalView, normalViewGeometry, output, positionLocal, positionViewDirection, pow, screenCoordinate, smoothstep, step, texture, uniform, uv, vec2, vec3, vec4 } from 'three/tsl'
 import { makeMirrorEnv, mirrorRadiance, type MirrorEnv, type MirrorMaterial } from '../render/mirrorEnv'
 import { HERO_LAYER } from '../render/sunShadow'
 import { bumpView } from '../render/materials'
 import { triMap } from '../render/surfaceDetail'
+import { detailMaps } from '../render/worldAssets'
 import type { CarSpec } from '../physics/spec'
 import type { Vehicle } from '../physics/vehicle'
 import type { CarModel } from './carModel'
@@ -603,7 +604,10 @@ function raceWear(m: THREE.MeshPhysicalNodeMaterial, col: any, w: Wear): any {
     const zone = smoothstep(0.0, -0.12, dz.add(r)).mul(smoothstep(-0.95, -0.5, dz.add(r))).mul(smoothstep(wy + 0.2, wy - 0.08, pos.y)).mul(side)
     marbles = max(marbles, zone.mul(smoothstep(0.26, 0.48, spots.r)))
   }
-  brake = brake.mul(0.85 + 0.15 * w.dirt)
+  // the dust trails back along the flow in streaks (fine across, long along the car: the streak map
+  // with its axes swapped, on the sides where the dust lies)
+  const flow = texture(detailMaps().b, vec2(pos.y.mul(7), pos.z.mul(0.3)).add(w.seed)).r
+  brake = brake.mul(mix(float(0.35), float(1.2), smoothstep(0.3, 0.75, flow))).clamp(0, 1).mul(0.85 + 0.15 * w.dirt)
   const nose = smoothstep(w.zFront - 0.5, w.zFront - 0.05, pos.z).mul(smoothstep(0.15, 0.6, nl.z))
   const chips = nose.mul(smoothstep(0.5, 0.72, spots.r))
   const flies = nose.mul(smoothstep(0.78, 0.95, spots.g)).mul(step(0.65, coarse.g.add(spots.b)))
@@ -614,8 +618,7 @@ function raceWear(m: THREE.MeshPhysicalNodeMaterial, col: any, w: Wear): any {
   c = mix(c, vec3(0.5, 0.5, 0.49), chips.mul(0.85))
   c = mix(c, vec3(0.04, 0.035, 0.02), flies.mul(0.8))
   c = mix(c, vec3(0.02, 0.02, 0.022), marbles)
-  const dbg = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('weardebug') : null
-  if (dbg !== null && dbg !== 'dark' && dbg !== 'late') {
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('weardebug')) {
     // ?weardebug: the masks in loud colours (grime red, brake dust green, marbles blue, nose yellow)
     return vec3(grime, brake, marbles).add(vec3(nose, nose, 0).mul(0.5)).mul(2).add(col.mul(0.15))
   }
@@ -626,10 +629,7 @@ function raceWear(m: THREE.MeshPhysicalNodeMaterial, col: any, w: Wear): any {
     .mul(mix(float(0.88), float(1.12), fine.r))
     .add(covered.mul(0.5))
   m.clearcoatNormalNode = bumpView(peel.sub(0.5).mul(0.00002).sub(fine.b.mul(0.000003)).add(marbles.mul(0.0006)), normalViewGeometry)
-  // (?weardebug=dark: the full path, its colour darkened: does it reach the screen? =late: the masks
-  // in green after the clear coat's nodes are set)
-  if (dbg === 'late') return mix(col, vec3(0, 1, 0), max(brake, grime))
-  return dbg === 'dark' ? c.mul(0.1) : c
+  return c
 }
 
 /**
