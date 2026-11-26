@@ -654,7 +654,19 @@ function windowGlass(src: THREE.MeshPhysicalMaterial, mirror: MirrorEnv) {
   const tint = Math.min(src.opacity, 0.3)
   const nv = normalView.dot(positionViewDirection).abs().clamp(0, 1)
   const fresnel = float(0.04).add(float(0.96).mul(pow(float(1).sub(nv), 5)))
-  const cover = float(1).sub(float(1).sub(fresnel).mul(1 - tint))
+  let cover: any = float(1).sub(float(1).sub(fresnel).mul(1 - tint))
+  if (!(typeof location !== 'undefined' && new URLSearchParams(location.search).has('nowear'))) {
+    // a race car's glass is not clean: flies on the windscreen (front-facing panes in the front half;
+    // model space, as the paint's race wear), a film of smears that blurs the reflection a little
+    const pos: any = modelMatrix.mul(vec4(positionLocal, 1)).xyz
+    const nl: any = normalize(modelNormal.mul(normalLocal))
+    const front = smoothstep(0.3, 0.6, nl.z).mul(step(0, pos.z))
+    const flies = smoothstep(0.55, 0.8, triMap('c', pos, nl, 0.8).r).mul(front)
+    const film = smoothstep(0.4, 0.85, triMap('b', pos, nl, 1.2).g)
+    cover = max(cover.add(film.mul(0.05)), flies.mul(0.85))
+    g.colorNode = mix(vec3(0, 0, 0), vec3(0.05, 0.04, 0.02), flies)
+    g.clearcoatRoughnessNode = film.mul(0.08).add(flies.mul(0.4))
+  }
   g.opacityNode = cover
   g.cover = cover
   mirror.materials.push(g)
