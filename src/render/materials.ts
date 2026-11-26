@@ -507,13 +507,22 @@ export function runoffMaterial() {
   const cn = mx_noise_float(vec3(s.mul(0.11), tr.x.mul(0.3), 9.1))
   const sealZone = smoothstep(0.45, 0.65, mx_noise_float(vec3(s.mul(0.012), tr.x.mul(0.02), 2.2)).mul(0.5).add(0.5))
   const seal = float(1).sub(smoothstep(0.006, fwidth(cn).mul(1.2).add(0.009), abs(cn))).mul(sealZone)
-  // repair patches: fresher, darker rectangles of asphalt
-  const cellS = floor(s.div(9)),
-    cellD = floor(off.div(4))
+  // repair patches: the odd fresher, darker rectangle of asphalt, each its own size and place in its
+  // cell (a grid of equal patches read as a pattern)
+  const cellS = floor(s.div(14)),
+    cellD = floor(off.div(6))
   const ph = mx_cell_noise_float(vec3(cellS, cellD, 5.5))
-  const patch = step(0.9, ph).mul(smoothstep(0.0, 0.05, fract(s.div(9)).sub(0.12)).mul(smoothstep(0.0, 0.05, float(0.88).sub(fract(s.div(9)))))).mul(smoothstep(0, 0.05, fract(off.div(4)).sub(0.1)).mul(smoothstep(0, 0.05, float(0.9).sub(fract(off.div(4))))))
+  const pa = mx_cell_noise_float(vec3(cellS, cellD, 8.1)),
+    pb = mx_cell_noise_float(vec3(cellS, cellD, 2.9))
+  const fsC = fract(s.div(14)),
+    fdC = fract(off.div(6))
+  const s0 = pa.mul(0.5),
+    s1 = s0.add(pb.mul(0.35).add(0.15)),
+    d0 = pb.mul(0.5),
+    d1 = d0.add(pa.mul(0.3).add(0.2))
+  const patch = step(0.97, ph).mul(smoothstep(0, 0.02, fsC.sub(s0)).mul(smoothstep(0, 0.02, s1.sub(fsC)))).mul(smoothstep(0, 0.03, fdC.sub(d0)).mul(smoothstep(0, 0.03, d1.sub(fdC))))
   let col: N = a.col.mul(mix(float(0.82), float(1.12), macro)).mul(mix(float(0.92), float(1.06), d.mottle))
-  col = mix(col, col.mul(0.78), patch.mul(0.8))
+  col = mix(col, col.mul(0.86), patch.mul(0.8))
   col = mix(col, vec3(0.025, 0.025, 0.027), max(marks.mul(0.85), seal.mul(0.8)))
   col = mix(col, vec3(0.02, 0.02, 0.022), marbles.mul(0.7))
   // the verge's soil and grass creeping over the outer edge (aTrack.z: that edge's distance), and its
