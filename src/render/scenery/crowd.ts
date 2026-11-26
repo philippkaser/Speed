@@ -23,7 +23,7 @@ const COLS = 16,
 // reads as navy, black, grey, denim, khaki and white), team colours at the strength of dyed fabric
 const SKIN = ['#e3bea2', '#d6a688', '#c48f6c', '#a9765a', '#8a5a40', '#6a4330', '#4e2f22']
 const HAIR = ['#1a1410', '#2b1f17', '#3f2c1f', '#5c4230', '#80633f', '#a88c62', '#7d7975', '#4a4744', '#b9b4ab']
-const NEUTRAL = ['#2a3346', '#1f2024', '#35373c', '#5b5e63', '#8a8c8f', '#c9c8c2', '#d9d6cc', '#4a5d78', '#3d4c63', '#8a7d5c', '#575c3f', '#6b4a3a', '#2e3b2f']
+const NEUTRAL = ['#2a3346', '#1f2024', '#3b3e44', '#5b5e63', '#8a8c8f', '#b5b3ac', '#c9c8c2', '#d9d6cc', '#e4e3de', '#e8e7e2', '#4a5d78', '#6f84a3', '#9aa3ad', '#8a7d5c', '#c2b49a', '#575c3f', '#6b4a3a']
 const TEAM = ['#a8232b', '#c9a227', '#c8571e', '#2c56a0', '#2f6a3e', '#8b1f2a', '#d8d6d0', '#1b2a4a']
 const PANTS = ['#2b3346', '#1d1e21', '#4f5d74', '#6b6250', '#3c3f44', '#5a5040', '#7c7666']
 const FLAGS = [
@@ -75,10 +75,10 @@ function paintPerson(ctx: CanvasRenderingContext2D, ox: number, oy: number, r: (
   // torso: rounded shoulders, narrowing to the waist
   const torsoCol = jacket ?? shirt
   const tg = ctx.createLinearGradient(cx - sw / 2, 0, cx + sw / 2, 0)
-  tg.addColorStop(0, tone(torsoCol, 0.62))
-  tg.addColorStop(0.3, tone(torsoCol, 0.95))
-  tg.addColorStop(0.55, tone(torsoCol, 1.02))
-  tg.addColorStop(1, tone(torsoCol, 0.66))
+  tg.addColorStop(0, tone(torsoCol, 0.74))
+  tg.addColorStop(0.3, tone(torsoCol, 0.98))
+  tg.addColorStop(0.55, tone(torsoCol, 1.04))
+  tg.addColorStop(1, tone(torsoCol, 0.78))
   ctx.fillStyle = tg
   ctx.beginPath()
   ctx.moveTo(cx - sw / 2 + 8, sh)
@@ -91,9 +91,9 @@ function paintPerson(ctx: CanvasRenderingContext2D, ox: number, oy: number, r: (
   ctx.fill()
   // light from above on the shoulders, shade towards the waist
   const vg = ctx.createLinearGradient(0, sh, 0, hipY)
-  vg.addColorStop(0, 'rgba(255,255,255,0.10)')
+  vg.addColorStop(0, 'rgba(255,255,255,0.12)')
   vg.addColorStop(0.5, 'rgba(0,0,0,0)')
-  vg.addColorStop(1, 'rgba(0,0,0,0.28)')
+  vg.addColorStop(1, 'rgba(0,0,0,0.18)')
   ctx.fillStyle = vg
   ctx.fill()
   // folds in the cloth: a few soft darker strokes
@@ -238,8 +238,8 @@ function paintPerson(ctx: CanvasRenderingContext2D, ox: number, oy: number, r: (
         ey = sh + 46
       const hx = cx + side * (sw * 0.24),
         hy2 = hipY + 2
-      limb(x0, y0, ex, ey, 7.5, 6.5, tone(sleeve, 0.72))
-      limb(ex, ey, hx, hy2, 6.5, 5.5, longSleeve ? tone(sleeve, 0.7) : tone(skin, 0.75))
+      limb(x0, y0, ex, ey, 7.5, 6.5, tone(sleeve, 0.8))
+      limb(ex, ey, hx, hy2, 6.5, 5.5, longSleeve ? tone(sleeve, 0.78) : tone(skin, 0.84))
       ctx.fillStyle = tone(skin, 0.8)
       ctx.beginPath()
       ctx.ellipse(hx, hy2, 5.5, 4.5, 0, 0, Math.PI * 2)
@@ -290,7 +290,7 @@ function paintPerson(ctx: CanvasRenderingContext2D, ox: number, oy: number, r: (
   // the seat row in front hides and shadows the lap
   const og = ctx.createLinearGradient(0, hipY - 30, 0, oy + CH)
   og.addColorStop(0, 'rgba(0,0,0,0)')
-  og.addColorStop(1, 'rgba(0,0,0,0.55)')
+  og.addColorStop(1, 'rgba(0,0,0,0.4)')
   ctx.globalCompositeOperation = 'source-atop'
   ctx.fillStyle = og
   ctx.fillRect(ox, hipY - 30, CW, oy + CH - (hipY - 30))
