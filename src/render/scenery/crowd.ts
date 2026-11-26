@@ -123,25 +123,25 @@ function paintPerson(ctx: CanvasRenderingContext2D, ox: number, oy: number, r: (
     ctx.fillRect(cx - 10 + (r() - 0.5) * 8, sh + 22, 18, 12)
   }
   // neck, in the head's shadow
-  ctx.fillStyle = tone(skin, 0.72)
+  ctx.fillStyle = tone(skin, 0.8)
   ctx.fillRect(cx - 6, sh - 14, 12, 16)
   // head: ~0.16 x 0.22 m
   const hy = sh - 30
   const hw = 12.5 * (female ? 0.94 : 1),
     hh = 17
   const hg = ctx.createRadialGradient(cx - 3, hy - 5, 2, cx, hy, 20)
-  hg.addColorStop(0, tone(skin, 1.04))
-  hg.addColorStop(0.7, tone(skin, 0.9))
-  hg.addColorStop(1, tone(skin, 0.7))
+  hg.addColorStop(0, tone(skin, 1.08))
+  hg.addColorStop(0.7, tone(skin, 1.0))
+  hg.addColorStop(1, tone(skin, 0.84))
   ctx.fillStyle = hg
   ctx.beginPath()
   ctx.ellipse(cx, hy, hw, hh, 0, 0, Math.PI * 2)
   ctx.fill()
   // the face's shading: brow and eye sockets, under the nose and the chin
-  ctx.fillStyle = tone(skin, 0.6, 0.35)
+  ctx.fillStyle = tone(skin, 0.7, 0.25)
   ctx.fillRect(cx - 8, hy - 3, 16, 4)
   ctx.fillRect(cx - 3, hy + 6, 6, 2)
-  ctx.fillStyle = tone(skin, 0.55, 0.3)
+  ctx.fillStyle = tone(skin, 0.65, 0.2)
   ctx.beginPath()
   ctx.ellipse(cx, hy + 15, 8, 3, 0, 0, Math.PI)
   ctx.fill()
