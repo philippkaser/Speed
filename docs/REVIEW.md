@@ -220,6 +220,10 @@ the passing scenario, the camera's steadiness and the picture's targets.
   runoff as a large even grey plane: it now has crack sealant, repair patches (first a regular grid
   of dark rectangles from above: rarer and irregular now), marbles near the kerb and the tracks of
   cars that ran wide.
+- **Mountains:** from the track the forested slopes were an even grey-green. The canopy now has clumps
+  of crowns and their shadows, clearings (first soft light ovals reading as camouflage: fewer,
+  smaller and ragged now), meadow strips down the steep gullies and rock outcrops on the ridges. Seen
+  in captures: the slopes have texture at 2-5 km; still soft at the silhouette (the mesh's resolution).
 - **Effects:** tyre smoke is shaded as a scattering medium and reads as billowing smoke from the chase
   camera, the side and above (in captures from placed cameras the puffs used to face the chase camera
   and showed as slivers: fixed). It is still too uniformly white, without darker undersides. Skid
