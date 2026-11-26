@@ -212,6 +212,14 @@ the passing scenario, the camera's steadiness and the picture's targets.
   figures and reads as cartoon at any distance; tyre stacks stand every 2 m rather than as a bolted,
   belted wall; the GT3 models' own textures were not touched. One full test run failed one test
   while captures loaded the machine; two reruns passed 107/107 (not identified).
+- **Crowd and runoff:** the crowd's painted people read as cartoon (heads too big for their
+  shoulders, display colours, flat vector shapes); repainted as people look in a photograph, they read
+  from the track as a crowd: a muted, varied mass with the odd colour, white hats and flags. Close up
+  they are still cards. The first repaint was too dark (too many dark clothes, heavy shading), the
+  second too brown in the faces; both corrected in captures. A camera at a corner showed the paved
+  runoff as a large even grey plane: it now has crack sealant, repair patches (first a regular grid
+  of dark rectangles from above: rarer and irregular now), marbles near the kerb and the tracks of
+  cars that ran wide.
 - **Effects:** tyre smoke is shaded as a scattering medium and reads as billowing smoke from the chase
   camera, the side and above (in captures from placed cameras the puffs used to face the chase camera
   and showed as slivers: fixed). It is still too uniformly white, without darker undersides. Skid
