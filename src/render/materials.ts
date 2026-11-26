@@ -762,15 +762,30 @@ export function mountainMaterial() {
 
   // zones
   const treeLine = float(690).add(n1.mul(150)).add(n2.mul(40)).sub(drain.mul(160))
-  const forest = float(1).sub(smoothstep(treeLine.sub(50), treeLine.add(30), h)).mul(float(1).sub(smoothstep(0.48, 0.66, slope.add(n2.mul(0.08)))))
-  const rocky = smoothstep(0.36, 0.56, slope.add(det.mul(0.14)).add(drain.mul(0.12)))
+  // a forest seen from kilometres is not an even colour: clumps of crowns and their shadows (~13 m and
+  // ~5 m, the finer fading where a pixel is wider than it), clearings, and meadow strips down the
+  // avalanche gullies (the drainage lines on steep ground)
+  const clumps = mx_noise_float(p.mul(0.075).add(vec3(1.7, 0.3, 5.1)))
+  const crowns = mx_noise_float(p.mul(0.21).add(vec3(4.2, 1.1, 0.6))).mul(float(1).sub(smoothstep(2500, 6500, dist)))
+  const clearings = smoothstep(0.32, 0.5, mx_noise_float(p.mul(0.011).add(vec3(9.3, 0, 2.2))))
+  const gullies = smoothstep(0.5, 0.8, drain).mul(smoothstep(0.25, 0.45, slope))
+  const forest = float(1)
+    .sub(smoothstep(treeLine.sub(50), treeLine.add(30), h))
+    .mul(float(1).sub(smoothstep(0.48, 0.66, slope.add(n2.mul(0.08)))))
+    .mul(float(1).sub(clearings.mul(0.85)))
+    .mul(float(1).sub(gullies.mul(0.8)))
+  // rock: the steep faces, and outcrops breaking through on ridges (where little drains)
+  const outcrops = smoothstep(0.55, 0.75, mx_noise_float(p.mul(0.028).add(vec3(3.3, 7.7, 1.1)))).mul(smoothstep(0.22, 0.38, slope)).mul(float(1).sub(smoothstep(0.2, 0.5, drain)))
+  const rocky = max(smoothstep(0.36, 0.56, slope.add(det.mul(0.14)).add(drain.mul(0.12))), outcrops)
   const snowLine = float(840).add(n1.mul(120)).add(n2.mul(35)).sub(drain.mul(90))
   const snowSlope = float(1).sub(smoothstep(0.46, 0.7, slope.sub(drain.mul(0.18)).add(n3.mul(0.06))))
   const snow = smoothstep(snowLine.sub(35), snowLine.add(55), h).mul(snowSlope)
 
   // colours (linear albedo)
   // conifer forest seen from afar ~0.04-0.06 (crowns and their shadows), a little bluer in the gullies
-  const canopy = mix(vec3(0.03, 0.043, 0.026), vec3(0.052, 0.066, 0.036), smoothstep(-0.4, 0.5, n2.add(n3.mul(0.6)))).mul(float(1).sub(drain.mul(0.25)))
+  const canopy = mix(vec3(0.03, 0.043, 0.026), vec3(0.052, 0.066, 0.036), smoothstep(-0.4, 0.5, n2.add(n3.mul(0.6))))
+    .mul(float(1).sub(drain.mul(0.25)))
+    .mul(mix(float(0.62), float(1.32), smoothstep(-0.55, 0.6, clumps.mul(0.65).add(crowns.mul(0.35)))))
   const meadow = mix(vec3(0.075, 0.085, 0.04), vec3(0.12, 0.115, 0.075), smoothstep(-0.3, 0.6, n2))
   const strata = sin(h.mul(0.085).add(n2.mul(4)).add(n1.mul(2))).mul(0.5).add(0.5)
   const rock = mix(vec3(0.13, 0.125, 0.115), vec3(0.23, 0.215, 0.195), strata.mul(0.6).add(n3.mul(0.2)).add(0.2)).mul(float(1).sub(drain.mul(0.35)))
@@ -784,7 +799,7 @@ export function mountainMaterial() {
   m.metalnessNode = float(0)
   m.aoNode = ao.mul(mix(float(1), float(0.8), forest))
   // rock and canopy relief below the mesh's resolution (fades out with distance)
-  const relief = n2.mul(15).add(n3.mul(5)).mul(mix(float(0.4), float(1), rocky)).mul(float(1).sub(snow.mul(0.6))).mul(near.mul(0.7).add(0.3))
+  const relief = n2.mul(15).add(n3.mul(5)).mul(mix(float(0.4), float(1), rocky)).mul(float(1).sub(snow.mul(0.6))).mul(near.mul(0.7).add(0.3)).add(clumps.mul(2.5).mul(forest))
   m.normalNode = bumpView(relief)
 
   // aerial perspective (before the scene's fog): extinction and the sky's horizon light
