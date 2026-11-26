@@ -469,25 +469,64 @@ export function pitAsphaltSample(uvMetres: N) {
   return { col: mix(c, vec3(lum), 0.35).mul(1.4), nxy: a.nxy, rough: a.rough }
 }
 
+/**
+ * Paved runoff: older asphalt than the track's (the pit lane scan), its tone patchy over metres, crack
+ * sealant snaking across it and the odd repair patch; marbles swept off the track onto its first few
+ * metres; and the black marks of the cars that ran wide or locked up off the track: pairs of tyre
+ * tracks arcing away from the kerb, the fresher darker, sparse along the lap. Grass and soil creep in
+ * over its outer edge.
+ */
 export function runoffMaterial() {
   const m = new THREE.MeshStandardNodeMaterial()
   const a = pitAsphaltSample(uv().mul(4))
-  const macro = mx_noise_float(vec3(positionWorld.x.mul(0.03), 2.3, positionWorld.z.mul(0.03))).mul(0.5).add(0.5)
-  // tyre marks of cars running wide
+  const pw = positionWorld
+  const macro = mx_noise_float(vec3(pw.x.mul(0.03), 2.3, pw.z.mul(0.03))).mul(0.5).add(0.5)
   const tr = aTrack()
   const s = tr.y
   const off = abs(tr.x).sub(tr.w)
-  const marks = smoothstep(0.1, 0.5, mx_noise_float(vec3(s.mul(0.05), off.mul(0.7), 7.7))).mul(float(1).sub(smoothstep(0.5, 3.5, off)))
+  const d = detailAt(vec2(tr.x, s))
+  // the cars that ran wide: in stretches of 23 and 37 m (two grids, so they overlap), now and then a
+  // car's two tyre tracks (1.6 m apart) leaving the kerb at a shallow angle, fading as it slowed or
+  // came back; the older ones grey
+  const runWide = (len: number, seed: number) => {
+    const j = floor(s.div(len))
+    const h = mx_cell_noise_float(vec3(j, seed, 1.3))
+    const h2 = mx_cell_noise_float(vec3(j, seed, 4.7))
+    const u = s.sub(j.mul(len)).div(len)
+    const path = h2.mul(1.5).add(u.mul(u).mul(mix(float(2), float(7), h)))
+    // (both tyres: 0.8 m either side of the car's path, 0.24 m wide)
+    const e = abs(off.sub(path).sub(0.4))
+    const track = smoothstep(0.16, 0.08, abs(e.sub(0.8)))
+    return track.mul(step(0.55, h)).mul(smoothstep(0, 0.08, u)).mul(float(1).sub(smoothstep(0.55, 1, u))).mul(mix(float(0.4), float(0.95), h2))
+  }
+  const broken = smoothstep(0.3, 0.6, d.streaks)
+  const marks = max(runWide(23, 3.1), runWide(37, 8.9)).mul(broken)
+  // marbles on the first metres beyond the kerb
+  const marbles = smoothstep(0.35, 0.6, d.pits).mul(float(1).sub(smoothstep(0.5, 4, off)))
+  // crack sealant: thin glossy black lines along the iso-lines of a slow noise, in some stretches
+  const cn = mx_noise_float(vec3(s.mul(0.11), tr.x.mul(0.3), 9.1))
+  const sealZone = smoothstep(0.45, 0.65, mx_noise_float(vec3(s.mul(0.012), tr.x.mul(0.02), 2.2)).mul(0.5).add(0.5))
+  const seal = float(1).sub(smoothstep(0.006, fwidth(cn).mul(1.2).add(0.009), abs(cn))).mul(sealZone)
+  // repair patches: fresher, darker rectangles of asphalt
+  const cellS = floor(s.div(9)),
+    cellD = floor(off.div(4))
+  const ph = mx_cell_noise_float(vec3(cellS, cellD, 5.5))
+  const patch = step(0.9, ph).mul(smoothstep(0.0, 0.05, fract(s.div(9)).sub(0.12)).mul(smoothstep(0.0, 0.05, float(0.88).sub(fract(s.div(9)))))).mul(smoothstep(0, 0.05, fract(off.div(4)).sub(0.1)).mul(smoothstep(0, 0.05, float(0.9).sub(fract(off.div(4))))))
+  let col: N = a.col.mul(mix(float(0.82), float(1.12), macro)).mul(mix(float(0.92), float(1.06), d.mottle))
+  col = mix(col, col.mul(0.78), patch.mul(0.8))
+  col = mix(col, vec3(0.025, 0.025, 0.027), max(marks.mul(0.85), seal.mul(0.8)))
+  col = mix(col, vec3(0.02, 0.02, 0.022), marbles.mul(0.7))
   // the verge's soil and grass creeping over the outer edge (aTrack.z: that edge's distance), and its
   // dust a little further in: no ruler-straight line where the grass begins
   const fromOuter = tr.z.sub(abs(tr.x))
   const rag = mx_noise_float(vec3(s.mul(1.1), tr.x.mul(0.5), 7.3)).mul(0.16).add(mx_noise_float(vec3(s.mul(4.3), tr.x.mul(2), 1.4)).mul(0.07)).add(0.12)
   const creep = float(1).sub(smoothstep(float(0), rag.max(0.005), fromOuter))
   const tuft = smoothstep(0.1, 0.4, mx_noise_float(vec3(s.mul(2.2), tr.x.mul(2.2), 3.9)))
-  let col: N = a.col.mul(mix(float(0.86), float(1.1), macro)).mul(float(1).sub(marks.mul(0.4)))
   col = mix(col, vec3(0.11, 0.095, 0.075), float(1).sub(smoothstep(0, 0.9, fromOuter)).mul(0.35))
   m.colorNode = mix(col, mix(vec3(0.12, 0.098, 0.074), vec3(0.055, 0.075, 0.03), tuft), creep.mul(0.9))
-  m.roughnessNode = mix(clamp(a.rough.add(0.04), 0, 1), float(0.97), creep)
+  // rubber and sealant are glossier than the dusty old asphalt
+  const rough = mix(clamp(a.rough.add(0.04), 0, 1), float(0.55), max(marks.mul(0.6), seal.mul(0.8)))
+  m.roughnessNode = mix(rough, float(0.97), creep)
   m.normalNode = normalMap(normalFromXY(a.nxy), vec2(0.9))
   return m
 }
